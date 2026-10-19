@@ -1,0 +1,6 @@
+node_modules
+coverage
+dist
+src/generated/prisma
+.automation-artifacts
+.e2e-workspaces-test-*

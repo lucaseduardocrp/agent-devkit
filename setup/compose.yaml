@@ -1,0 +1,36 @@
+# ADK setup wizard: a local web page that writes the stack's `.env`.
+# The launchers (adk.cmd, ./adk.sh) start it for you. By hand:
+#   docker compose -f setup/compose.yaml up
+# then open http://localhost:4000 and follow the steps.
+name: agent-devkit-setup
+
+services:
+  setup:
+    image: node:24-alpine
+    container_name: adk-setup
+    working_dir: /workspace
+    command: ["node", "setup/server.mjs"]
+    # On Linux the launcher passes your user id so `.env` stays owned by you.
+    user: "${ADK_UID:-0}:${ADK_GID:-0}"
+    environment:
+      ADK_SETUP_HOST: 0.0.0.0
+      ADK_SETUP_PORT: 4000
+      ADK_SETUP_LAUNCHER: ${ADK_SETUP_LAUNCHER:-0}
+      ADK_SETUP_PUBLIC_URL: http://localhost:${ADK_SETUP_PORT:-4000}
+    # Reachable from this computer only.
+    ports:
+      - "127.0.0.1:${ADK_SETUP_PORT:-4000}:4000"
+    # The repository root, where the wizard reads and writes `.env`.
+    volumes:
+      - ..:/workspace
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 1s
+      timeout: 2s
+      retries: 30

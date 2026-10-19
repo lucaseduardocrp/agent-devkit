@@ -1,0 +1,25 @@
+# On-demand E2E worker. Playwright's official image ships Node, Chromium and every system
+# library the browser needs, so the API image can stay on the small Alpine base.
+# Keep the tag in sync with the @playwright/test version in package.json.
+FROM mcr.microsoft.com/playwright:v1.63.0-noble AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --include=dev
+COPY tsconfig.json prisma.config.ts ./
+COPY prisma ./prisma
+COPY src ./src
+# Client generation validates the URL shape but does not connect during image build.
+RUN DATABASE_URL=postgresql://localhost/build npm run build
+
+FROM mcr.microsoft.com/playwright:v1.63.0-noble AS runtime
+ENV NODE_ENV=production \
+    DATABASE_PROVIDER=postgres
+WORKDIR /app
+COPY package*.json ./
+# Runtime only: @playwright/test, Prisma client, the bundled ffmpeg. Browsers come with the image.
+RUN npm ci --omit=dev --ignore-scripts
+COPY --from=build /app/dist ./dist
+# Each run gets a throwaway folder here for its spec, config, report and video.
+RUN mkdir -p /app/.e2e-workspaces && chown -R pwuser:pwuser /app/.e2e-workspaces
+USER pwuser
+CMD ["node", "dist/src/bootstrap/e2e-worker.js"]

@@ -1,0 +1,77 @@
+name: Self-hosting CI
+
+# Keeps the one-command install working: the setup wizard's tests, the Compose files, the
+# launchers and a real start of the stack with a configuration generated like the wizard does.
+on:
+  pull_request:
+    paths:
+      - 'setup/**'
+      - 'compose.yaml'
+      - 'adk.sh'
+      - 'adk.cmd'
+      - 'scripts/adk.ps1'
+      - 'apps/*/Dockerfile*'
+      - 'apps/Frontend/nginx.conf.template'
+      - '.github/workflows/self-hosting-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'setup/**'
+      - 'compose.yaml'
+      - 'adk.sh'
+      - 'adk.cmd'
+      - 'scripts/adk.ps1'
+      - 'apps/*/Dockerfile*'
+      - 'apps/Frontend/nginx.conf.template'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm test --prefix setup
+      - name: Check the launchers
+        run: |
+          bash -n adk.sh
+          pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/adk.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
+      - name: Validate the Compose files
+        run: |
+          node --input-type=module -e "import { createDefaultState, serializeEnv } from './setup/public/model.js'; process.stdout.write(serializeEnv(createDefaultState()))" > .env
+          docker compose config --quiet
+          docker compose -f setup/compose.yaml config --quiet
+
+  stack:
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Generate a configuration
+        # The E2E worker image is large; it is built by its own workflows, not on every change here.
+        run: |
+          node --input-type=module -e "import { createDefaultState, serializeEnv } from './setup/public/model.js'; process.stdout.write(serializeEnv({ ...createDefaultState(), e2e: false }))" > .env
+          grep COMPOSE_PROFILES .env
+      - name: Start the stack
+        run: docker compose up -d --build --wait --wait-timeout 1200
+      - name: Check the services
+        run: |
+          curl --fail --silent --show-error http://localhost:3000/health/ready
+          curl --fail --silent --show-error http://localhost:8080/health
+          curl --fail --silent --show-error http://localhost:3333/healthz
+          curl --fail --silent --show-error --output /dev/null http://localhost:8025
+      - name: Logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop
+        if: always()
+        run: docker compose down --volumes

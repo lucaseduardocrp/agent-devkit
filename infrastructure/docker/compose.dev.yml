@@ -1,0 +1,102 @@
+name: adk
+services:
+  mailpit:
+    image: axllent/mailpit:v1.27
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  migration:
+    build:
+      context: ../../apps/Backend
+      target: migration
+    env_file:
+      - ../../apps/Backend/.env
+    environment:
+      NODE_ENV: production
+    restart: "no"
+    command: npm run prisma:migrate:deploy
+
+  e2e-worker:
+    image: worker-playwright:latest
+    build:
+      context: ../../apps/Backend
+      dockerfile: Dockerfile.e2e-worker
+    ports:
+      - "127.0.0.1:3001:3001"
+    env_file:
+      - ../../apps/Backend/.env
+    environment:
+      NODE_ENV: staging
+      DATABASE_PROVIDER: postgres
+      PORT: 3001
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3001/health').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # Optional: keeps a host app reachable on its original localhost origin inside the worker.
+  local-target-proxy:
+    image: worker-playwright:latest
+    profiles: [local-target]
+    network_mode: service:e2e-worker
+    depends_on:
+      e2e-worker:
+        condition: service_healthy
+    volumes:
+      - ./local-target-proxy.mjs:/proxy.mjs:ro
+    environment:
+      LOCAL_TARGET_URL: http://host.docker.internal:${LOCAL_TARGET_PORT:-8014}
+      LOCAL_LISTEN_PORT: ${LOCAL_TARGET_PORT:-8014}
+    entrypoint: ["node", "/proxy.mjs"]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../../apps/Backend
+      target: runtime
+    env_file:
+      - ../../apps/Backend/.env
+    environment:
+      NODE_ENV: staging
+      DATABASE_PROVIDER: postgres
+      PORT: 3000
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_SECURE: "false"
+      SMTP_FROM: adk <no-reply@localhost>
+      API_PUBLIC_URL: http://localhost:3000
+      FRONTEND_URL: http://localhost:5173
+      E2E_WORKER_URL: http://e2e-worker:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+      e2e-worker:
+        condition: service_healthy
+    command: node dist/src/bootstrap/server.js
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/health/ready').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s

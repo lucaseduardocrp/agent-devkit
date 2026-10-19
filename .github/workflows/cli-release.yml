@@ -1,0 +1,55 @@
+name: CLI release
+
+# Publishes the `devkit` command line to the public npm registry when a tag such as
+# `cli-v0.4.0` is pushed, so anyone installs it with `npm install -g @agent-devkit/cli`.
+# Authenticates with npm Trusted Publishing (OIDC, no secret) once it is configured for the
+# @agent-devkit/cli package on npmjs.com; until then the repository secret NPM_AGENT_DEVKIT is used.
+on:
+  push:
+    tags: ['cli-v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/Mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted Publishing needs npm 11.5.1 or newer.
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm run verify
+      - run: npm run build
+      - name: Prepare the package for the registry
+        run: |
+          VERSION="${GITHUB_REF_NAME#cli-v}"
+          npm pkg set name=@agent-devkit/cli version="$VERSION"
+          npm pkg delete private
+      # Without Trusted Publishing configured, the NPM_AGENT_DEVKIT repository secret must be set.
+      - name: Check npm credentials
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::The NPM_AGENT_DEVKIT secret is empty or missing; publishing relies on npm Trusted Publishing."
+          else
+            npm whoami || { echo "::error::NPM_AGENT_DEVKIT is invalid or expired. Create a new npm token and update the NPM_AGENT_DEVKIT repository secret."; exit 1; }
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_AGENT_DEVKIT }}
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_AGENT_DEVKIT }}
+      - name: Attach the tarball to a GitHub release
+        run: |
+          npm pack
+          gh release create "$GITHUB_REF_NAME" ./*.tgz --title "ADK CLI $GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

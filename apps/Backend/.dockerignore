@@ -1,0 +1,10 @@
+node_modules
+coverage
+dist
+.env
+.env.*
+!.env.example
+npm-debug.log*
+.e2e-artifacts
+.e2e-workspaces*
+.automation-artifacts

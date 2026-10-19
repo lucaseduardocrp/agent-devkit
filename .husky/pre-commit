@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+
+npm run verify --prefix apps/Backend && npm run verify --prefix apps/Frontend && npm run verify --prefix apps/Mcp

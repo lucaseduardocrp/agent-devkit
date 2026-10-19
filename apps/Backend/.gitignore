@@ -1,0 +1,9 @@
+coverage/
+dist/
+src/generated/prisma/
+
+# E2E Automation: per-run Playwright workspaces and recorded videos.
+.e2e-workspaces/
+.e2e-workspaces-*/
+.e2e-artifacts/
+.automation-artifacts/

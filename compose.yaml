@@ -1,0 +1,168 @@
+# ADK: complete self-hosted stack (PostgreSQL, API, web app, E2E worker, remote MCP server).
+#
+# Do not edit the values here. Run the setup wizard, which writes them to `.env`:
+#   Windows:        adk.cmd
+#   macOS / Linux:  ./adk.sh
+# Or start it by hand: docker compose -f setup/compose.yaml up
+#
+# Optional services are Compose profiles, enabled by COMPOSE_PROFILES in `.env`:
+#   e2e   Playwright E2E worker      mcp   Remote MCP server      mail   Mailpit test inbox
+name: agent-devkit
+
+x-database-url: &database-url postgresql://adk:${DATABASE_PASSWORD:?Run the ADK setup wizard first (adk.cmd on Windows, ./adk.sh on macOS/Linux)}@database:5432/adk
+x-encryption-key: &encryption-key ${INTEGRATION_ENCRYPTION_KEY:?Run the ADK setup wizard first (adk.cmd on Windows, ./adk.sh on macOS/Linux)}
+
+services:
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: adk
+      POSTGRES_DB: adk
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Run the ADK setup wizard first (adk.cmd on Windows, ./adk.sh on macOS/Linux)}
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adk -d adk"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: apps/Backend
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_PROVIDER: postgres
+      DATABASE_URL: *database-url
+      INTEGRATION_ENCRYPTION_KEY: *encryption-key
+      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET:-}
+      AUTH_CODE_SECRET: ${AUTH_CODE_SECRET:-}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:3000}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
+      # The API reads empty strings as "set", so every optional value keeps a safe default.
+      SMTP_URL: ${SMTP_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-ADK <no-reply@localhost>}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      E2E_WORKER_URL: ${E2E_WORKER_URL:-}
+      E2E_WORKER_TOKEN: ${E2E_WORKER_TOKEN:-}
+      E2E_WORKER_CONCURRENCY: ${E2E_WORKER_CONCURRENCY:-2}
+      E2E_R2_URL: ${E2E_R2_URL:-}
+      E2E_R2_ACCESS_KEY_ID: ${E2E_R2_ACCESS_KEY_ID:-}
+      E2E_R2_SECRET_ACCESS_KEY: ${E2E_R2_SECRET_ACCESS_KEY:-}
+      E2E_R2_PREFIX: ${E2E_R2_PREFIX:-e2e}
+    ports:
+      - "${ADK_BIND_ADDRESS:-127.0.0.1}:${ADK_API_PORT:-3000}:3000"
+    # Lets integrations reach services on this computer, e.g. Ollama at http://host.docker.internal:11434.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  web:
+    build:
+      context: apps/Frontend
+      args:
+        # Compiled into the web app: changing it rebuilds this image on the next start.
+        VITE_API_BASE_URL: ${API_PUBLIC_URL:-http://localhost:3000}
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+    ports:
+      - "${ADK_BIND_ADDRESS:-127.0.0.1}:${ADK_WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  worker:
+    profiles: [e2e]
+    build:
+      context: apps/Backend
+      dockerfile: Dockerfile.e2e-worker
+    restart: unless-stopped
+    depends_on:
+      # The API applies the database migrations the worker relies on.
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_PROVIDER: postgres
+      DATABASE_URL: *database-url
+      INTEGRATION_ENCRYPTION_KEY: *encryption-key
+      E2E_WORKER_TOKEN: ${E2E_WORKER_TOKEN:?Run the ADK setup wizard first (adk.cmd on Windows, ./adk.sh on macOS/Linux)}
+      E2E_WORKER_CONCURRENCY: ${E2E_WORKER_CONCURRENCY:-2}
+      E2E_R2_URL: ${E2E_R2_URL:-}
+      E2E_R2_ACCESS_KEY_ID: ${E2E_R2_ACCESS_KEY_ID:-}
+      E2E_R2_SECRET_ACCESS_KEY: ${E2E_R2_SECRET_ACCESS_KEY:-}
+      E2E_R2_PREFIX: ${E2E_R2_PREFIX:-e2e}
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    shm_size: 1gb
+    # Test targets on this computer are reachable at http://host.docker.internal:<port>.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  mcp:
+    profiles: [mcp]
+    build:
+      context: apps/Mcp
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      ADK_API_URL: http://api:3000
+      ADK_MCP_HTTP_PORT: 3333
+      ADK_MCP_PUBLIC_URL: ${ADK_MCP_PUBLIC_URL:-http://localhost:3333}
+      ADK_MCP_OAUTH_SECRET: ${ADK_MCP_OAUTH_SECRET:?Run the ADK setup wizard first (adk.cmd on Windows, ./adk.sh on macOS/Linux)}
+      ADK_MCP_ALLOWED_HOSTS: ${ADK_MCP_ALLOWED_HOSTS:-}
+    ports:
+      - "${ADK_BIND_ADDRESS:-127.0.0.1}:${ADK_MCP_PORT:-3333}:3333"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3333/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mailpit:
+    profiles: [mail]
+    image: axllent/mailpit:v1.27
+    restart: unless-stopped
+    ports:
+      - "${ADK_BIND_ADDRESS:-127.0.0.1}:${ADK_MAIL_PORT:-8025}:8025"
+
+volumes:
+  database-data:

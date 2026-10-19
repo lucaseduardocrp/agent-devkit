@@ -1,0 +1,746 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model KnowledgeChunkRecord {
+  id         String   @id @default(uuid())
+  ownerId    String   @map("owner_id")
+  source     String
+  pageId     String   @map("page_id")
+  chunkIndex Int      @map("chunk_index")
+  content    String
+  createdAt  DateTime @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([ownerId, source, pageId, chunkIndex], map: "knowledge_chunks_owner_source_page_chunk_key")
+  @@index([ownerId], map: "knowledge_chunks_owner_idx")
+  @@index([ownerId, source, pageId], map: "knowledge_chunks_owner_source_page_idx")
+  @@map("knowledge_chunks")
+}
+
+model KnowledgeRelationRecord {
+  id           String   @id @default(uuid())
+  ownerId      String   @map("owner_id")
+  sourcePageId String   @map("source_page_id")
+  targetPageId String   @map("target_page_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([ownerId, sourcePageId, targetPageId], map: "knowledge_relations_owner_source_target_key")
+  @@index([ownerId, sourcePageId], map: "knowledge_relations_owner_source_idx")
+  @@index([ownerId, targetPageId], map: "knowledge_relations_owner_target_idx")
+  @@map("knowledge_relations")
+}
+
+enum IntegrationCategory {
+  KNOWLEDGE
+  PROJECT_MANAGEMENT
+  LLM
+}
+
+enum WorkspaceRole {
+  ADMIN
+  MEMBER
+  INTEGRATOR
+  VIEWER
+}
+
+model UserRecord {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  passwordHash    String?   @map("password_hash")
+  name            String
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  sessions          SessionRecord[]
+  accessTokens      PersonalAccessTokenRecord[]
+  oauthIdentities   OAuthIdentityRecord[]
+  createdWorkspaces WorkspaceRecord[]
+  memberships       WorkspaceMemberRecord[]
+
+  @@map("users")
+}
+
+/// Long-lived, revocable credentials for MCP clients and scripts. Only a SHA-256 hash is stored.
+model PersonalAccessTokenRecord {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id")
+  name        String
+  tokenHash   String    @unique @map("token_hash")
+  tokenPrefix String    @map("token_prefix")
+  scope       String    @default("full")
+  expiresAt   DateTime? @map("expires_at")
+  lastUsedAt  DateTime? @map("last_used_at")
+  revokedAt   DateTime? @map("revoked_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user UserRecord @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "personal_access_tokens_user_id_idx")
+  @@map("personal_access_tokens")
+}
+
+model AuthCodeRecord {
+  id         String    @id @default(uuid())
+  email      String
+  purpose    String
+  codeHash   String    @map("code_hash")
+  expiresAt  DateTime  @map("expires_at")
+  attempts   Int       @default(0)
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([email, purpose, createdAt], map: "auth_codes_email_purpose_created_idx")
+  @@index([expiresAt], map: "auth_codes_expires_at_idx")
+  @@map("auth_codes")
+}
+
+model OAuthIdentityRecord {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  provider       String
+  providerUserId String   @map("provider_user_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user UserRecord @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId], map: "oauth_identities_provider_user_key")
+  @@index([userId], map: "oauth_identities_user_id_idx")
+  @@map("oauth_identities")
+}
+
+model SessionRecord {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user UserRecord @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token], map: "sessions_token_idx")
+  @@index([userId], map: "sessions_user_id_idx")
+  @@map("sessions")
+}
+
+model WorkspaceRecord {
+  id                  String   @id @default(uuid())
+  name                String
+  slug                String   @unique
+  ownerId             String   @map("owner_id")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  monthlyBudgetMicros Int      @default(0) @map("monthly_budget_micros")
+
+  owner            UserRecord              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members          WorkspaceMemberRecord[]
+  agents           AgentRecord[]
+  testPlans        SavedTestPlanRecord[]
+  testSuites       TestSuiteRecord[]
+  specTemplates    SpecTemplateRecord[]
+  specifications   SpecificationRecord[]
+  integrations     IntegrationRecord[]
+  issues           IssueRecord[]
+  issueCounters    IssueCounterRecord?
+  agentRuns        AgentRunRecord[]
+  costRates        CostRateRecord[]
+  pbiItems         PbiItemRecord[]
+  pbiLinks         PbiExternalLinkRecord[]
+  pbiRelations     PbiRelationRecord[]
+  fieldMappings    FieldMappingTemplateRecord[]
+  releaseNotes     ReleaseNoteRecord[]
+  e2eCreations     E2eCreationRecord[]
+  llmUsageEvents   LlmUsageEventRecord[]
+  permissionGroups PermissionGroupRecord[]
+
+  @@index([ownerId], map: "workspaces_owner_id_idx")
+  @@map("workspaces")
+}
+
+model IssueCounterRecord {
+  workspaceId String @id @map("workspace_id")
+  nextNumber  Int    @default(1) @map("next_number")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("issue_counters")
+}
+
+model IssueRecord {
+  id              String   @id @default(uuid())
+  workspaceId     String   @map("workspace_id")
+  number          Int
+  title           String
+  description     String   @default("") @db.Text
+  status          String   @default("todo")
+  priority        String   @default("medium")
+  assigneeAgentId String?  @map("assignee_agent_id")
+  assigneeUserId  String?  @map("assignee_user_id")
+  createdBy       String   @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  activeRunId     String?  @map("active_run_id")
+  pbiItemId       String?  @map("pbi_item_id")
+
+  workspace WorkspaceRecord      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  comments  IssueCommentRecord[]
+  inbox     IssueInboxRecord[]
+  runs      AgentRunRecord[]
+  pbiItem   PbiItemRecord?       @relation(fields: [pbiItemId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, number], map: "issues_workspace_number_key")
+  @@index([workspaceId, updatedAt], map: "issues_workspace_updated_idx")
+  @@index([workspaceId, pbiItemId], map: "issues_workspace_pbi_idx")
+  @@map("issues")
+}
+
+model PbiItemRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  parentId    String?  @map("parent_id")
+  kind        String
+  title       String
+  description String   @default("") @db.Text
+  status      String   @default("backlog")
+  position    Float    @default(0)
+  sourceData  Json     @default("{}") @map("source_data")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace         WorkspaceRecord         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent            PbiItemRecord?          @relation("PbiHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children          PbiItemRecord[]         @relation("PbiHierarchy")
+  links             PbiExternalLinkRecord[]
+  issues            IssueRecord[]
+  outgoingRelations PbiRelationRecord[]     @relation("PbiRelationSource")
+  incomingRelations PbiRelationRecord[]     @relation("PbiRelationTarget")
+
+  @@index([workspaceId, parentId, position], map: "pbi_items_workspace_parent_position_idx")
+  @@map("pbi_items")
+}
+
+model FieldMappingTemplateRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  entityType  String   @map("entity_type")
+  providerId  String   @map("provider_id")
+  scope       String   @default("")
+  itemType    String   @default("") @map("item_type")
+  rules       Json     @default("[]")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, providerId, entityType], map: "field_mappings_destination_idx")
+  @@map("field_mapping_templates")
+}
+
+/// A release note written manually or by an agent from selected PBIs/cards and the Brain.
+model ReleaseNoteRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  title       String
+  version     String   @default("")
+  content     String   @default("") @db.Text
+  agentId     String?  @map("agent_id")
+  itemIds     Json     @default("[]") @map("item_ids")
+  createdBy   String?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, updatedAt], map: "release_notes_workspace_updated_idx")
+  @@map("release_notes")
+}
+
+model PbiExternalLinkRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  itemId      String   @map("item_id")
+  providerId  String   @map("provider_id")
+  externalId  String   @map("external_id")
+  externalUrl String?  @map("external_url")
+  boardId     String?  @map("board_id")
+  syncedAt    DateTime @default(now()) @map("synced_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  item      PbiItemRecord   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, providerId, externalId], map: "pbi_links_workspace_provider_external_key")
+  @@unique([itemId, providerId, boardId], map: "pbi_links_item_provider_board_key")
+  @@index([workspaceId, providerId], map: "pbi_links_workspace_provider_idx")
+  @@map("pbi_external_links")
+}
+
+/// A non-hierarchical link between two backlog items (related, dependency, duplicate, tests).
+/// Stored once in a canonical direction; the opposite item sees the inverse link type.
+model PbiRelationRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  sourceId    String   @map("source_id")
+  targetId    String   @map("target_id")
+  type        String
+  createdBy   String?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  source    PbiItemRecord   @relation("PbiRelationSource", fields: [sourceId], references: [id], onDelete: Cascade)
+  target    PbiItemRecord   @relation("PbiRelationTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, targetId, type], map: "pbi_relations_source_target_type_key")
+  @@index([workspaceId, targetId], map: "pbi_relations_workspace_target_idx")
+  @@map("pbi_relations")
+}
+
+model AgentRunRecord {
+  id           String    @id @default(uuid())
+  workspaceId  String    @map("workspace_id")
+  issueId      String    @map("issue_id")
+  agentId      String    @map("agent_id")
+  actorId      String    @map("actor_id")
+  ownerId      String    @map("owner_id")
+  status       String    @default("queued")
+  mode         String    @default("server")
+  attempt      Int       @default(1)
+  prompt       String    @db.Text
+  output       String?   @db.Text
+  error        String?   @db.Text
+  provider     String?
+  model        String?
+  inputTokens  Int?      @map("input_tokens")
+  outputTokens Int?      @map("output_tokens")
+  costMicros   Int?      @map("cost_micros")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  startedAt    DateTime? @map("started_at")
+  finishedAt   DateTime? @map("finished_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue     IssueRecord     @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt], map: "agent_runs_workspace_created_idx")
+  @@index([issueId, createdAt], map: "agent_runs_issue_created_idx")
+  @@map("agent_runs")
+}
+
+model CostRateRecord {
+  workspaceId         String          @map("workspace_id")
+  provider            String
+  model               String
+  inputUsdPerMillion  Float           @map("input_usd_per_million")
+  outputUsdPerMillion Float           @map("output_usd_per_million")
+  workspace           WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, provider, model])
+  @@map("cost_rates")
+}
+
+/// Tokens consumed outside agent runs, e.g. by the host model of an MCP client using ADK tools.
+model LlmUsageEventRecord {
+  id           String   @id @default(uuid())
+  workspaceId  String   @map("workspace_id")
+  actorId      String?  @map("actor_id")
+  source       String   @default("mcp")
+  tool         String
+  provider     String
+  model        String
+  inputTokens  Int      @map("input_tokens")
+  outputTokens Int      @map("output_tokens")
+  estimated    Boolean  @default(true)
+  costMicros   Int?     @map("cost_micros")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt], map: "llm_usage_events_workspace_created_idx")
+  @@map("llm_usage_events")
+}
+
+model IssueCommentRecord {
+  id        String   @id @default(uuid())
+  issueId   String   @map("issue_id")
+  authorId  String   @map("author_id")
+  body      String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+
+  issue IssueRecord @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([issueId, createdAt], map: "issue_comments_issue_created_idx")
+  @@map("issue_comments")
+}
+
+model IssueInboxRecord {
+  issueId    String    @map("issue_id")
+  userId     String    @map("user_id")
+  readAt     DateTime? @map("read_at")
+  archivedAt DateTime? @map("archived_at")
+
+  issue IssueRecord @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@id([issueId, userId])
+  @@map("issue_inbox")
+}
+
+model SpecTemplateRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  sections    Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace      WorkspaceRecord       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  specifications SpecificationRecord[]
+
+  @@index([workspaceId, updatedAt], map: "spec_templates_workspace_updated_idx")
+  @@map("spec_templates")
+}
+
+model SpecificationRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  templateId  String?  @map("template_id")
+  agentId     String?  @map("agent_id")
+  parentId    String?  @map("parent_id")
+  title       String
+  sections    Json
+  messages    Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  template  SpecTemplateRecord?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  parent    SpecificationRecord?  @relation("SpecificationHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  SpecificationRecord[] @relation("SpecificationHierarchy")
+
+  @@index([workspaceId, updatedAt], map: "specifications_workspace_updated_idx")
+  @@index([workspaceId, parentId], map: "specifications_workspace_parent_idx")
+  @@map("specifications")
+}
+
+model SavedTestPlanRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  title       String
+  assignedTo  String?  @map("assigned_to")
+  suiteId     String   @map("suite_id")
+  sourceType  String?  @map("source_type")
+  sourceId    String?  @map("source_id")
+  plans       Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  suite     TestSuiteRecord @relation(fields: [suiteId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, updatedAt], map: "saved_test_plans_workspace_updated_idx")
+  @@index([workspaceId, suiteId], map: "saved_test_plans_workspace_suite_idx")
+  @@map("saved_test_plans")
+}
+
+model TestSuiteRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  parentId    String?  @map("parent_id")
+  name        String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent    TestSuiteRecord?      @relation("TestSuiteHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  TestSuiteRecord[]     @relation("TestSuiteHierarchy")
+  testPlans SavedTestPlanRecord[]
+
+  @@unique([workspaceId, parentId, name], map: "test_suites_workspace_parent_name_key")
+  @@index([workspaceId, parentId], map: "test_suites_workspace_parent_idx")
+  @@map("test_suites")
+}
+
+model WorkspaceMemberRecord {
+  id          String        @id @default(uuid())
+  workspaceId String        @map("workspace_id")
+  userId      String        @map("user_id")
+  role        WorkspaceRole @default(MEMBER)
+  permissions Json          @default("{}")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      UserRecord                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  groups    PermissionGroupMemberRecord[]
+
+  @@unique([workspaceId, userId], map: "workspace_members_workspace_user_key")
+  @@index([workspaceId], map: "workspace_members_workspace_id_idx")
+  @@index([userId], map: "workspace_members_user_id_idx")
+  @@map("workspace_members")
+}
+
+/// Grants module access (view, edit, delete per module) to the members it contains.
+model PermissionGroupRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  description String   @default("")
+  /// Module -> access level ("none" | "view" | "edit" | "delete").
+  modules     Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members   PermissionGroupMemberRecord[]
+
+  @@unique([workspaceId, name], map: "permission_groups_workspace_name_key")
+  @@map("permission_groups")
+}
+
+model PermissionGroupMemberRecord {
+  groupId  String @map("group_id")
+  memberId String @map("member_id")
+
+  group  PermissionGroupRecord @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  member WorkspaceMemberRecord @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, memberId])
+  @@index([memberId], map: "permission_group_members_member_id_idx")
+  @@map("permission_group_members")
+}
+
+model IntegrationRecord {
+  id               String              @id @default(uuid())
+  ownerId          String              @map("owner_id")
+  category         IntegrationCategory
+  providerId       String              @map("provider_id")
+  isEnabled        Boolean             @default(true) @map("is_enabled")
+  settings         Json                @default("{}")
+  encryptedSecrets String?             @map("encrypted_secrets")
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, category, providerId], map: "integrations_owner_category_provider_key")
+  @@index([ownerId, category], map: "integrations_owner_category_idx")
+  @@map("integration_configs")
+}
+
+enum AgentRole {
+  QA
+  DOCUMENTATION
+  REFACTOR
+  CUSTOM
+}
+
+model AgentRecord {
+  id            String    @id @default(uuid())
+  workspaceId   String    @map("workspace_id")
+  parentAgentId String?   @map("parent_agent_id")
+  name          String
+  slug          String
+  description   String
+  role          AgentRole @default(CUSTOM)
+  instructions  String    @db.Text
+  model         String?
+  temperature   Float?    @default(0.2)
+  isDefault     Boolean   @default(false) @map("is_default")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, slug], map: "agents_workspace_slug_key")
+  @@index([workspaceId], map: "agents_workspace_id_idx")
+  @@index([workspaceId, parentAgentId], map: "agents_workspace_parent_idx")
+  @@map("agents")
+}
+
+model AuditEventRecord {
+  id          String   @id
+  sequence    Int      @unique @default(autoincrement())
+  workspaceId String   @map("workspace_id")
+  entityType  String   @map("entity_type")
+  entityId    String   @map("entity_id")
+  action      String
+  actorId     String?  @map("actor_id")
+  actorName   String?  @map("actor_name")
+  actorEmail  String?  @map("actor_email")
+  requestId   String   @map("request_id")
+  operation   String
+  occurredAt  DateTime @default(now()) @map("occurred_at")
+  before      Json
+  after       Json
+
+  @@index([workspaceId, entityType, sequence], map: "audit_events_workspace_type_sequence_idx")
+  @@index([workspaceId, entityType, entityId, sequence], map: "audit_events_entity_sequence_idx")
+  @@map("audit_events")
+}
+
+/// One E2E Automation request: target, product spec and the AI-authored test cases.
+model E2eCreationRecord {
+  id              String    @id @default(uuid())
+  workspaceId     String    @map("workspace_id")
+  ownerId         String    @map("owner_id")
+  actorId         String    @map("actor_id")
+  agentId         String    @map("agent_id")
+  name            String
+  mode            String
+  scope           String
+  baseUrl         String    @map("base_url")
+  /// Original loopback origin used by the browser while requests travel through baseUrl.
+  localOrigin     String?   @map("local_origin")
+  /// "remote" (ADK workers) or "local" (the requesting user's devkit runner).
+  executionTarget String    @default("remote") @map("execution_target")
+  path            String    @default("/")
+  username        String?
+  passwordSecret  String?   @map("password_secret")
+  /// AES-GCM encrypted JSON containing a Cloudflare Access service token.
+  accessSecret    String?   @map("access_secret") @db.Text
+  prd             String    @db.Text
+  prdFileNames    Json      @default("[]") @map("prd_file_names")
+  diff            String?   @db.Text
+  instructions    String?   @db.Text
+  locale          String    @default("pt-BR")
+  repoProvider    String?   @map("repo_provider")
+  repoId          String?   @map("repo_id")
+  repoName        String?   @map("repo_name")
+  repoBranch      String?   @map("repo_branch")
+  repoPath        String?   @map("repo_path")
+  /// JSON: test management platform that receives the results (E2eReportingTarget).
+  reporting       String?   @db.Text
+  /// JSON: outcome of the latest publication (E2eReportState).
+  lastReport      String?   @map("last_report") @db.Text
+  prdSummary      String?   @map("prd_summary") @db.Text
+  status          String    @default("queued")
+  error           String?   @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  finishedAt      DateTime? @map("finished_at")
+
+  workspace   WorkspaceRecord       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tests       E2eTestCaseRecord[]
+  jobs        E2eJobRecord[]
+  runnerTasks E2eRunnerTaskRecord[]
+
+  @@index([workspaceId, updatedAt], map: "e2e_creations_workspace_updated_idx")
+  @@index([status], map: "e2e_creations_status_idx")
+  @@map("e2e_creations")
+}
+
+model E2eTestCaseRecord {
+  id           String    @id @default(uuid())
+  creationId   String    @map("creation_id")
+  workspaceId  String    @map("workspace_id")
+  position     Int
+  code         String
+  title        String
+  description  String    @db.Text
+  steps        Json      @default("[]")
+  priority     String    @default("medium")
+  scriptPath   String?   @map("script_path")
+  /// JSON: the test management case this test automates (ExternalTestCase).
+  externalCase String?   @map("external_case") @db.Text
+  stepResults  Json      @default("[]") @map("step_results")
+  status       String    @default("pending")
+  error        String?   @db.Text
+  analysis     String?   @db.Text
+  verdict      String?
+  logs         String?   @db.Text
+  videoKey     String?   @map("video_key")
+  durationMs   Int?      @map("duration_ms")
+  /// Computer of the local runner that produced the latest result; null for ADK workers.
+  executedOn   String?   @map("executed_on")
+  attempts     Int       @default(0)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  lastRunAt    DateTime? @map("last_run_at")
+
+  creation E2eCreationRecord @relation(fields: [creationId], references: [id], onDelete: Cascade)
+
+  @@index([creationId, position], map: "e2e_test_cases_creation_position_idx")
+  @@index([workspaceId], map: "e2e_test_cases_workspace_idx")
+  @@map("e2e_test_cases")
+}
+
+/// Durable E2E work queue shared by the API and the on-demand workers.
+/// A partial unique index (see migration) keeps one queued/running job per creation.
+model E2eJobRecord {
+  id          String    @id @default(uuid())
+  workspaceId String    @map("workspace_id")
+  creationId  String    @map("creation_id")
+  kind        String
+  testIds     Json      @default("[]") @map("test_ids")
+  status      String    @default("queued")
+  attempts    Int       @default(0)
+  workerId    String?   @map("worker_id")
+  heartbeatAt DateTime? @map("heartbeat_at")
+  /// User who started the job; browser work of local runs goes to that user's runner.
+  requestedBy String?   @map("requested_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  creation E2eCreationRecord @relation(fields: [creationId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt], map: "e2e_jobs_status_created_idx")
+  @@map("e2e_jobs")
+}
+
+/// Browser work a worker delegates to a user's local runner (`devkit runner`).
+/// The worker waits for the task; the runner claims it over HTTPS and reports the result.
+model E2eRunnerTaskRecord {
+  id          String    @id @default(uuid())
+  workspaceId String    @map("workspace_id")
+  creationId  String    @map("creation_id")
+  testId      String?   @map("test_id")
+  /// Only runners signed in as this user may claim the task.
+  userId      String    @map("user_id")
+  kind        String
+  /// AES-GCM encrypted JSON input (script, target, credentials).
+  payload     String    @db.Text
+  status      String    @default("queued")
+  runnerId    String?   @map("runner_id")
+  runnerLabel String?   @map("runner_label")
+  /// JSON outcome reported by the runner; its evidence goes to the artifact store.
+  result      String?   @db.Text
+  error       String?   @db.Text
+  heartbeatAt DateTime? @map("heartbeat_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  creation E2eCreationRecord @relation(fields: [creationId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, userId, status, createdAt], map: "e2e_runner_tasks_claim_idx")
+  @@map("e2e_runner_tasks")
+}
+
+/// Local runners seen recently, so ADK can show whether a user's computer is connected.
+model E2eLocalRunnerRecord {
+  id          String
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  name        String
+  platform    String
+  version     String
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@id([id, workspaceId])
+  @@index([workspaceId, userId, lastSeenAt], map: "e2e_local_runners_user_idx")
+  @@map("e2e_local_runners")
+}
+
+/// Recorded test videos, shared by the API and the workers.
+model E2eArtifactRecord {
+  key       String   @id
+  content   Bytes
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("e2e_artifacts")
+}

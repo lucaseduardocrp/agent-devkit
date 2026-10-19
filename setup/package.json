@@ -1,0 +1,14 @@
+{
+  "name": "@adk/setup",
+  "private": true,
+  "description": "ADK setup wizard: a local page that writes the Docker Compose configuration (.env).",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  }
+}
