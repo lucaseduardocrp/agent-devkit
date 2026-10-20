@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { localOrigin } from '@agent-devkit/mcp';
+import { localOrigin } from '#mcp';
 
 export interface TunnelInfo {
   readonly localUrl: string;

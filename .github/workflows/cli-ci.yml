@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - 'apps/Cli/**'
-      # The CLI depends on @agent-devkit/mcp (apps/Mcp).
+      # The CLI embeds the MCP server built from apps/Mcp.
       - 'apps/Mcp/**'
       # The parity test compares the vendored runner with the backend's E2E module.
       - 'apps/Backend/src/modules/e2e/**'
@@ -34,8 +34,8 @@ jobs:
           cache-dependency-path: |
             apps/Mcp/package-lock.json
             apps/Cli/package-lock.json
-      # Tests and typecheck read the MCP sources; the build links the built package.
-      - run: npm ci && npm run build
+      # Tests and typecheck read the MCP sources; the build compiles and embeds apps/Mcp.
+      - run: npm ci
         working-directory: apps/Mcp
       - run: npm ci
       - run: npm run verify

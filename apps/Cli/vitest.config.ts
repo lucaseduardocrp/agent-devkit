@@ -5,7 +5,7 @@ export default defineConfig({
   // Tests run against the MCP sources, so they do not need a build of apps/Mcp.
   resolve: {
     alias: {
-      '@agent-devkit/mcp': fileURLToPath(new URL('../Mcp/src/index.ts', import.meta.url)),
+      '#mcp': fileURLToPath(new URL('../Mcp/src/index.ts', import.meta.url)),
     },
   },
   test: {

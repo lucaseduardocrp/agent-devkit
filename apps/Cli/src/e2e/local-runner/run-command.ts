@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { AdkApiError, segment, type AdkApi } from '@agent-devkit/mcp';
+import { AdkApiError, segment, type AdkApi } from '#mcp';
 import type { LocalRunnerAgent } from './agent.js';
 
 interface CreationDto {

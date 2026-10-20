@@ -9,7 +9,7 @@ import {
   runServerCommand,
   SERVER_OPTIONS,
   type McpConfig,
-} from '@agent-devkit/mcp';
+} from '#mcp';
 import {
   installSkills,
   login,

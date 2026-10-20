@@ -2,8 +2,8 @@
 
 `@agent-devkit/cli` is the terminal side of ADK. It signs you in, runs the browser of E2E tests on
 your computer, opens tunnels to local applications, installs the ADK skills into your assistant and
-starts the [ADK MCP server](../Mcp) (`@agent-devkit/mcp`, a dependency of this package) for
-assistants on this computer.
+starts the [ADK MCP server](../Mcp) for assistants on this computer. The server is built from
+`apps/Mcp` and embedded in this package, so `npm install -g @agent-devkit/cli` is the only install.
 
 ## Install
 
@@ -171,7 +171,7 @@ The MCP settings (`ADK_MCP_*`) are listed in [apps/Mcp](../Mcp/README.md#configu
 
 ```text
 src/
-  bin/devkit.ts             CLI entry point; the MCP commands come from @agent-devkit/mcp
+  bin/devkit.ts             CLI entry point; the MCP commands come from the embedded server (#mcp)
   commands.ts               login, logout, whoami, install-skills, signed-in API client
   e2e/
     local-runner/           devkit runner and devkit e2e: claim tasks, run Playwright, upload results
@@ -180,26 +180,29 @@ src/
   vendor/e2e/               copy of the backend's Playwright runner (scripts/sync-e2e-runner.mjs)
 ```
 
-- The CLI talks to ADK only through `@agent-devkit/mcp` (HTTP client, session, configuration) and
+- The CLI talks to ADK only through the MCP server code (HTTP client, session, configuration) and
   never imports backend code. `src/vendor` is a verbatim copy that `tests/e2e-runner-parity.test.ts`
   keeps identical to `apps/Backend/src/modules/e2e`, so local runs behave like the ADK workers.
-- In this repository the dependency is `file:../Mcp`: typecheck and tests read the MCP sources,
-  while `npm run build` and `npm start` need a build of `apps/Mcp`.
+- The CLI imports the server as `#mcp` (package.json `imports`). Typecheck and tests resolve it to
+  `../Mcp/src`; `npm run build` builds `apps/Mcp` and copies it into `dist/mcp` and `skills/`
+  (`scripts/embed-mcp.mjs`), which is what the npm package ships. The server's runtime
+  dependencies are declared here too; `tests/embedded-mcp.test.ts` fails when they drift.
 
 ## Development
 
 ```bash
-cd apps/Mcp && npm ci && npm run build   # once, and after changing apps/Mcp
+cd apps/Mcp && npm ci                    # the CLI reads and builds these sources
 cd ../Cli && npm ci
+npm run build             # builds apps/Mcp, embeds it, then builds the CLI
 npm run verify            # format, lint, typecheck, tests with coverage (includes the runner parity)
 npm run sync-e2e-runner   # after changing the backend's Playwright runner
 ```
 
 ## Releasing
 
-Push a tag such as `cli-v0.5.0`. The **npm release** workflow (`.github/workflows/cli-release.yml`)
-verifies and builds both apps, publishes `@agent-devkit/mcp` and then `@agent-devkit/cli` with the
-same version (the CLI depends on that exact MCP version), and attaches both tarballs to a GitHub
-release. It authenticates with npm Trusted Publishing, configured on npmjs.com for each package with
-this workflow file, or with the repository secret `NPM_AGENT_DEVKIT` (an npm automation or granular
-publish token that can publish both packages).
+Push a tag such as `cli-v0.5.0`. The **CLI release** workflow (`.github/workflows/cli-release.yml`)
+verifies both apps, builds the CLI with the embedded MCP server, publishes `@agent-devkit/cli` to the
+public npm registry and attaches the tarball to a GitHub release. It authenticates with npm Trusted
+Publishing configured for `@agent-devkit/cli` with this workflow file, or with the repository secret
+`NPM_AGENT_DEVKIT` (an npm automation or granular publish token for the package). The MCP server has
+no release of its own.

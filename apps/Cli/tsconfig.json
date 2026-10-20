@@ -13,7 +13,7 @@
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "paths": { "@agent-devkit/mcp": ["../Mcp/src/index.ts"] },
+    "paths": { "#mcp": ["../Mcp/src/index.ts"] },
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,

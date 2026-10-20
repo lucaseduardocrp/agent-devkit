@@ -113,7 +113,7 @@ tools) in [apps/Mcp/README.md](apps/Mcp/README.md).
 | [setup](setup)                         | The setup wizard that writes `.env` (dependency-free Node server and page) |
 | [apps/Backend](apps/Backend)           | REST API and E2E worker (Node, Express 5, Prisma, PostgreSQL, Playwright)  |
 | [apps/Frontend](apps/Frontend)         | Web app (React 19, Vite, Tailwind), served by nginx in production          |
-| [apps/Mcp](apps/Mcp)                   | `@agent-devkit/mcp`: the MCP server (stdio, HTTP + OAuth), deployed to Railway |
+| [apps/Mcp](apps/Mcp)                   | The MCP server (stdio, HTTP + OAuth), deployed to Railway and embedded in the CLI |
 | [apps/Cli](apps/Cli)                   | `@agent-devkit/cli`: the `devkit` command (sign-in, local E2E runner, tunnels) |
 | [infrastructure](infrastructure)       | Development Compose stack and runtime/environment documentation           |
 | [docs](docs)                           | Self-hosting and deployment guides, ADRs and templates                     |
@@ -158,8 +158,8 @@ npm run verify
 
 CI runs `verify` and `build` for the MCP server and the CLI on every pull request that touches
 them, checks the setup wizard and the Compose stack, and
-[cli-release.yml](.github/workflows/cli-release.yml) publishes `@agent-devkit/mcp` and
-`@agent-devkit/cli` to npm with the same version.
+[cli-release.yml](.github/workflows/cli-release.yml) publishes `@agent-devkit/cli`, with the MCP
+server embedded, to npm.
 
 ## Contributing
 

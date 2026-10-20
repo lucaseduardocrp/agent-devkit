@@ -11,7 +11,7 @@ import {
   whoIs,
   type IssuedCredential,
   type McpConfig,
-} from '@agent-devkit/mcp';
+} from '#mcp';
 
 export interface LoginInput {
   readonly token?: string;

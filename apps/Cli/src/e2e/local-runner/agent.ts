@@ -1,4 +1,4 @@
-import { AdkApiError, segment, type AdkApi } from '@agent-devkit/mcp';
+import { AdkApiError, segment, type AdkApi } from '#mcp';
 import {
   E2eRunnerError,
   type E2eRunInput,

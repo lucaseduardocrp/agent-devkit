@@ -3,24 +3,11 @@
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
   "private": true,
-  "description": "ADK MCP server for Claude, Codex and other assistants (stdio and Streamable HTTP with OAuth).",
+  "description": "ADK MCP server for Claude, Codex and other assistants (stdio and Streamable HTTP with OAuth). Deployed to Railway and embedded in @agent-devkit/cli; not published on its own.",
   "type": "module",
   "bin": {
     "devkit-mcp": "dist/src/bin/devkit-mcp.js"
   },
-  "exports": {
-    ".": {
-      "types": "./dist/src/index.d.ts",
-      "default": "./dist/src/index.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "dist/src",
-    "skills",
-    "README.md",
-    "LICENSE"
-  ],
   "engines": {
     "node": ">=20"
   },
@@ -36,8 +23,7 @@
     "test:coverage": "vitest run --coverage",
     "parity": "vitest run tests/parity.test.ts",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage",
-    "smoke": "npm run build && node scripts/smoke.mjs",
-    "prepublishOnly": "npm run build"
+    "smoke": "npm run build && node scripts/smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",

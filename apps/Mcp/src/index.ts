@@ -1,4 +1,4 @@
-// Public API of @agent-devkit/mcp, used by the `devkit` CLI (@agent-devkit/cli).
+// Public API of the MCP server, imported as `#mcp` by the `devkit` CLI (apps/Cli), which embeds it.
 export {
   AdkApiError,
   HttpAdkClient,

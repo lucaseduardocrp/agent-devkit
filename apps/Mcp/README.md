@@ -1,4 +1,4 @@
-# ADK MCP server (`@agent-devkit/mcp`)
+# ADK MCP server
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes **every ADK
 capability** (Brain, Specs, Test Plans, Agents, Design, Workspaces, Integrations, Audit) to Claude
@@ -24,8 +24,8 @@ devkit install-skills --client claude   # or --client codex
 ```
 
 `devkit` (or `devkit mcp`) starts this server over stdio with the stored session, so assistants can
-use `devkit` as the command. To run the server without the CLI, install `@agent-devkit/mcp` and use
-`devkit-mcp` with `ADK_TOKEN`, or build it from a checkout:
+use `devkit` as the command. To run the server without the CLI, build it from a checkout and use
+`devkit-mcp` (with `devkit login` done once, or `ADK_TOKEN`):
 
 ```bash
 cd apps/Mcp && npm ci && npm run build
@@ -214,8 +214,9 @@ npm run smoke    # builds and drives the stdio server end to end against ADK_API
 
 See `.agent/skills/mcp-tool/SKILL.md` for the maintenance workflow.
 
-## Releasing
+## Deployment and releases
 
-`@agent-devkit/mcp` is published together with the CLI, with the same version: see
-[Releasing](../Cli/README.md#releasing) in apps/Cli. The Railway service deploys `apps/Mcp` from its
-Dockerfile.
+The server has no npm package and no releases of its own. The Railway service deploys `apps/Mcp`
+from its Dockerfile, and the CLI release embeds the code built from this folder (see
+[Releasing](../Cli/README.md#releasing) in apps/Cli). A change here reaches local assistants with
+the next CLI release.

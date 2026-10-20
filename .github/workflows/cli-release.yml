@@ -1,10 +1,11 @@
-name: npm release
+name: CLI release
 
-# Publishes @agent-devkit/mcp and @agent-devkit/cli to the public npm registry, with the same
-# version, when a tag such as `cli-v0.5.0` is pushed. Anyone then installs the command line with
-# `npm install -g @agent-devkit/cli`; it depends on the exact @agent-devkit/mcp of the same release.
-# Authenticates with npm Trusted Publishing (OIDC, no secret) once it is configured on npmjs.com for
-# both packages with this workflow file; until then the repository secret NPM_AGENT_DEVKIT is used.
+# Publishes the `devkit` command line to the public npm registry when a tag such as `cli-v0.5.0`
+# is pushed, so anyone installs it with `npm install -g @agent-devkit/cli`. The package embeds the
+# MCP server built from apps/Mcp (scripts/embed-mcp.mjs); the server itself is not published, it is
+# deployed to Railway from its Dockerfile.
+# Authenticates with npm Trusted Publishing (OIDC, no secret) once it is configured for the
+# @agent-devkit/cli package on npmjs.com; until then the repository secret NPM_AGENT_DEVKIT is used.
 on:
   push:
     tags: ['cli-v*']
@@ -37,12 +38,12 @@ jobs:
             npm whoami || { echo "::error::NPM_AGENT_DEVKIT is invalid or expired. Create a new npm token and update the NPM_AGENT_DEVKIT repository secret."; exit 1; }
           fi
 
-      - name: Verify and build the MCP server
+      - name: Verify the MCP server
         working-directory: apps/Mcp
         run: |
           npm ci
           npm run verify
-          npm run build
+      # The build compiles apps/Mcp and embeds it into the package.
       - name: Verify and build the CLI
         working-directory: apps/Cli
         run: |
@@ -50,24 +51,16 @@ jobs:
           npm run verify
           npm run build
 
-      # The MCP package goes first: the published CLI depends on this exact version.
-      - name: Publish @agent-devkit/mcp
-        working-directory: apps/Mcp
+      - name: Publish @agent-devkit/cli
+        working-directory: apps/Cli
         run: |
           npm pkg set version="$VERSION"
           npm pkg delete private
           npm publish --access public
           npm pack
-      - name: Publish @agent-devkit/cli
-        working-directory: apps/Cli
-        run: |
-          npm pkg set version="$VERSION" "dependencies.@agent-devkit/mcp=$VERSION"
-          npm pkg delete private
-          npm publish --access public
-          npm pack
 
-      - name: Attach the tarballs to a GitHub release
+      - name: Attach the tarball to a GitHub release
         run: |
-          gh release create "$GITHUB_REF_NAME" apps/Mcp/*.tgz apps/Cli/*.tgz --title "ADK CLI $GITHUB_REF_NAME" --generate-notes
+          gh release create "$GITHUB_REF_NAME" apps/Cli/*.tgz --title "ADK CLI $GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

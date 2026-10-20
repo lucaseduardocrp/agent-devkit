@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { AdkApiError, type AdkApi, type ApiRequest } from '@agent-devkit/mcp';
+import { AdkApiError, type AdkApi, type ApiRequest } from '#mcp';
 import {
   formatRunnerEvent,
   LocalRunnerAgent,

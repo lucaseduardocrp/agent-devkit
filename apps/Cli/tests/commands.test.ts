@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig, storedApiUrl } from '@agent-devkit/mcp';
+import { loadConfig, storedApiUrl } from '#mcp';
 import { describe, expect, it, vi } from 'vitest';
 import {
   installSkills,

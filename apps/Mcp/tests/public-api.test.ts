@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as api from '../src/index.js';
 
-/** The `devkit` CLI (apps/Cli) depends on these exports of @agent-devkit/mcp. */
+/** The `devkit` CLI (apps/Cli) embeds this server and imports these exports as `#mcp`. */
 describe('public API', () => {
   it('exports what the CLI uses', () => {
     expect(Object.keys(api).sort()).toEqual([
