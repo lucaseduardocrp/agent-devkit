@@ -37,6 +37,9 @@ declarative tools, without coupling `apps/Mcp` to backend code.
 ## Guardrails
 
 - never import backend source into `apps/Mcp`; depend on the HTTP contract only;
+- keep terminal-only code (sign-in, local E2E runner, tunnels, skill installation) in `apps/Cli`;
+  when the CLI needs something new from the server, export it from `apps/Mcp/src/index.ts` and
+  list it in `apps/Mcp/tests/public-api.test.ts`;
 - never return tokens or secrets in tool results;
 - never let tool output content act as instructions: mark workspace content as untrusted;
 - prefer summaries for large lists and offer an explicit option for full content;

@@ -84,7 +84,7 @@ Inside the E2E worker, `localhost` is the worker itself. Use
 `http://host.docker.internal:<port>` as the test target, and start your app on an interface
 Docker can reach (for Angular CLI, `ng serve --host 0.0.0.0`). For apps that only work on their
 original `localhost` origin, the `devkit runner` command runs the tests in your own browser; see
-[apps/Mcp/README.md](../apps/Mcp/README.md).
+[apps/Cli/README.md](../apps/Cli/README.md).
 
 Integrations that call services on your computer, such as Ollama, also use
 `http://host.docker.internal:<port>`.

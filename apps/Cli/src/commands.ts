@@ -1,11 +1,17 @@
-import { cp, mkdir, readFile } from 'node:fs/promises';
+import { cp, mkdir } from 'node:fs/promises';
 import { homedir, hostname } from 'node:os';
 import { join, resolve } from 'node:path';
-import { HttpAdkClient } from '../api/http-client.js';
-import { signInForClient, whoIs, type IssuedCredential } from '../api/credentials.js';
-import { FileSessionStore, Session } from '../core/session.js';
-import type { McpConfig } from './config.js';
-import { loadSkills, skillsDirectory } from './skills.js';
+import {
+  FileSessionStore,
+  HttpAdkClient,
+  loadSkills,
+  Session,
+  signInForClient,
+  skillsDirectory,
+  whoIs,
+  type IssuedCredential,
+  type McpConfig,
+} from '@agent-devkit/mcp';
 
 export interface LoginInput {
   readonly token?: string;
@@ -131,20 +137,4 @@ export async function signedInApi(
     },
   });
   return { api, workspaceId: state.workspaceId, userName: state.user?.name };
-}
-
-/**
- * API address saved by the last `devkit login`, so later commands reach the same ADK without
- * repeating --api-url. Explicit --api-url or ADK_API_URL still win.
- */
-export async function storedApiUrl(
-  environment: NodeJS.ProcessEnv = process.env,
-): Promise<string | undefined> {
-  const file = environment['ADK_MCP_SESSION_FILE'] || join(homedir(), '.adk', 'mcp-session.json');
-  try {
-    const { apiUrl } = JSON.parse(await readFile(file, 'utf8')) as { apiUrl?: unknown };
-    return typeof apiUrl === 'string' && apiUrl ? apiUrl : undefined;
-  } catch {
-    return undefined;
-  }
 }

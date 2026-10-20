@@ -1,13 +1,13 @@
-import { AdkApiError, segment, type AdkApi } from '../../../api/http-client.js';
+import { AdkApiError, segment, type AdkApi } from '@agent-devkit/mcp';
 import {
   E2eRunnerError,
   type E2eRunInput,
   type E2eRunResult,
   type E2eSnapshot,
-} from '../../../vendor/e2e/application/e2e-runner.js';
-import type { AccessServiceToken } from '../../../vendor/e2e/application/access-routing.js';
-import type { E2eMode } from '../../../vendor/e2e/domain/e2e-mode.js';
-import { checkScript } from '../../../vendor/e2e/application/script-guard.js';
+} from '../../vendor/e2e/application/e2e-runner.js';
+import type { AccessServiceToken } from '../../vendor/e2e/application/access-routing.js';
+import type { E2eMode } from '../../vendor/e2e/domain/e2e-mode.js';
+import { checkScript } from '../../vendor/e2e/application/script-guard.js';
 import type { RunnerIdentity } from './playwright-setup.js';
 
 /** The part of the Playwright runner the agent drives. */

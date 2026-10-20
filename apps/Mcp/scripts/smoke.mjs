@@ -13,7 +13,9 @@ const apiUrl = process.env.ADK_API_URL ?? 'http://localhost:3000';
 const sessionFile = join(mkdtempSync(join(tmpdir(), 'adk-smoke-')), 'session.json');
 const transport = new StdioClientTransport({
   command: process.execPath,
-  args: [new URL('../dist/src/bin/devkit.js', import.meta.url).pathname.replace(/^\/(\w:)/, '$1')],
+  args: [
+    new URL('../dist/src/bin/devkit-mcp.js', import.meta.url).pathname.replace(/^\/(\w:)/, '$1'),
+  ],
   env: { ...process.env, ADK_API_URL: apiUrl, ADK_MCP_SESSION_FILE: sessionFile },
   stderr: 'inherit',
 });

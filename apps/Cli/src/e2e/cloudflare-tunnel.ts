@@ -3,6 +3,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { localOrigin } from '@agent-devkit/mcp';
 
 export interface TunnelInfo {
   readonly localUrl: string;
@@ -140,31 +141,6 @@ function forwardLocalRequest(incoming: IncomingMessage, outgoing: ServerResponse
     else outgoing.destroy();
   });
   incoming.pipe(request);
-}
-
-export function localOrigin(value: string): string {
-  let url: URL;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    throw new Error('Enter a local URL such as http://localhost:5173.');
-  }
-  if (
-    url.protocol !== 'http:' ||
-    !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname.toLowerCase()) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  ) {
-    throw new Error('The tunnel target must be an HTTP loopback URL without credentials or query.');
-  }
-  return url.origin;
-}
-
-export function quickTunnelCommand(value: string): string {
-  const origin = localOrigin(value);
-  return `cloudflared tunnel --url ${origin} --http-host-header ${new URL(origin).host}`;
 }
 
 export class CloudflareTunnelManager {

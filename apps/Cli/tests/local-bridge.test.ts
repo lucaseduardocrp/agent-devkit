@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Server } from 'node:http';
-import { createLocalTunnelBridge } from '../src/modules/e2e/local-bridge.js';
+import { createLocalTunnelBridge } from '../src/e2e/local-bridge.js';
 
 const ORIGIN = 'https://adk.example.com';
 let server: Server | undefined;

@@ -20,4 +20,4 @@ USER node
 EXPOSE 3333
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD wget -qO- "http://127.0.0.1:${PORT:-3333}/healthz" || exit 1
-CMD ["node", "dist/src/bin/devkit.js", "http"]
+CMD ["node", "dist/src/bin/devkit-mcp.js", "http"]

@@ -4,12 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  CloudflareTunnelManager,
-  createLocalGateway,
-  localOrigin,
-  quickTunnelCommand,
-} from '../src/modules/e2e/cloudflare-tunnel.js';
+import { CloudflareTunnelManager, createLocalGateway } from '../src/e2e/cloudflare-tunnel.js';
 
 function fakeProcess() {
   const kill = vi.fn(() => {
@@ -102,19 +97,6 @@ describe('Cloudflare Tunnel', () => {
       );
     }
   });
-  it('accepts only loopback HTTP origins', () => {
-    expect(localOrigin('http://localhost:5173/login')).toBe('http://localhost:5173');
-    expect(localOrigin('http://127.0.0.1:8080')).toBe('http://127.0.0.1:8080');
-    expect(() => localOrigin('https://example.com')).toThrow('loopback');
-    expect(() => localOrigin('http://user:pass@localhost:5173')).toThrow('loopback');
-  });
-
-  it('uses the local Host header for the public tunnel', () => {
-    expect(quickTunnelCommand('http://localhost:5173/login')).toBe(
-      'cloudflared tunnel --url http://localhost:5173 --http-host-header localhost:5173',
-    );
-  });
-
   it('starts once, reads the public URL and stops the child process', async () => {
     const { child, factory, kill } = fakeProcess();
     const tunnel = new CloudflareTunnelManager('cloudflared', factory);

@@ -5,14 +5,7 @@ export default defineConfig({
     exclude: [...configDefaults.exclude],
     coverage: {
       all: true,
-      // src/vendor holds the backend's Playwright runner, covered by the backend's own tests.
-      exclude: [
-        '**/*.d.ts',
-        '**/*.config.{js,mjs,ts}',
-        '**/node_modules/**',
-        'src/bin/**',
-        'src/vendor/**',
-      ],
+      exclude: ['**/*.d.ts', '**/*.config.{js,mjs,ts}', '**/node_modules/**', 'src/bin/**'],
       include: ['src/**/*.ts'],
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'lcov'],

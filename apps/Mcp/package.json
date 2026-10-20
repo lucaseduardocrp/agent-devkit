@@ -1,12 +1,19 @@
 {
-  "name": "@agent-devkit/cli",
+  "name": "@agent-devkit/mcp",
   "version": "0.1.0",
   "license": "AGPL-3.0-only",
   "private": true,
-  "description": "ADK command line: MCP server for Claude, Codex and other assistants, plus the local E2E runner and tunnels.",
+  "description": "ADK MCP server for Claude, Codex and other assistants (stdio and Streamable HTTP with OAuth).",
   "type": "module",
   "bin": {
-    "devkit": "dist/src/bin/devkit.js"
+    "devkit-mcp": "dist/src/bin/devkit-mcp.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist/src",
@@ -19,8 +26,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/src/bin/devkit.js",
-    "dev": "node --experimental-strip-types src/bin/devkit.ts",
+    "start": "node dist/src/bin/devkit-mcp.js",
+    "dev": "node --experimental-strip-types src/bin/devkit-mcp.ts",
     "format": "prettier --write \"**/*.{js,mjs,cjs,ts,json,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{js,mjs,cjs,ts,json,yml,yaml}\"",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
@@ -34,10 +41,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",
-    "@playwright/test": "1.63.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
-    "playwright": "1.63.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -54,7 +59,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lucaseduardocrp/Agent-Development-Kit.git",
+    "url": "git+https://github.com/lucaseduardocrp/agent-devkit.git",
     "directory": "apps/Mcp"
   }
 }

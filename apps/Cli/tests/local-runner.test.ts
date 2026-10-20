@@ -2,15 +2,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { AdkApiError, type AdkApi, type ApiRequest } from '../src/api/http-client.js';
+import { AdkApiError, type AdkApi, type ApiRequest } from '@agent-devkit/mcp';
 import {
   formatRunnerEvent,
   LocalRunnerAgent,
   type ClaimedTask,
   type LocalBrowser,
   type RunnerEvent,
-} from '../src/modules/e2e/local-runner/agent.js';
-import { loadLocalConfig } from '../src/modules/e2e/local-runner/local-config.js';
+} from '../src/e2e/local-runner/agent.js';
+import { loadLocalConfig } from '../src/e2e/local-runner/local-config.js';
 import {
   chromiumInstalled,
   ensureChromium,
@@ -18,8 +18,8 @@ import {
   playwrightPackageRoot,
   prepareWorkspaceRoot,
   runnerHome,
-} from '../src/modules/e2e/local-runner/playwright-setup.js';
-import { runLocally } from '../src/modules/e2e/local-runner/run-command.js';
+} from '../src/e2e/local-runner/playwright-setup.js';
+import { runLocally } from '../src/e2e/local-runner/run-command.js';
 import { E2eRunnerError } from '../src/vendor/e2e/application/e2e-runner.js';
 
 const SCRIPT = `import { test } from '@playwright/test';\ntest('TC001', async ({ page }) => { await page.goto('/'); });`;
@@ -352,6 +352,21 @@ describe('LocalRunnerAgent', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('waits between retries until the signal stops the loop', async () => {
+    const stop = new AbortController();
+    const { api } = fakeApi({
+      'POST /e2e/runner/claim': () => {
+        setTimeout(() => stop.abort(), 5);
+        throw new AdkApiError(0, 'ADK_API_UNREACHABLE', 'offline');
+      },
+    });
+    const { agent, events } = agentWith(api, browser(), { sleep: undefined });
+    const started = Date.now();
+    await agent.serve({ signal: stop.signal });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(events).toEqual([{ type: 'offline', message: 'offline', retryInMs: 2_000 }]);
+  });
+
   it('formats every event for the terminal', () => {
     const task = runTask();
     const lines = (
@@ -554,6 +569,8 @@ describe('local runner setup', () => {
       baseUrl: 'http://localhost:8014',
       scripts: path.join(folder, 'e2e'),
     });
+    await fs.writeFile(file, JSON.stringify({ run: 'c2' }));
+    await expect(loadLocalConfig(file)).resolves.toEqual({ run: 'c2' });
     await fs.writeFile(file, JSON.stringify({ baseUrl: 'not a url' }));
     await expect(loadLocalConfig(file)).rejects.toThrow('adk-e2e.json');
     await expect(loadLocalConfig(folder)).rejects.toThrow();

@@ -88,8 +88,9 @@ devkit login --api-url http://localhost:3000   # or the address of your ADK API
 `devkit` registers the MCP server with Claude Code, Claude Desktop, Codex, Cursor, Gemini CLI,
 VS Code and other MCP clients. In host mode no LLM API key is needed: your assistant does the
 reasoning and ADK supplies context and stores the results. The CLI also runs E2E tests in your
-local browser (`devkit runner`) and opens tunnels to local apps (`devkit bridge`). Full details
-are in [apps/Mcp/README.md](apps/Mcp/README.md).
+local browser (`devkit runner`) and opens tunnels to local apps (`devkit bridge`). The CLI is
+documented in [apps/Cli/README.md](apps/Cli/README.md) and the MCP server (clients, remote mode,
+tools) in [apps/Mcp/README.md](apps/Mcp/README.md).
 
 ## Features
 
@@ -112,7 +113,8 @@ are in [apps/Mcp/README.md](apps/Mcp/README.md).
 | [setup](setup)                         | The setup wizard that writes `.env` (dependency-free Node server and page) |
 | [apps/Backend](apps/Backend)           | REST API and E2E worker (Node, Express 5, Prisma, PostgreSQL, Playwright)  |
 | [apps/Frontend](apps/Frontend)         | Web app (React 19, Vite, Tailwind), served by nginx in production          |
-| [apps/Mcp](apps/Mcp)                   | `@agent-devkit/cli`: the `devkit` command, MCP server and local E2E runner |
+| [apps/Mcp](apps/Mcp)                   | `@agent-devkit/mcp`: the MCP server (stdio, HTTP + OAuth), deployed to Railway |
+| [apps/Cli](apps/Cli)                   | `@agent-devkit/cli`: the `devkit` command (sign-in, local E2E runner, tunnels) |
 | [infrastructure](infrastructure)       | Development Compose stack and runtime/environment documentation           |
 | [docs](docs)                           | Self-hosting and deployment guides, ADRs and templates                     |
 | [.agent](.agent)                       | Agent roles, skills and the task workflow                                  |
@@ -154,9 +156,10 @@ npm run verify
 | `npm run prisma:migrate:dev` | `apps/Backend` | Create and apply a new migration     |
 | `npm run parity`             | `apps/Mcp`     | Check MCP tools against API routes   |
 
-CI runs `verify` and `build` for the CLI on every pull request that touches it, checks the setup
-wizard and the Compose stack, and [cli-release.yml](.github/workflows/cli-release.yml) publishes
-`@agent-devkit/cli` to npm.
+CI runs `verify` and `build` for the MCP server and the CLI on every pull request that touches
+them, checks the setup wizard and the Compose stack, and
+[cli-release.yml](.github/workflows/cli-release.yml) publishes `@agent-devkit/mcp` and
+`@agent-devkit/cli` to npm with the same version.
 
 ## Contributing
 

@@ -3,51 +3,51 @@ import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { parseArgs } from 'node:util';
-import { ToolRegistry } from '../core/registry.js';
-import { modules } from '../modules/index.js';
-import { loadConfig, parseToolsets } from '../bootstrap/config.js';
+import {
+  isServerCommand,
+  resolveConfig,
+  runServerCommand,
+  SERVER_OPTIONS,
+  type McpConfig,
+} from '@agent-devkit/mcp';
 import {
   installSkills,
   login,
   logout,
   signedInApi,
-  storedApiUrl,
   skillTargetDirectory,
   whoami,
   type SkillTarget,
-} from '../bootstrap/cli-commands.js';
+} from '../commands.js';
+import { CloudflareTunnelManager } from '../e2e/cloudflare-tunnel.js';
+import { createLocalTunnelBridge, LOCAL_BRIDGE_PORT } from '../e2e/local-bridge.js';
 import {
   formatRunnerEvent,
   LocalRunnerAgent,
   type LocalOverrides,
-} from '../modules/e2e/local-runner/agent.js';
-import { LOCAL_CONFIG_FILE, loadLocalConfig } from '../modules/e2e/local-runner/local-config.js';
+} from '../e2e/local-runner/agent.js';
+import { LOCAL_CONFIG_FILE, loadLocalConfig } from '../e2e/local-runner/local-config.js';
 import {
   createLocalBrowser,
   ensureChromium,
   installChromium,
   loadRunnerIdentity,
   runnerHome,
-} from '../modules/e2e/local-runner/playwright-setup.js';
-import { runLocally } from '../modules/e2e/local-runner/run-command.js';
-import type { McpConfig } from '../bootstrap/config.js';
-import { packageVersion } from '../bootstrap/create-server.js';
-import { loadSkills } from '../bootstrap/skills.js';
-import { createHttpServer, startStdio } from '../bootstrap/transports.js';
-import { CloudflareTunnelManager } from '../modules/e2e/cloudflare-tunnel.js';
-import { createLocalTunnelBridge, LOCAL_BRIDGE_PORT } from '../modules/e2e/local-bridge.js';
+} from '../e2e/local-runner/playwright-setup.js';
+import { runLocally } from '../e2e/local-runner/run-command.js';
+import { packageVersion } from '../version.js';
 
-const HELP = `devkit — ADK command line: MCP server, local E2E runner and tunnels
+const HELP = `devkit — ADK command line: sign-in, local E2E runner, tunnels and the MCP server
 
 Usage:
-  devkit [stdio]                   Start the local stdio server (default)
-  devkit http [--port N] [--host H]
-                                   Start the Streamable HTTP server (endpoint /mcp)
+  devkit [mcp] [stdio]             Start the local MCP stdio server (default)
+  devkit [mcp] http [--port N] [--host H]
+                                   Start the MCP Streamable HTTP server (endpoint /mcp)
+  devkit [mcp] tools               List the enabled MCP tools
   devkit login [--email E] [--token T]
                                    Sign in and store the session for the stdio server
   devkit logout                    Revoke and forget the stored session
   devkit whoami                    Show the stored session
-  devkit tools                     List the enabled tools
   devkit tunnel --url http://localhost:5173
                                    Expose a local app and the other localhost services it
                                    calls (APIs, SSO) with Cloudflare Tunnel until Ctrl+C
@@ -97,11 +97,7 @@ async function main(): Promise<void> {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: {
-      'api-url': { type: 'string' },
-      toolsets: { type: 'string' },
-      'read-only': { type: 'boolean' },
-      port: { type: 'string' },
-      host: { type: 'string' },
+      ...SERVER_OPTIONS,
       url: { type: 'string' },
       origin: { type: 'string' },
       email: { type: 'string' },
@@ -123,21 +119,19 @@ async function main(): Promise<void> {
   if (values.help || command === 'help') return say(HELP);
   if (values.version || command === 'version') return say(packageVersion());
 
-  // Without --api-url or ADK_API_URL, use the API of the last login (not the localhost default).
-  const apiUrl =
-    values['api-url'] ?? (process.env['ADK_API_URL'] ? undefined : await storedApiUrl());
-  const config = loadConfig({
-    ...process.env,
-    ...(apiUrl ? { ADK_API_URL: apiUrl } : {}),
-    ...(values.toolsets ? { ADK_MCP_TOOLSETS: values.toolsets } : {}),
-    ...(values['read-only'] ? { ADK_MCP_READ_ONLY: 'true' } : {}),
-    ...(values.port ? { ADK_MCP_HTTP_PORT: values.port } : {}),
-    ...(values.host ? { ADK_MCP_HTTP_HOST: values.host } : {}),
-  });
-  const registry = new ToolRegistry(modules, {
-    toolsets: parseToolsets(values.toolsets ?? process.env['ADK_MCP_TOOLSETS']),
-    readOnly: config.readOnly,
-  });
+  const config = await resolveConfig(values);
+
+  // The MCP server commands also work without the `mcp` prefix (`devkit` alone starts stdio).
+  const serverCommand = command === 'mcp' ? (positionals[1] ?? 'stdio') : command;
+  if (isServerCommand(serverCommand)) {
+    const server = await runServerCommand(serverCommand, config, say);
+    if (server) {
+      const stop = () => server.close(() => process.exit(0));
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+    }
+    return;
+  }
 
   switch (command) {
     case 'bridge': {
@@ -221,22 +215,6 @@ async function main(): Promise<void> {
       if (summary.failed || summary.creation.status !== 'completed') process.exitCode = 1;
       return;
     }
-    case 'stdio':
-      await startStdio(config, registry, await loadSkills());
-      say(`[devkit] stdio server ready (${registry.tools.length} tools, API ${config.apiUrl}).`);
-      return;
-    case 'http': {
-      const server = createHttpServer(config, registry, await loadSkills());
-      server.listen(config.http.port, config.http.host, () =>
-        say(
-          `[devkit] HTTP server on http://${config.http.host}:${config.http.port}/mcp (${registry.tools.length} tools, API ${config.apiUrl}, auth ${config.http.requireAuth ? 'required' : 'optional'}).`,
-        ),
-      );
-      const stop = () => server.close(() => process.exit(0));
-      process.once('SIGINT', stop);
-      process.once('SIGTERM', stop);
-      return;
-    }
     case 'login': {
       const token = values.token;
       const email = token ? undefined : (values.email ?? (await ask('E-mail: ')));
@@ -252,13 +230,6 @@ async function main(): Promise<void> {
       return say('Signed out.');
     case 'whoami':
       return say(JSON.stringify(await whoami(config), null, 2));
-    case 'tools':
-      for (const tool of registry.tools) {
-        say(
-          `${tool.name.padEnd(34)} ${tool.toolset.padEnd(13)} ${tool.access.padEnd(12)} ${tool.execution}`,
-        );
-      }
-      return;
     case 'install-skills': {
       const client = (values.client ?? 'claude') as SkillTarget;
       if (!['claude', 'codex', 'agents'].includes(client))

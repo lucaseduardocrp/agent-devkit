@@ -8,4 +8,5 @@
 - `templates/`: specification, feature and task templates.
 
 The task lifecycle and agent handoffs are defined in `.agent/workflow.md`. The MCP server that
-exposes ADK to Claude, Codex and other assistants is documented in `apps/Mcp/README.md`.
+exposes ADK to Claude, Codex and other assistants is documented in `apps/Mcp/README.md`, and the
+`devkit` command line in `apps/Cli/README.md`.

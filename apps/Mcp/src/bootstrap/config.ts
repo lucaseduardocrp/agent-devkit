@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -91,6 +92,24 @@ export function parseToolsets(value: string | undefined): readonly Toolset[] {
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 
+const defaultSessionFile = () => join(homedir(), '.adk', 'mcp-session.json');
+
+/**
+ * API address saved by the last `devkit login`, so later commands reach the same ADK without
+ * repeating --api-url. Explicit --api-url or ADK_API_URL still win.
+ */
+export async function storedApiUrl(
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+  const file = environment['ADK_MCP_SESSION_FILE'] || defaultSessionFile();
+  try {
+    const { apiUrl } = JSON.parse(await readFile(file, 'utf8')) as { apiUrl?: unknown };
+    return typeof apiUrl === 'string' && apiUrl ? apiUrl : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function loadConfig(environment: NodeJS.ProcessEnv): McpConfig {
   const parsed = environmentSchema.safeParse(environment);
   if (!parsed.success) {
@@ -112,7 +131,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): McpConfig {
     locale: env.ADK_LOCALE,
     toolsets: parseToolsets(env.ADK_MCP_TOOLSETS),
     readOnly: env.ADK_MCP_READ_ONLY,
-    sessionFile: env.ADK_MCP_SESSION_FILE ?? join(homedir(), '.adk', 'mcp-session.json'),
+    sessionFile: env.ADK_MCP_SESSION_FILE ?? defaultSessionFile(),
     timeoutMs: env.ADK_MCP_TIMEOUT_MS,
     http: {
       host: env.ADK_MCP_HTTP_HOST,

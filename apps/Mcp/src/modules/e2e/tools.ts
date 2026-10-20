@@ -21,7 +21,7 @@ import {
   type TestDto,
 } from './common.js';
 import { testManagementTools } from './test-management.js';
-import { localOrigin, quickTunnelCommand } from './cloudflare-tunnel.js';
+import { localOrigin, quickTunnelCommand } from './tunnel-command.js';
 
 const provider = z
   .enum(['github', 'azure_devops'])
