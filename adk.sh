@@ -125,7 +125,12 @@ command="${1:-start}"
 case "$command" in
   start)
     check_docker
-    if [ -f .env ]; then up; else setup_then_start; fi
+    if [ -f .env ]; then
+      say "Using the existing configuration (.env). To open the setup wizard instead, run: ./adk.sh setup"
+      up
+    else
+      setup_then_start
+    fi
     ;;
   setup)
     check_docker

@@ -57,14 +57,17 @@ function Invoke-Setup {
   $env:ADK_SETUP_PORT = $SetupPort
   Say 'Starting the setup wizard...'
   Stop-Setup
-  docker compose -f setup/compose.yaml up -d --wait *> $null
+  # Progress and errors go to the console (the first run downloads the Node.js image); Out-Host
+  # keeps them out of this function's return value.
+  docker compose -f setup/compose.yaml up -d --wait | Out-Host
   if ($LASTEXITCODE -ne 0) {
-    Fail "Could not start the setup wizard. Is port $SetupPort free? Choose another one with: `$env:ADK_SETUP_PORT='4100'; .\adk setup"
+    Fail "Could not start the setup wizard (see the message above). If port $SetupPort is taken, choose another one with: `$env:ADK_SETUP_PORT='4100'; .\adk setup"
   }
   $url = "http://localhost:$SetupPort"
   Ok "Setup wizard ready: $url"
   Say 'Finish the steps in your browser. Press Ctrl+C here to cancel.'
-  Start-Process $url
+  try { Start-Process $url -ErrorAction Stop }
+  catch { Say "Open $url in your browser." }
   $code = 2
   try {
     $code = [int](docker wait adk-setup)
@@ -115,7 +118,11 @@ function Invoke-SetupThenStart {
 switch ($Command.ToLowerInvariant()) {
   'start' {
     Test-Docker
-    if (Test-Path (Join-Path $Root '.env')) { Start-Adk } else { Invoke-SetupThenStart }
+    if (Test-Path (Join-Path $Root '.env')) {
+      Say 'Using the existing configuration (.env). To open the setup wizard instead, run: .\adk setup'
+      Start-Adk
+    }
+    else { Invoke-SetupThenStart }
   }
   'setup' {
     Test-Docker
