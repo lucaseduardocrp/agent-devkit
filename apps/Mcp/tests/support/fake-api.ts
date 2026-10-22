@@ -121,6 +121,17 @@ export const fixtures = {
   },
   system: { id: 'aurora', name: 'Aurora', content: '<html></html>' },
   generation: { plans: [{ title: 'T' }], csv: 'csv-data', savedPlan: { id: 'tp1' } },
+  /** The workflow a new workspace starts with (`EMPTY_AGENT_WORKFLOW` in the backend). */
+  workflow: {
+    enabled: false,
+    autonomy: 'balanced',
+    finalReview: true,
+    uncertaintyBehavior: 'ask',
+    issueCreationBehavior: 'ask',
+    defaultAction: 'allow',
+    steps: [],
+    rules: [],
+  },
   brief: {
     instruction: 'Return only the JSON array.',
     context: '## Requisito\nCheckout',
@@ -138,6 +149,7 @@ function defaultResponse(request: ApiRequest): unknown {
     'GET /knowledge/documents': { documents: fixtures.documents },
     'GET /TestPlan/search': fixtures.chunks,
     'GET /agents/a1': { agent: fixtures.agent },
+    'GET /agents/workflow': { workflow: fixtures.workflow },
     'POST /issues/i1/runs': { run: { id: 'r1', agentId: 'a1', prompt: 'Review issue' } },
     'POST /runs/r1/checkout': { run: { id: 'r1', agentId: 'a1', prompt: 'Review issue' } },
     'GET /spec/specifications': fixtures.specs,

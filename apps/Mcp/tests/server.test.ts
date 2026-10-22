@@ -12,7 +12,9 @@ import { loadSkills } from '../src/bootstrap/skills.js';
 import { ToolRegistry } from '../src/core/registry.js';
 import { MemorySessionStore, Session, type SessionState } from '../src/core/session.js';
 import { modules } from '../src/modules/index.js';
-import { fakeContext } from './support/fake-api.js';
+import { fakeContext, fixtures } from './support/fake-api.js';
+
+const fakeWorkflow = fixtures.workflow;
 
 const API = 'http://adk.test';
 
@@ -31,6 +33,10 @@ function backend() {
       body: typeof init?.body === 'string' ? init.body : undefined,
       headers: (init?.headers ?? {}) as Record<string, string>,
     });
+    // Every tool call first reads the workspace workflow policy.
+    if (String(url).endsWith('/agents/workflow')) {
+      return Promise.resolve(Response.json({ workflow: fakeWorkflow }));
+    }
     if (String(url).endsWith('/stats')) {
       return Promise.resolve(Response.json({ documentsCount: 2, chunksCount: 5 }));
     }

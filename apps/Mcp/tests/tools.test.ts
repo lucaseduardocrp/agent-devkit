@@ -115,6 +115,8 @@ const cases: Record<string, [unknown, string]> = {
   agents_update: [{ agentId: 'a1', name: 'QA 2' }, 'PUT /agents/a1'],
   agents_delete: [{ agentId: 'a1' }, 'DELETE /agents/a1'],
   agents_execute: [{ agentId: 'a1', prompt: 'Review' }, 'POST /agents/a1/execute'],
+  agents_workflow_get: [{}, 'GET /agents/workflow'],
+  agents_workflow_update: [{ enabled: false, steps: [] }, 'PUT /agents/workflow'],
   issues_list: [{}, 'GET /issues'],
   issues_get: [{ issueId: 'i1' }, 'GET /issues/i1'],
   issues_create: [{ title: 'Fix bug' }, 'POST /issues'],
@@ -489,6 +491,7 @@ describe('issue host runs', () => {
       'POST /issues',
       'POST /runs/r1/checkout',
       'GET /agents/a1',
+      'GET /agents/workflow',
     ]);
     expect(data.run.id).toBe('r1');
     expect(data.task).toContain('Write test cases.');
@@ -640,7 +643,10 @@ describe('agent tools', () => {
       includeKnowledge: false,
     });
     expect(without.data.knowledge).toBeNull();
-    expect(without.api.calls).toHaveLength(1);
+    expect(without.api.calls.map((request) => request.path)).toEqual([
+      '/agents/a1',
+      '/agents/workflow',
+    ]);
   });
 });
 

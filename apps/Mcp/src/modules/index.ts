@@ -65,4 +65,20 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Internal call from the ADK API to the E2E worker service (worker token, not a user route); e2e_create and e2e_run enqueue work and wake it.',
   'POST /WikiWebhook/azure-devops':
     'Inbound Azure DevOps service hook, called by Azure and not by users; brain_sync covers manual sync.',
+  'POST /attachments/files':
+    'Binary upload from the web app, which keeps pasted and attached files as drafts until the item is saved; no file bytes go through the model.',
+  'GET /attachments/files/:id':
+    'Binary download of a stored attachment for the web app; no file bytes go through the model.',
+  'DELETE /attachments/files/:id':
+    'Discards an unsaved upload of the web app; saved files are deleted with the item that holds them.',
+  'GET /attachments/images/:scope/:id':
+    'Binary image stream of attachments saved before generic attachments, kept for the web app.',
+  'GET /attachments/proxy':
+    'Binary stream of provider-hosted files for the web app, sent with the workspace integration credentials.',
+  'GET /knowledge/documents/:pageId/attachments':
+    'Attachment panel of a Brain document in the web app; its files are uploaded through the browser.',
+  'PUT /knowledge/documents/:pageId/attachments':
+    'Saves the attachment panel of a Brain document after the browser uploads its files.',
+  'POST /runs/:id/continue':
+    'Human review gate of a paused server run (approve, answer or request changes); the agent being reviewed must not approve its own work.',
 };
