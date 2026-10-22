@@ -145,7 +145,9 @@ describe('PermissionGroupsPanel', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Excluir grupo QA' }));
-    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Excluir' }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Excluir' }),
+    );
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Grupo em uso');
     expect(client.deletePermissionGroup).toHaveBeenCalledWith('ws', 'g-qa');
@@ -173,7 +175,7 @@ function renderSettings(
 }
 
 describe('SettingsView member access and workspace actions', () => {
-  it('opens and closes the access editor of a member without stored permissions or groups', async () => {
+  it('opens and closes the access editor of a member without stored permissions', async () => {
     // Members stored before permissions and groups existed come without those fields.
     const { permissions: _permissions, ...legacy } = member('old', {
       id: 'u-old',
@@ -195,7 +197,7 @@ describe('SettingsView member access and workspace actions', () => {
 
     fireEvent.click(within(editor).getByRole('button', { name: 'Salvar' }));
     expect(await view.findByText('Não foi possível salvar.')).toBeInTheDocument();
-    expect(update).toHaveBeenCalledWith('ws', 'm-old', { permissions: {}, groupIds: [] });
+    expect(update).toHaveBeenCalledWith('ws', 'm-old', { permissions: {} });
 
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -218,9 +220,12 @@ describe('SettingsView member access and workspace actions', () => {
   async function openFinalDeletion(view: ReturnType<typeof render>, name: string) {
     fireEvent.click(view.getByTestId('settings-section-workspace'));
     fireEvent.click(view.getByRole('button', { name: 'Excluir workspace' }));
-    fireEvent.change(view.getByRole('textbox', { name: 'Nome completo do workspace para confirmação' }), {
-      target: { value: name },
-    });
+    fireEvent.change(
+      view.getByRole('textbox', { name: 'Nome completo do workspace para confirmação' }),
+      {
+        target: { value: name },
+      },
+    );
     fireEvent.click(view.getByRole('button', { name: 'Confirmar exclusão' }));
     return view.findByRole('alertdialog', { name: 'Excluir workspace permanentemente?' });
   }
@@ -304,9 +309,12 @@ describe('WorkspaceMembersModal final deletion dialog', () => {
 
   async function openFinalDeletion(view: ReturnType<typeof render>, name: string) {
     fireEvent.click(await view.findByRole('button', { name: 'Excluir workspace' }));
-    fireEvent.change(view.getByRole('textbox', { name: 'Nome completo do workspace para confirmação' }), {
-      target: { value: name },
-    });
+    fireEvent.change(
+      view.getByRole('textbox', { name: 'Nome completo do workspace para confirmação' }),
+      {
+        target: { value: name },
+      },
+    );
     fireEvent.click(view.getByRole('button', { name: 'Confirmar exclusão' }));
     return view.findByRole('alertdialog', { name: 'Excluir workspace permanentemente?' });
   }

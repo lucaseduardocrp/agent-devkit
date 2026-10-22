@@ -80,6 +80,12 @@ export const enUS = {
   TEST_SUITE_PUBLISH_FAILED: 'Failed to publish the suite to the test provider.',
   INVALID_REMOTE_PLAN_ID: 'The Test Plan ID must be a positive number.',
   INVALID_REMOTE_SUITE_ID: 'Select a valid suite in the destination Test Plan.',
+  WORK_ITEM_REQUIRED: 'Enter the work item the Requirement Based Suite covers.',
+  WORK_ITEM_NOT_FOUND: 'Work item #{id} does not exist in this Azure DevOps project.',
+  REQUIREMENT_SUITE_REJECTED:
+    'Item #{id} is a {type}: Azure DevOps only creates Requirement Based Suites for requirement items (such as PBI, User Story or Bug). Use a Static Suite, which also links the test cases to the item.',
+  REQUIREMENT_SUITE_NEEDS_NEW_SUITE:
+    'The Requirement Based Suite is created when publishing: choose a new Test Plan or a new suite inside the selected one.',
   AGENT_LOAD_FAILED: 'The selected agent could not be loaded.',
   AGENT_NOT_AVAILABLE: 'The selected agent is unavailable for this generator.',
   NOT_FOUND: 'Resource not found.',

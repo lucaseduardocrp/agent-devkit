@@ -61,8 +61,8 @@ const prefixes: readonly [RegExp, PermissionModule][] = [
 export function moduleRequirements(method: string, path: string): readonly ModuleRequirement[] {
   // Masked integration settings are used by several modules (LLM providers, boards).
   if (/^\/integrations(\/|$)/.test(path) && byMethod(method) === 'view') return [];
-  // The agent list feeds agent pickers in other modules (design, E2E, test plans, specs).
-  if (path === '/agents' && byMethod(method) === 'view') return [];
+  // Agent metadata and the workflow feed agent interactions across modules, including MCP briefs.
+  if ((path === '/agents' || path === '/agents/workflow') && byMethod(method) === 'view') return [];
   // Read state of the personal inbox does not change shared work items.
   if (/^\/inbox\//.test(path)) return [{ module: 'issues', operation: 'view' }];
   // Budget and rates are governed by the manageCosts workspace permission.

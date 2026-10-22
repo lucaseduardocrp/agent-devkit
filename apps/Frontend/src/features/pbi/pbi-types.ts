@@ -21,12 +21,18 @@ export interface PbiItem {
   kind: PbiKind;
   title: string;
   description: string;
+  attachments?: readonly ImageAttachment[];
   status: string;
   position: number;
   sourceData: Record<string, unknown>;
   links: PbiLink[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Loaded from the list: `description` is a plain-text excerpt, and attachments and detailed
+   * provider data (custom fields, external links) are left out. Read the full item to edit it.
+   */
+  partial?: boolean;
 }
 export interface PbiFields {
   kind: PbiKind;
@@ -36,6 +42,7 @@ export interface PbiFields {
   parentId?: string | null;
   position?: number;
   sourceData?: Record<string, unknown>;
+  attachments?: readonly ImageAttachment[];
 }
 export interface PbiProvider {
   providerId: PbiProviderId;
@@ -94,3 +101,4 @@ export interface PbiRelation {
   } | null;
   externalId?: string;
 }
+import type { ImageAttachment } from '../shared/image-attachment-types.js';

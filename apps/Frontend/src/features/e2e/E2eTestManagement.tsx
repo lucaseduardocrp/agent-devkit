@@ -626,24 +626,23 @@ export function E2eReportStatus({ report }: { readonly report: E2eLastReport }) 
   );
 }
 
-/** Test management summary of a run, shown above its tests, with its actions. */
+/**
+ * Where the run reports and its last publication, above its tests; nothing for a run that was
+ * never reported. Managing and importing live in the run menu.
+ */
 export function E2eReportStrip({
   creation,
   isReadOnly,
-  onManage,
-  onImport,
   onPublish,
 }: {
   readonly creation: E2eCreationSummary;
   readonly isReadOnly: boolean;
-  readonly onManage: () => void;
-  /** Omitted when the member cannot import cases; the action is then not offered. */
-  readonly onImport?: () => void;
   readonly onPublish: () => void;
 }) {
   const { t } = useI18n();
   const { reporting, lastReport } = creation;
   const busy = needsPolling(creation);
+  if (!reporting && !lastReport) return null;
   return (
     <div
       className="flex flex-col gap-2 border-b border-[var(--border)] py-3 sm:flex-row sm:items-start sm:justify-between"
@@ -663,25 +662,17 @@ export function E2eReportStrip({
         </p>
         {lastReport && <E2eReportStatus report={lastReport} />}
       </div>
-      {!isReadOnly && (
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <Button variant="ghost" size="sm" onClick={onManage}>
-            <i className="ti ti-settings" aria-hidden="true" />
-            {t('e2e.tmTitle')}
-          </Button>
-          {onImport && (
-            <Button variant="ghost" size="sm" disabled={busy} onClick={onImport}>
-              <i className="ti ti-file-import" aria-hidden="true" />
-              {t('e2e.tmImport')}
-            </Button>
-          )}
-          {reporting && (
-            <Button variant="secondary" size="sm" disabled={busy} onClick={onPublish}>
-              <i className="ti ti-send" aria-hidden="true" />
-              {t('e2e.tmPublish')}
-            </Button>
-          )}
-        </div>
+      {!isReadOnly && reporting && (
+        <Button
+          variant="secondary"
+          size="sm"
+          className="shrink-0"
+          disabled={busy}
+          onClick={onPublish}
+        >
+          <i className="ti ti-send" aria-hidden="true" />
+          {t('e2e.tmPublish')}
+        </Button>
       )}
     </div>
   );

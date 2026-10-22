@@ -1,4 +1,3 @@
-import { AdkApiError, segment, type AdkApi } from '#mcp';
 import {
   E2eRunnerError,
   type E2eRunInput,
@@ -9,6 +8,40 @@ import type { AccessServiceToken } from '../../vendor/e2e/application/access-rou
 import type { E2eMode } from '../../vendor/e2e/domain/e2e-mode.js';
 import { checkScript } from '../../vendor/e2e/application/script-guard.js';
 import type { RunnerIdentity } from './playwright-setup.js';
+
+interface RunnerApiRequest {
+  readonly method: 'POST' | 'PUT';
+  readonly path: string;
+  readonly body?: unknown;
+  readonly rawBody?: { readonly data: Uint8Array; readonly contentType: string };
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly timeoutMs?: number;
+}
+
+interface RunnerApi {
+  request<T = unknown>(request: RunnerApiRequest): Promise<T>;
+}
+
+interface AdkApiErrorLike extends Error {
+  readonly status: number;
+  readonly code: string;
+}
+
+function isAdkApiError(error: unknown): error is AdkApiErrorLike {
+  return (
+    error instanceof Error &&
+    error.name === 'AdkApiError' &&
+    'status' in error &&
+    typeof error.status === 'number' &&
+    'code' in error &&
+    typeof error.code === 'string'
+  );
+}
+
+function segment(value: string): string {
+  if (!value || value === '.' || value === '..') throw new Error(`Invalid identifier: "${value}".`);
+  return encodeURIComponent(value);
+}
 
 /** The part of the Playwright runner the agent drives. */
 export interface LocalBrowser {
@@ -70,7 +103,7 @@ export type RunnerEvent =
   | { readonly type: 'offline'; readonly message: string; readonly retryInMs: number };
 
 export interface LocalRunnerAgentOptions {
-  readonly api: AdkApi;
+  readonly api: RunnerApi;
   readonly browser: LocalBrowser;
   readonly identity: RunnerIdentity;
   readonly overrides?: LocalOverrides;
@@ -151,7 +184,7 @@ export class LocalRunnerAgent {
         backoff = 0;
         if (await options.done?.()) return;
       } catch (error) {
-        if (error instanceof AdkApiError && [401, 403].includes(error.status)) throw error;
+        if (isAdkApiError(error) && [401, 403].includes(error.status)) throw error;
         backoff = Math.min(backoff ? backoff * 2 : 2_000, 30_000);
         this.emit({ type: 'offline', message: describe(error), retryInMs: backoff });
         await this.sleep(backoff, options.signal);
@@ -337,7 +370,7 @@ class Cancelled extends Error {}
 function isGone(error: unknown): boolean {
   return (
     error instanceof Cancelled ||
-    (error instanceof AdkApiError && error.code === 'E2E_RUNNER_TASK_NOT_FOUND')
+    (isAdkApiError(error) && error.code === 'E2E_RUNNER_TASK_NOT_FOUND')
   );
 }
 

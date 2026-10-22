@@ -1,3 +1,5 @@
+import type { Attachment } from '../../shared/attachment.js';
+
 export interface SpecTemplateSection {
   readonly id: string;
   readonly title: string;
@@ -41,6 +43,7 @@ export interface Specification {
   readonly title: string;
   readonly sections: readonly SpecificationSection[];
   readonly messages: readonly SpecMessage[];
+  readonly attachments?: readonly Attachment[];
   readonly proposal?: SpecificationProposal;
   readonly createdAt: string;
   readonly updatedAt: string;

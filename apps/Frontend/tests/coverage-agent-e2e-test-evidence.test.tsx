@@ -216,7 +216,9 @@ describe('E2eExecutedSteps', () => {
     expect(screen.getAllByRole('img', { name: 'Pass' })).toHaveLength(2);
     expect(screen.getByText('Timeout').tagName).toBe('PRE');
     expect(screen.queryByText(/node_modules/)).toBeNull();
-    expect(screen.getAllByText('Esperado:')).toHaveLength(1);
+    expect(screen.getAllByText('Resultado esperado:')).toHaveLength(1);
+    // The linked case supplies the action of each executed step.
+    expect(screen.getAllByText('Passo executado:')).toHaveLength(2);
     expect(screen.getByText(/Painel aberto/)).toBeInTheDocument();
     expect(await screen.findByRole('img', { name: 'Captura indisponível' })).toBeInTheDocument();
     expect(client.getE2eStepScreenshot).toHaveBeenCalledWith('test-1', 1, expect.any(AbortSignal));
@@ -243,7 +245,9 @@ describe('E2eExecutedSteps', () => {
       />,
     );
     expect(screen.getByText('1. Abrir login')).toBeInTheDocument();
-    expect(screen.queryByText('Esperado:')).toBeNull();
+    // Without a linked case, the planned step supplies the action.
+    expect(screen.getByText('Passo executado:')).toBeInTheDocument();
+    expect(screen.queryByText('Resultado esperado:')).toBeNull();
   });
 
   it('enlarges a screenshot and closes it with the button or Escape', async () => {

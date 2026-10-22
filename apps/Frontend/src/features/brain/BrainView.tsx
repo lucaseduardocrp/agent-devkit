@@ -26,6 +26,15 @@ import { GenerateTestPlanFromSource } from '../testplans/GenerateTestPlanFromSou
 import { useActivityRunner } from '../activities/ActivityCenter.js';
 import type { CustomAgentDto } from '../agents/agent-types.js';
 import { usePermissions } from '../workspaces/permissions.js';
+import { AttachmentPanel } from '../shared/AttachmentPanel.js';
+import { IMAGE_ACCEPT, type Attachment } from '../shared/attachment-types.js';
+import {
+  ImageInputStatus,
+  discardDrafts,
+  markdownImage,
+  saveWithDrafts,
+  useMarkdownImageInput,
+} from '../shared/media.js';
 
 export interface BrainViewProps {
   readonly apiClient?: ApiClient;
@@ -152,6 +161,10 @@ export function BrainView({
   const [wikilinkIndex, setWikilinkIndex] = useState(0);
   const [pendingRelationIds, setPendingRelationIds] = useState<readonly string[]>([]);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const editorImages = useMarkdownImageInput('brain', setEditContent);
+  const [docAttachments, setDocAttachments] = useState<readonly Attachment[]>([]);
+  const [editAttachments, setEditAttachments] = useState<readonly Attachment[]>([]);
+  const [editAttachmentsChanged, setEditAttachmentsChanged] = useState(false);
   const [agents, setAgents] = useState<readonly CustomAgentDto[]>([]);
   const [assistantAgentId, setAssistantAgentId] = useState('');
   const [assistantMessage, setAssistantMessage] = useState('');
@@ -490,11 +503,14 @@ export function BrainView({
     );
 
   const handleStartCreateDocument = () => {
+    discardDrafts({ content: editContent, attachments: editAttachments });
     setNewParentPageId(null);
     setActiveTabId(null);
     setEditingDoc('new');
     setEditTitle('');
     setEditContent('');
+    setEditAttachments([]);
+    setEditAttachmentsChanged(false);
     setEditPreview(false);
     setSaveError(null);
     setWikilinkQuery(null);
@@ -508,9 +524,14 @@ export function BrainView({
   };
 
   const handleStartEdit = (doc: KnowledgeDocumentDto) => {
+    discardDrafts({ content: editContent, attachments: editAttachments });
     setEditingDoc(doc);
     setEditTitle(doc.title);
     setEditContent(stripLeadingTitleHeading(doc.content ?? '', doc.title));
+    setEditAttachments(doc.pageId === activeDoc?.pageId ? docAttachments : []);
+    setEditAttachmentsChanged(false);
+    if (doc.pageId !== activeDoc?.pageId)
+      void apiClient?.getDocumentAttachments(doc.pageId).then(setEditAttachments, () => undefined);
     setEditPreview(false);
     setSaveError(null);
     setWikilinkQuery(null);
@@ -519,6 +540,8 @@ export function BrainView({
   };
 
   const handleCancelEdit = () => {
+    // What was pasted or attached in the cancelled edit is dropped with it.
+    discardDrafts({ content: editContent, attachments: editAttachments });
     setEditingDoc(null);
     setSaveError(null);
     setWikilinkQuery(null);
@@ -696,33 +719,48 @@ export function BrainView({
     setSaveError(null);
 
     try {
-      let savedDocument: KnowledgeDocumentDto | null = null;
-      if (editingDoc === 'new') {
-        const createdDoc = newParentPageId
-          ? await apiClient.createKnowledgeDocument(
-              trimmedTitle,
-              editContent,
-              undefined,
-              newParentPageId,
-            )
-          : await apiClient.createKnowledgeDocument(trimmedTitle, editContent);
+      // Pasted and attached files are drafts until this save uploads them.
+      const savedDocument = await saveWithDrafts(
+        apiClient,
+        'brain',
+        { content: editContent, attachments: editAttachments },
+        async (files) => {
+          const saved =
+            editingDoc === 'new'
+              ? newParentPageId
+                ? await apiClient.createKnowledgeDocument(
+                    trimmedTitle,
+                    files.content,
+                    undefined,
+                    newParentPageId,
+                  )
+                : await apiClient.createKnowledgeDocument(trimmedTitle, files.content)
+              : editingDoc
+                ? await apiClient.updateKnowledgeDocument(
+                    editingDoc.pageId,
+                    trimmedTitle,
+                    files.content,
+                  )
+                : null;
+          if (saved && editAttachmentsChanged)
+            setDocAttachments(
+              await apiClient.saveDocumentAttachments(saved.pageId, files.attachments),
+            );
+          return saved;
+        },
+      );
+      if (savedDocument && editingDoc === 'new') {
         const newDoc = newParentPageId
-          ? { ...createdDoc, parentPageId: newParentPageId }
-          : createdDoc;
-        savedDocument = newDoc;
+          ? { ...savedDocument, parentPageId: newParentPageId }
+          : savedDocument;
         setDocuments((prev) => [...prev, newDoc]);
         openDocumentTab(newDoc);
         setSyncFeedback({
           type: 'success',
           message: t('brain.documentCreated', { title: newDoc.title }),
         });
-      } else if (editingDoc) {
-        const updatedDoc = await apiClient.updateKnowledgeDocument(
-          editingDoc.pageId,
-          trimmedTitle,
-          editContent,
-        );
-        savedDocument = updatedDoc;
+      } else if (savedDocument && editingDoc && editingDoc !== 'new') {
+        const updatedDoc = savedDocument;
         setDocuments((prev) => prev.map((d) => (d.pageId === editingDoc.pageId ? updatedDoc : d)));
         setTabs((prev) =>
           prev.map((t) =>
@@ -856,6 +894,20 @@ export function BrainView({
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
   const activeDoc: KnowledgeDocumentDto | undefined =
     activeTab?.type === 'doc' ? documents.find((d) => d.id === activeTab.id) : undefined;
+  const activePageId = activeDoc?.pageId;
+  useEffect(() => {
+    setDocAttachments([]);
+    if (!apiClient || !activePageId) return;
+    let active = true;
+    apiClient.getDocumentAttachments(activePageId).then(
+      (attachments) => active && setDocAttachments(attachments),
+      // Without file storage or access the document just shows no attachments.
+      () => undefined,
+    );
+    return () => {
+      active = false;
+    };
+  }, [apiClient, activePageId]);
   const handleOpenWikilink = (target: string) => {
     const normalizedTarget = target.trim().toLocaleLowerCase();
     const document = documents.find(
@@ -1615,6 +1667,8 @@ export function BrainView({
                                 handleEditorChange(event.target.value, event.target.selectionStart)
                               }
                               onKeyDown={handleEditorKeyDown}
+                              onPaste={editorImages.onPaste}
+                              onDrop={editorImages.onDrop}
                               placeholder={t('brain.contentEditorPlaceholder')}
                               rows={16}
                               className="thin-scrollbar w-full resize-y rounded-md border border-[#2e2e32] bg-[#19191c] p-4 font-mono text-xs leading-relaxed text-[#e0e0e0] placeholder-[#606060] focus:border-[#4a8fe8] focus:outline-none"
@@ -1656,9 +1710,44 @@ export function BrainView({
                                 </p>
                               </div>
                             )}
+                            <div className="mt-1.5 flex items-center justify-between gap-3">
+                              <ImageInputStatus state={editorImages} />
+                              <label className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded border border-[#2a2a2e] bg-[#1a1a1d] px-3 py-1.5 text-xs font-medium text-[#a0a0a0] transition hover:text-white has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
+                                <i className="ti ti-photo-plus text-xs" aria-hidden="true" />
+                                {t('brain.insertImage')}
+                                <input
+                                  type="file"
+                                  accept={IMAGE_ACCEPT}
+                                  multiple
+                                  className="sr-only"
+                                  data-testid="input-document-image"
+                                  onChange={(event) => {
+                                    const files = [...(event.currentTarget.files ?? [])];
+                                    event.currentTarget.value = '';
+                                    if (editorRef.current)
+                                      editorImages.insertFiles(editorRef.current, files);
+                                  }}
+                                />
+                              </label>
+                            </div>
                           </div>
                         )}
                       </div>
+
+                      <AttachmentPanel
+                        scope="brain"
+                        attachments={editAttachments}
+                        onChange={(attachments) => {
+                          setEditAttachments(attachments);
+                          setEditAttachmentsChanged(true);
+                        }}
+                        onInsertInline={(attachment) =>
+                          setEditContent(
+                            (current) =>
+                              `${current.trimEnd()}${current.trim() ? '\n\n' : ''}${markdownImage(attachment)}\n`,
+                          )
+                        }
+                      />
                     </div>
                   ) : activeDoc ? (
                     <div className="space-y-6" data-testid="active-document-view">
@@ -1865,6 +1954,7 @@ export function BrainView({
                         showModeToggle={true}
                         onWikilinkClick={handleOpenWikilink}
                       />
+                      <AttachmentPanel scope="brain" attachments={docAttachments} />
                     </div>
                   ) : (
                     /* ROOT WELCOME NOTE */

@@ -13,11 +13,20 @@ import type { RequestContext } from '../../shared/context.js';
 import { translateContent } from '../../shared/i18n.js';
 import type { RequestContextResolver } from './compatibility-routes.js';
 import { requireModuleAccess } from './module-policy.js';
+import type { E2eArtifactStore } from '../../modules/e2e/application/artifact-store.js';
+import type { Attachment } from '../../modules/shared/attachment.js';
+import { validateAttachments } from './attachments-routes.js';
+import { fileOwner, syncItemFilesSafely } from '../../modules/shared/attachment-files.js';
+import type { KnowledgeChunk } from '../../modules/knowledge/domain/knowledge-chunk.js';
 
 function requireBrainWritePermission(context: RequestContext): void {
   requireOwnerId(context);
   requireModuleAccess(context, [{ module: 'brain', operation: 'edit' }]);
 }
+
+/** Brain pages have no table of their own, so their attachment list sits next to the files. */
+const pageAttachmentsKey = (workspaceId: string, pageId: string): string =>
+  `attachments/${workspaceId}/brain-pages/${Buffer.from(pageId, 'utf8').toString('base64url')}.json`;
 
 const nativeSource = (source: string): boolean => source.startsWith('app://local?title=');
 const sourceParam = (source: string, key: string): string | null => {
@@ -71,8 +80,95 @@ export function createKnowledgeRouter(
   knowledgeRepository: KnowledgeChunkRepository,
   dynamicProviderFactory: DynamicProviderFactory,
   resolveRequestContext: RequestContextResolver,
+  attachmentStore?: E2eArtifactStore,
 ): Router {
   const router = Router();
+
+  const attachmentsWorkspace = (context: RequestContext): string =>
+    context.workspaceId ?? requireOwnerId(context);
+  const requirePage = async (context: RequestContext, pageId: string) => {
+    if (!(await knowledgeRepository.all(context)).some((chunk) => chunk.pageId === pageId))
+      throw new ApplicationError('DOCUMENT_NOT_FOUND', 'Documento não encontrado.', 404);
+  };
+  const requireAttachmentStore = (): E2eArtifactStore => {
+    if (!attachmentStore)
+      throw new ApplicationError('ATTACHMENTS_UNAVAILABLE', 'File storage is not configured.', 503);
+    return attachmentStore;
+  };
+  const readPageAttachments = async (workspace: string, pageId: string): Promise<Attachment[]> => {
+    const raw = await attachmentStore?.get(pageAttachmentsKey(workspace, pageId));
+    try {
+      return raw ? (JSON.parse(raw.toString('utf8')) as Attachment[]) : [];
+    } catch {
+      return [];
+    }
+  };
+  /** Text of a page as stored, rebuilt from its chunks in order. */
+  const pageContent = (chunks: readonly KnowledgeChunk[], pageId: string): string =>
+    chunks
+      .filter((chunk) => chunk.pageId === pageId)
+      .sort((a, b) => a.chunkIndex - b.chunkIndex)
+      .map((chunk) => chunk.content)
+      .join('');
+  /** Keeps exactly the files the page text and its attachment list reference. */
+  const syncPageFiles = (
+    context: RequestContext,
+    pageId: string,
+    previous: { content: string; attachments: readonly Attachment[] } | null,
+    next: { content: string; attachments: readonly Attachment[] } | null,
+  ) =>
+    syncItemFilesSafely(
+      attachmentStore,
+      attachmentsWorkspace(context),
+      fileOwner('brain', pageId),
+      previous,
+      next,
+    );
+
+  router.get('/knowledge/documents/:pageId/attachments', async (request, response, next) => {
+    try {
+      const context = await resolveRequestContext(request, response);
+      requireModuleAccess(context, [{ module: 'brain', operation: 'view' }]);
+      const pageId = String(request.params['pageId']);
+      await requirePage(context, pageId);
+      requireAttachmentStore();
+      response.json({
+        attachments: await readPageAttachments(attachmentsWorkspace(context), pageId),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put('/knowledge/documents/:pageId/attachments', async (request, response, next) => {
+    try {
+      const context = await resolveRequestContext(request, response);
+      requireBrainWritePermission(context);
+      const pageId = String(request.params['pageId']);
+      await requirePage(context, pageId);
+      const input = (request.body as { attachments?: unknown } | undefined)?.attachments;
+      if (!Array.isArray(input))
+        throw new ApplicationError('VALIDATION_ERROR', 'attachments must be a list.', 400);
+      const store = requireAttachmentStore();
+      const workspace = attachmentsWorkspace(context);
+      const attachments = await validateAttachments(store, workspace, input, ['brain']);
+      const previous = await readPageAttachments(workspace, pageId);
+      await store.put(
+        pageAttachmentsKey(workspace, pageId),
+        Buffer.from(JSON.stringify(attachments), 'utf8'),
+      );
+      const content = pageContent(await knowledgeRepository.all(context), pageId);
+      await syncPageFiles(
+        context,
+        pageId,
+        { content, attachments: previous },
+        { content, attachments },
+      );
+      response.json({ attachments });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.get('/knowledge/relations', async (request, response, next) => {
     try {
@@ -564,6 +660,7 @@ export function createKnowledgeRouter(
 
       const chunks = chunkPage(page);
       await knowledgeRepository.replacePage(page, chunks, context);
+      await syncPageFiles(context, pageId, null, { content: finalContent, attachments: [] });
 
       response.status(201).json({
         success: true,
@@ -648,6 +745,13 @@ export function createKnowledgeRouter(
         [{ previous: { id: pageId, source: existingSource }, page, chunks }],
         context,
       );
+      const attachments = await readPageAttachments(attachmentsWorkspace(context), pageId);
+      await syncPageFiles(
+        context,
+        pageId,
+        { content: pageContent(docChunks, pageId), attachments },
+        { content: finalContent, attachments },
+      );
 
       response.status(200).json({
         success: true,
@@ -694,6 +798,18 @@ export function createKnowledgeRouter(
           409,
         );
       await knowledgeRepository.deletePage({ id: pageId, source: sourceToDelete }, context);
+      await syncPageFiles(
+        context,
+        pageId,
+        {
+          content: pageContent(matchingChunks, pageId),
+          attachments: await readPageAttachments(attachmentsWorkspace(context), pageId),
+        },
+        null,
+      );
+      await attachmentStore?.removePrefix(
+        pageAttachmentsKey(attachmentsWorkspace(context), pageId),
+      );
 
       response.status(200).json({
         success: true,

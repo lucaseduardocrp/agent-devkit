@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
 import { parseMarkdownBlocks, renderInlineContent } from './markdown-parser.js';
@@ -7,6 +7,7 @@ import { useI18n } from '../../lib/i18n/index.js';
 import { MermaidDiagram, RenderedCode } from './RenderedCode.js';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { INLINE_HTML_TAG, sanitizeHtml } from '../../lib/sanitize-html.js';
+import { useInlineImages } from '../shared/media.js';
 
 const htmlContentClass =
   'break-words leading-relaxed text-[#cfcfcf] [&_a]:text-[#4a8fe8] hover:[&_a]:underline [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-[#4a8fe8] [&_blockquote]:pl-4 [&_code]:rounded [&_code]:bg-[#222226] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_code]:text-[#9fc4ff] [&_del]:line-through [&_em]:italic [&_h1]:my-3 [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:my-3 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:text-lg [&_h3]:font-semibold [&_h4]:my-2 [&_h4]:font-semibold [&_hr]:my-4 [&_hr]:border-[#26262a] [&_kbd]:rounded [&_kbd]:border [&_kbd]:border-[#3a3a3e] [&_kbd]:px-1 [&_kbd]:font-mono [&_kbd]:text-xs [&_li]:my-1 [&_mark]:bg-yellow-500/30 [&_mark]:text-inherit [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-[#111113] [&_pre]:p-3 [&_strong]:font-semibold [&_strong]:text-[#f5f5f5] [&_summary]:cursor-pointer [&_summary]:font-semibold [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[#26262a] [&_td]:px-3 [&_td]:py-1.5 [&_th]:border [&_th]:border-[#26262a] [&_th]:bg-[#1c1c1f] [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left [&_u]:underline [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6';
@@ -63,6 +64,9 @@ export function MarkdownViewer({
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
   const { runActivity } = useActivityRunner();
   const { t } = useI18n();
+  const root = useRef<HTMLDivElement>(null);
+  // Images inside raw HTML blocks are plain markup, so they are resolved after rendering.
+  useInlineImages(root, `${mode}:${content}`);
 
   const handleExportMd = async () => {
     try {
@@ -121,7 +125,7 @@ export function MarkdownViewer({
       : blocks;
 
   return (
-    <div className={cn('space-y-4', className)} data-testid="markdown-viewer">
+    <div ref={root} className={cn('space-y-4', className)} data-testid="markdown-viewer">
       {/* Top Toolbar / Mode Toggle */}
       {showModeToggle && (
         <div className="flex items-center justify-between border-b border-[#262628] pb-3 text-xs text-[#a0a0a0]">

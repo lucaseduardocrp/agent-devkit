@@ -74,6 +74,10 @@ caseIds? }` (see the adk-e2e skill).
 3. To create a new remote Test Plan, call `testplans_push_suite { suiteId, providerId }` after the user requests publication.
 4. To add cases to an existing remote suite, call `testplans_list_remote_plans { providerId }`, then `testplans_list_remote_suites { providerId, remotePlanId }`. Select a static or requirement-based suite and call `testplans_push_suite { suiteId, providerId, remotePlanId, remoteSuiteId }`. Cases in the local suite and its children are added directly to the selected suite. Query-based suites are read-only.
 5. To create a child suite under an existing static suite, use `testplans_push_suite { suiteId, providerId, remotePlanId, remoteParentSuiteId }`.
+6. On Azure DevOps, ask whether the user wants a **Static Suite** or a **Requirement Based Suite** whenever ADK creates the suite (new plan or `remoteParentSuiteId`), and which work item the cases test:
+   - Requirement Based Suite: `testplans_push_suite { ..., suiteKind: "requirement", workItemId }`. The item must be a requirement (PBI, User Story, or a Bug tracked on the backlog). Azure names the suite after the item, every case of the local tree goes into it (it cannot hold child suites), and Azure links the cases to the item.
+   - Static Suite: `suiteKind: "static"` (the default) keeps the local hierarchy. With `workItemId` of any type (task, bug, PBI...), each published case gets a Tests link to it.
+   - A Task cannot back a Requirement Based Suite: offer a Static Suite linked to it instead.
 
 ## Quality checklist before saving
 

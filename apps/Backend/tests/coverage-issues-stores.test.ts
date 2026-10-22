@@ -66,6 +66,11 @@ describe('PrismaRunStore', () => {
       where: { workspaceId: 'ws', issueId: 'issue-1' },
       orderBy: { createdAt: 'desc' },
     });
+    await store.assignedTo('ws', 'user-a');
+    expect(db.agentRunRecord.findMany).toHaveBeenLastCalledWith({
+      where: { workspaceId: 'ws', assigneeUserId: 'user-a' },
+      orderBy: { createdAt: 'desc' },
+    });
     expect(await store.get('ws', 'run-1')).toMatchObject({ id: 'run-1' });
     expect(db.agentRunRecord.findFirst).toHaveBeenCalledWith({
       where: { id: 'run-1', workspaceId: 'ws' },
@@ -154,6 +159,18 @@ describe('PrismaRunStore', () => {
 });
 
 describe('InMemoryRunStore', () => {
+  it('keeps the assignee of the issue at the start of each run', async () => {
+    const store = new InMemoryRunStore();
+    const unassigned = (await store.claim(claimInput))!;
+    expect(unassigned.assigneeUserId).toBeNull();
+    await store.finish('ws', unassigned.id, 'succeeded', {});
+    const mine = (await store.claim({ ...claimInput, assigneeUserId: 'user-a' }))!;
+    await store.finish('ws', mine.id, 'succeeded', {});
+    await store.claim({ ...claimInput, issueId: 'issue-2', assigneeUserId: 'user-b' });
+    await store.claim({ ...claimInput, workspaceId: 'other', assigneeUserId: 'user-a' });
+    expect((await store.assignedTo('ws', 'user-a')).map((run) => run.id)).toEqual([mine.id]);
+  });
+
   it('ignores runs from other workspaces and finished runs', async () => {
     const store = new InMemoryRunStore();
     const claimed = (await store.claim(claimInput))!;

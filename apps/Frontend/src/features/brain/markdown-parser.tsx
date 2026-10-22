@@ -1,4 +1,5 @@
 import React from 'react';
+import { MediaImage, isSafeImageSource } from '../shared/media.js';
 
 export type MarkdownBlock =
   | { readonly type: 'heading'; readonly level: 1 | 2 | 3 | 4 | 5 | 6; readonly text: string }
@@ -85,7 +86,7 @@ function parseJsonDocument(content: string): string | null {
 }
 
 const INLINE_REGEX =
-  /(`[^`]+`|\*\*\*[^*]+\*\*\*|___[^_]+___|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|\[[^\]]+\]\([^)]+\)|\[\[[^\]]+\]\])/g;
+  /(`[^`]+`|!\[[^\]]*\]\([^)]+\)|\*\*\*[^*]+\*\*\*|___[^_]+___|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|\[[^\]]+\]\([^)]+\)|\[\[[^\]]+\]\])/g;
 
 export function renderInlineContent(
   text: string,
@@ -113,6 +114,22 @@ export function renderInlineContent(
         >
           {token.slice(1, -1)}
         </code>,
+      );
+    } else if (token.startsWith('![')) {
+      // `![alt](url "title")`; Azure wikis also append a size such as ` =500x`.
+      const imageMatch = /^!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+[^)]*)?\)$/.exec(token);
+      const src = imageMatch?.[2] ?? '';
+      parts.push(
+        isSafeImageSource(src) ? (
+          <MediaImage
+            key={key}
+            src={src}
+            alt={imageMatch?.[1] ?? ''}
+            className="my-2 inline-block max-h-120 max-w-full rounded-md border border-[#2a2a2e]"
+          />
+        ) : (
+          <span key={key}>{imageMatch?.[1] ?? token}</span>
+        ),
       );
     } else if (
       (token.startsWith('***') && token.endsWith('***')) ||

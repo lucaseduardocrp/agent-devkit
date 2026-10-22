@@ -22,6 +22,10 @@ import { SpecWorkflowAction } from './SpecWorkflowAction.js';
 import { GenerateTestPlanFromSource } from '../testplans/GenerateTestPlanFromSource.js';
 import { useActivityRunner } from '../activities/ActivityCenter.js';
 import { usePermissions } from '../workspaces/permissions.js';
+import { AttachmentPanel } from '../shared/AttachmentPanel.js';
+import { MarkdownImageTextarea } from '../shared/MarkdownImageTextarea.js';
+import type { Attachment } from '../shared/attachment-types.js';
+import { discardDrafts, saveWithDrafts } from '../shared/media.js';
 
 type Translate = I18nContextValue['t'];
 
@@ -83,6 +87,10 @@ export function SpecView({
   const [sections, setSections] = useState<SpecificationDto['sections']>(
     emptySections(defaultSections),
   );
+  const [attachments, setAttachments] = useState<readonly Attachment[]>([]);
+  // Unsaved edits, so leaving them (opening another spec or a new one) drops their drafts.
+  const editing = useRef({ sections, attachments });
+  editing.current = { sections, attachments };
   const [agentId, setAgentId] = useState('');
   const [message, setMessage] = useState('');
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -115,9 +123,11 @@ export function SpecView({
   };
 
   const openSpec = useCallback((specification: SpecificationDto) => {
+    discardDrafts(editing.current);
     setSelectedSpec(specification);
     setTitle(specification.title);
     setSections(specification.sections);
+    setAttachments(specification.attachments ?? []);
     setAgentId(specification.agentId ?? '');
     setSelectedTemplateId(specification.templateId ?? '');
     setParentId(specification.parentId);
@@ -198,11 +208,13 @@ export function SpecView({
 
   const newSpec = (newParentId?: string) => {
     const template = templates.find((item) => item.id === selectedTemplateId);
+    discardDrafts(editing.current);
     setSelectedSpec(null);
     setTitle(
       newParentId ? t('spec.defaultSubspecificationTitle') : t('spec.defaultSpecificationTitle'),
     );
     setSections(emptySections(template?.sections ?? defaultSections));
+    setAttachments([]);
     setAgentId('');
     setMessage('');
     setParentId(newParentId);
@@ -251,15 +263,20 @@ export function SpecView({
   };
 
   const persistCurrentSpec = async () => {
-    const saved = await apiClient.saveSpecification({
-      id: selectedSpec?.id,
-      templateId: selectedTemplateId || undefined,
-      agentId: agentId || undefined,
-      parentId,
-      title,
-      sections,
-    });
+    // Pasted and attached files are drafts until this save uploads them.
+    const saved = await saveWithDrafts(apiClient, 'spec', { sections, attachments }, (files) =>
+      apiClient.saveSpecification({
+        id: selectedSpec?.id,
+        templateId: selectedTemplateId || undefined,
+        agentId: agentId || undefined,
+        parentId,
+        title,
+        ...files,
+      }),
+    );
+    setSections(saved.sections);
     setSelectedSpec(saved);
+    setAttachments(saved.attachments ?? []);
     setSpecs((all) => [saved, ...all.filter((item) => item.id !== saved.id)]);
     setIsSpecEditing(false);
     return saved;
@@ -465,6 +482,8 @@ export function SpecView({
             setTitle={setTitle}
             sections={sections}
             setSections={setSections}
+            attachments={attachments}
+            setAttachments={setAttachments}
             selectedSpec={selectedSpec}
             t={t}
             canEdit={!isReadOnly}
@@ -723,6 +742,8 @@ interface CreatePageProps {
       | ((current: SpecificationDto['sections']) => SpecificationDto['sections']),
   ): void;
   selectedSpec: SpecificationDto | null;
+  attachments: readonly Attachment[];
+  setAttachments(value: Attachment[]): void;
   canEdit: boolean;
   canDelete: boolean;
   isEditing: boolean;
@@ -823,15 +844,17 @@ function CreatePage(props: CreatePageProps) {
           <div className="min-w-0 text-sm" key={section.templateSectionId}>
             <span className="mb-1 block font-medium">{section.title}</span>
             {props.isEditing ? (
-              <Textarea
+              <MarkdownImageTextarea
+                scope="spec"
+                quiet
                 aria-label={section.title}
                 className="min-h-40 font-mono text-sm leading-relaxed"
                 value={section.content}
-                onChange={(event) =>
+                onValueChange={(content) =>
                   props.setSections((all) =>
                     all.map((item) =>
                       item.templateSectionId === section.templateSectionId
-                        ? { ...item, content: event.target.value }
+                        ? { ...item, content }
                         : item,
                     ),
                   )
@@ -848,6 +871,15 @@ function CreatePage(props: CreatePageProps) {
             )}
           </div>
         ))}
+        {props.isEditing && (
+          <p className="text-xs text-[var(--text-muted)]">{props.t('spec.imageHint')}</p>
+        )}
+        <AttachmentPanel
+          scope="spec"
+          attachments={props.attachments}
+          disabled={!props.isEditing}
+          onChange={(attachments) => props.setAttachments(attachments)}
+        />
         {props.canEdit && (
           <div className="flex flex-wrap gap-2">
             <Button

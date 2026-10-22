@@ -6,6 +6,8 @@ export interface E2eArtifactStore {
   put(key: string, content: Uint8Array): Promise<void>;
   get(key: string): Promise<Buffer | null>;
   removePrefix(prefix: string): Promise<void>;
+  /** Keys under a prefix; used to find abandoned uploads. */
+  listKeys?(prefix: string): Promise<string[]>;
   /**
    * Temporary URL the browser can load directly (object storage only), so videos stream
    * from the storage instead of through the API.
@@ -34,6 +36,13 @@ export class InMemoryE2eArtifactStore implements E2eArtifactStore {
     return Promise.resolve(this.items.get(key) ?? null);
   }
 
+  listKeys(prefix: string): Promise<string[]> {
+    assertKey(prefix);
+    return Promise.resolve(
+      [...this.items.keys()].filter((key) => key === prefix || key.startsWith(`${prefix}/`)),
+    );
+  }
+
   removePrefix(prefix: string): Promise<void> {
     assertKey(prefix);
     for (const key of [...this.items.keys()])
@@ -60,6 +69,23 @@ export class FileSystemE2eArtifactStore implements E2eArtifactStore {
       return await fs.readFile(this.resolve(key));
     } catch {
       return null;
+    }
+  }
+
+  async listKeys(prefix: string): Promise<string[]> {
+    const root = this.resolve(prefix);
+    try {
+      const entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isFile())
+        .map((entry) =>
+          path
+            .relative(this.root, path.join(entry.parentPath, entry.name))
+            .split(path.sep)
+            .join('/'),
+        );
+    } catch {
+      return [];
     }
   }
 

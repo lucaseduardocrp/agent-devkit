@@ -514,27 +514,29 @@ describe('E2eReportStatus', () => {
 });
 
 describe('E2eReportStrip', () => {
-  it('offers configuration only when the run is not reported', () => {
-    const onManage = vi.fn();
+  it('shows nothing for a run that was never reported', () => {
+    const { container } = render(
+      <E2eReportStrip creation={creation} isReadOnly={false} onPublish={vi.fn()} />,
+    );
+    expect(container.innerHTML).toBe('');
+  });
+
+  it('keeps the last report of a run that stopped reporting', () => {
     render(
       <E2eReportStrip
-        creation={creation}
+        creation={{ ...creation, lastReport: report({ provider: 'testrail' }) }}
         isReadOnly={false}
-        onManage={onManage}
         onPublish={vi.fn()}
       />,
     );
     expect(
       screen.getByText('Os resultados não são publicados em uma plataforma de gestão de testes.'),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Importar test cases/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Publicar run/ })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Gestão de testes/ }));
-    expect(onManage).toHaveBeenCalledOnce();
+    expect(screen.getByText(/Publicado em TestRail: 2 test cases/)).toBeInTheDocument();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('shows the reporting target, its last report and the actions', () => {
-    const onImport = vi.fn();
+  it('shows the reporting target, its last report and publishes the run', () => {
     const onPublish = vi.fn();
     render(
       <E2eReportStrip
@@ -544,21 +546,20 @@ describe('E2eReportStrip', () => {
           lastReport: report({ provider: 'testrail' }),
         }}
         isReadOnly={false}
-        onManage={vi.fn()}
-        onImport={onImport}
         onPublish={onPublish}
       />,
     );
     expect(screen.getByText(/Publica em TestRail/)).toBeInTheDocument();
     expect(screen.getByText('Publicação automática')).toBeInTheDocument();
     expect(screen.getByText(/Publicado em TestRail: 2 test cases/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Importar test cases/ }));
+    expect(
+      screen.queryByRole('button', { name: /Gestão de testes|Importar test cases/ }),
+    ).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Publicar run/ }));
-    expect(onImport).toHaveBeenCalledOnce();
     expect(onPublish).toHaveBeenCalledOnce();
   });
 
-  it('disables actions while publishing and hides them for read-only members', () => {
+  it('disables publishing while it runs and hides it for read-only members', () => {
     const reported = {
       ...creation,
       reporting: {
@@ -570,24 +571,13 @@ describe('E2eReportStrip', () => {
       lastReport: report({ status: 'publishing' }),
     };
     const { rerender } = render(
-      <E2eReportStrip
-        creation={reported}
-        isReadOnly={false}
-        onManage={vi.fn()}
-        onImport={vi.fn()}
-        onPublish={vi.fn()}
-      />,
+      <E2eReportStrip creation={reported} isReadOnly={false} onPublish={vi.fn()} />,
     );
     expect(screen.queryByText('Publicação automática')).toBeNull();
     expect(
       (screen.getByRole('button', { name: /Publicar run/ }) as HTMLButtonElement).disabled,
     ).toBe(true);
-    expect(
-      (screen.getByRole('button', { name: /Importar test cases/ }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    rerender(
-      <E2eReportStrip creation={reported} isReadOnly onManage={vi.fn()} onPublish={vi.fn()} />,
-    );
+    rerender(<E2eReportStrip creation={reported} isReadOnly onPublish={vi.fn()} />);
     expect(screen.queryByRole('button')).toBeNull();
   });
 });

@@ -4,7 +4,9 @@ import { cn } from '../../lib/utils.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import type { TranslationKey } from '../../lib/i18n/types.js';
 import { Button } from '../../components/ui/button.js';
+import { FormattedContent } from '../../components/ui/formatted-content.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
+import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import { E2eScriptPanel } from './E2eScriptPanel.js';
 import { E2eTestStatusLabel } from './E2eStatus.js';
 import { E2eExecutedSteps, E2eLinkedCase } from './E2eTestEvidence.js';
@@ -16,6 +18,7 @@ import {
   type E2eReporting,
   type E2eTestDetail as E2eTestDetailDto,
   formatDuration,
+  testStepTexts,
   type E2eVerdict,
 } from './e2e-types.js';
 
@@ -30,6 +33,12 @@ const verdictKeys: Record<E2eVerdict, TranslationKey> = {
   test_issue: 'e2e.verdictTestIssue',
   environment: 'e2e.verdictEnvironment',
 };
+type DetailTab = 'preview' | 'testCase' | 'code';
+const detailTabs: readonly { id: DetailTab; label: TranslationKey; icon: string }[] = [
+  { id: 'preview', label: 'e2e.preview', icon: 'ti-player-play' },
+  { id: 'testCase', label: 'e2e.testCaseTab', icon: 'ti-clipboard-list' },
+  { id: 'code', label: 'e2e.code', icon: 'ti-code' },
+];
 
 export interface E2eTestDetailProps {
   readonly apiClient: ApiClient;
@@ -50,7 +59,7 @@ export function E2eTestDetail({
   const { t, formatDate } = useI18n();
   const [test, setTest] = useState<E2eTestDetailDto | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<'preview' | 'code'>('preview');
+  const [tab, setTab] = useState<DetailTab>('preview');
   const [busy, setBusy] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
 
@@ -104,231 +113,265 @@ export function E2eTestDetail({
     );
   }
 
+  const plannedSteps = testStepTexts(test);
+
   return (
     <div
-      className="grid min-w-0 gap-6 p-6 lg:grid-cols-[minmax(0,300px)_minmax(0,1fr)]"
+      className="flex min-w-0 flex-col gap-4 p-6"
       data-testid="e2e-test-detail"
       aria-busy={active}
     >
-      <aside className="flex min-w-0 flex-col gap-4">
-        <InfoCard icon="ti-notes" title={t('e2e.description')}>
-          <p className="min-w-0 whitespace-pre-wrap text-sm text-[var(--text-primary)] [overflow-wrap:anywhere]">
-            {test.description || test.title}
-          </p>
-        </InfoCard>
-        {test.steps.length > 0 && (
-          <InfoCard icon="ti-list-numbers" title={t('e2e.steps')}>
-            <ol className="list-decimal space-y-1 pl-4 text-sm text-[var(--text-secondary)]">
-              {test.steps.map((step, index) => (
-                <li key={index}>{step}</li>
-              ))}
-            </ol>
-          </InfoCard>
-        )}
-        <InfoCard icon="ti-link" title={t('e2e.tmLinkedCase')}>
-          <E2eLinkedCase
-            apiClient={apiClient}
-            test={test}
-            reporting={reporting}
-            isReadOnly={isReadOnly}
-            disabled={active}
-            onChanged={setTest}
-          />
-        </InfoCard>
-        <InfoCard icon="ti-info-circle" title={t('e2e.details')}>
-          <dl className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-y-2 text-sm">
-            <dt className="text-[var(--text-muted)]">{t('e2e.columnType')}</dt>
-            <dd className="text-[var(--text-primary)]">
-              {t(test.creation.mode === 'backend' ? 'e2e.typeBackend' : 'e2e.typeFrontend')}
-            </dd>
-            <dt className="text-[var(--text-muted)]">{t('e2e.baseUrl')}</dt>
-            <dd className="break-all text-[var(--text-primary)]">{test.creation.baseUrl}</dd>
-            {test.creation.localOrigin && (
-              <>
-                <dt className="text-[var(--text-muted)]">{t('e2e.browserOriginLabel')}</dt>
-                <dd className="break-all text-[var(--text-primary)]">
-                  {test.creation.localOrigin}
-                </dd>
-              </>
-            )}
-            <dt className="text-[var(--text-muted)]">{t('e2e.priority')}</dt>
-            <dd className="text-[var(--text-primary)]">{t(priorityKeys[test.priority])}</dd>
-            <dt className="text-[var(--text-muted)]">{t('e2e.attempts')}</dt>
-            <dd className="text-[var(--text-primary)]">{test.attempts}</dd>
-            {test.durationMs !== null && (
-              <>
-                <dt className="text-[var(--text-muted)]">{t('e2e.duration')}</dt>
-                <dd className="text-[var(--text-primary)]">{formatDuration(test.durationMs)}</dd>
-              </>
-            )}
-            {test.lastRunAt && (
-              <>
-                <dt className="text-[var(--text-muted)]">{t('e2e.executedOn')}</dt>
-                <dd className="break-all text-[var(--text-primary)]">
-                  {test.executedOn ?? t('e2e.executedOnServers')}
-                </dd>
-                <dt className="text-[var(--text-muted)]">{t('e2e.lastRun')}</dt>
-                <dd className="text-[var(--text-primary)]">
-                  {formatDate(test.lastRunAt, { dateStyle: 'short', timeStyle: 'short' })}
-                </dd>
-              </>
-            )}
-          </dl>
-        </InfoCard>
-      </aside>
-
-      <main className="flex min-w-0 flex-col gap-4">
-        <div className="flex flex-col gap-3">
-          <Button variant="ghost" size="sm" className="w-fit" onClick={onBack}>
-            <i className="ti ti-arrow-left" aria-hidden="true" />
-            {t('e2e.back')}
-          </Button>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="flex flex-wrap items-center gap-3 text-xl font-semibold text-[var(--text-primary)]">
-              <E2eTestStatusLabel status={test.status} />
-              <span>
-                {test.code}-{test.title}
-              </span>
-            </h2>
-            {!isReadOnly && (
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void rerun(true)}
-                  disabled={busy || active}
-                >
-                  <i className="ti ti-sparkles" aria-hidden="true" />
-                  {t('e2e.regenerateTest')}
-                </Button>
-                <Button size="sm" onClick={() => void rerun(false)} disabled={busy || active}>
-                  <i className="ti ti-player-play" aria-hidden="true" />
-                  {t('e2e.rerunTest')}
-                </Button>
-              </div>
-            )}
-          </div>
-          {error && (
-            <p className="text-sm text-red-400" role="alert">
-              {error}
-            </p>
+      <div className="flex flex-col gap-3">
+        <Button variant="ghost" size="sm" className="w-fit" onClick={onBack}>
+          <i className="ti ti-arrow-left" aria-hidden="true" />
+          {t('e2e.back')}
+        </Button>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="flex flex-wrap items-center gap-3 text-xl font-semibold text-[var(--text-primary)]">
+            <E2eTestStatusLabel status={test.status} />
+            <span>
+              {test.code}-{test.title}
+            </span>
+          </h2>
+          {!isReadOnly && (
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => void rerun(true)}
+                disabled={busy || active}
+              >
+                <i className="ti ti-sparkles" aria-hidden="true" />
+                {t('e2e.regenerateTest')}
+              </Button>
+              <Button size="sm" onClick={() => void rerun(false)} disabled={busy || active}>
+                <i className="ti ti-player-play" aria-hidden="true" />
+                {t('e2e.rerunTest')}
+              </Button>
+            </div>
           )}
         </div>
+        {error && (
+          <p className="text-sm text-red-400" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
 
-        {test.creation.mode === 'frontend' &&
-          isQuickTunnelUrl(test.creation.baseUrl) &&
-          !test.creation.localOrigin && (
-            <p
-              role="alert"
-              className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300"
+      {test.creation.mode === 'frontend' &&
+        isQuickTunnelUrl(test.creation.baseUrl) &&
+        !test.creation.localOrigin && (
+          <p
+            role="alert"
+            className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300"
+          >
+            {t('e2e.tunnelOriginMissing')}
+          </p>
+        )}
+
+      <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
+        <div className="flex gap-1 border-b border-[var(--border)] p-1.5" role="tablist">
+          {detailTabs.map((item) => (
+            <Button
+              key={item.id}
+              role="tab"
+              aria-selected={tab === item.id}
+              variant={tab === item.id ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setTab(item.id)}
             >
-              {t('e2e.tunnelOriginMissing')}
-            </p>
-          )}
-
-        <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
-          <div className="flex gap-1 border-b border-[var(--border)] p-1.5" role="tablist">
-            {(['preview', 'code'] as const).map((item) => (
-              <Button
-                key={item}
-                role="tab"
-                aria-selected={tab === item}
-                variant={tab === item ? 'secondary' : 'ghost'}
-                size="sm"
-                onClick={() => setTab(item)}
-              >
-                {t(item === 'preview' ? 'e2e.preview' : 'e2e.code')}
-              </Button>
-            ))}
-          </div>
-          <div className="p-3" role="tabpanel">
-            {tab === 'preview' ? (
-              active ? (
-                <Placeholder icon="ti-loader-2 animate-spin" text={t('e2e.inProgress')} />
-              ) : test.hasVideo ? (
-                <TestVideo
-                  apiClient={apiClient}
-                  testId={test.id}
-                  version={`${test.lastRunAt ?? ''}:${test.attempts}`}
-                />
-              ) : (
-                <Placeholder
-                  icon="ti-video-off"
-                  text={t(test.creation.mode === 'backend' ? 'e2e.noVideoBackend' : 'e2e.noVideo')}
-                />
-              )
-            ) : (
-              <E2eScriptPanel
+              <i className={cn('ti', item.icon)} aria-hidden="true" />
+              {t(item.label)}
+            </Button>
+          ))}
+        </div>
+        <div className="p-3" role="tabpanel">
+          {tab === 'preview' &&
+            (active ? (
+              <Placeholder icon="ti-loader-2 animate-spin" text={t('e2e.inProgress')} />
+            ) : test.hasVideo ? (
+              <TestVideo
                 apiClient={apiClient}
                 testId={test.id}
-                isReadOnly={isReadOnly}
-                disabled={active}
+                version={`${test.lastRunAt ?? ''}:${test.attempts}`}
               />
-            )}
-          </div>
-        </div>
-
-        {!active && test.stepResults.length > 0 && (
-          <E2eExecutedSteps apiClient={apiClient} test={test} />
-        )}
-
-        {test.error && !active && (
-          <section className="rounded-lg border border-red-500/30 bg-red-950/40">
-            <h3 className="border-b border-red-500/20 px-4 py-2 text-sm font-semibold text-red-300">
-              {t('e2e.errorTitle')}
-            </h3>
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap px-4 py-3 font-mono text-xs text-red-100">
-              {safeE2eOutput(test.error)}
-            </pre>
-          </section>
-        )}
-
-        {test.analysis && !active && (
-          <section className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
-            <h3 className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-2 text-sm font-semibold text-[var(--text-primary)]">
-              <i className="ti ti-sparkles text-[var(--text-accent)]" aria-hidden="true" />
-              {t('e2e.analysisTitle')}
-              {test.verdict && (
-                <span
-                  className={cn(
-                    'ml-auto rounded-full px-2 py-0.5 text-xs font-medium',
-                    test.verdict === 'app_bug'
-                      ? 'bg-red-500/15 text-red-300'
-                      : 'bg-amber-500/15 text-amber-300',
+            ) : (
+              <Placeholder
+                icon="ti-video-off"
+                text={t(test.creation.mode === 'backend' ? 'e2e.noVideoBackend' : 'e2e.noVideo')}
+              />
+            ))}
+          {tab === 'testCase' && (
+            <div className="grid min-w-0 gap-6 p-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]">
+              <div className="flex min-w-0 flex-col gap-6">
+                <TestCaseSection icon="ti-notes" title={t('e2e.description')}>
+                  <TestDescription content={test.description || test.title} />
+                </TestCaseSection>
+                <TestCaseSection icon="ti-list-numbers" title={t('e2e.steps')}>
+                  {plannedSteps.length > 0 ? (
+                    <ol className="space-y-2" data-testid="e2e-planned-steps">
+                      {plannedSteps.map((step, index) => (
+                        <li
+                          key={index}
+                          className="flex items-start rounded-md border border-[var(--border)] bg-[var(--surface-0)] p-2.5 text-xs"
+                        >
+                          <dl className="min-w-0 flex-1 space-y-1 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                            <div>
+                              <dt className="inline font-semibold text-[var(--text-primary)]">
+                                {t('testplans.actionLabel')}
+                              </dt>{' '}
+                              <dd className="inline">
+                                <FormattedContent content={step.action} inline />
+                              </dd>
+                            </div>
+                            {step.expectedResult.trim() && (
+                              <div>
+                                <dt className="inline font-semibold text-emerald-400">
+                                  {t('testplans.expectedResultLabel')}
+                                </dt>{' '}
+                                <dd className="inline">
+                                  <FormattedContent content={step.expectedResult} inline />
+                                </dd>
+                              </div>
+                            )}
+                          </dl>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-sm text-[var(--text-muted)]">{t('e2e.noSteps')}</p>
                   )}
-                >
-                  {t(verdictKeys[test.verdict])}
-                </span>
-              )}
-            </h3>
-            <p className="whitespace-pre-wrap px-4 py-3 text-sm text-[var(--text-secondary)]">
-              {safeE2eOutput(test.analysis)}
-            </p>
-          </section>
-        )}
+                </TestCaseSection>
+              </div>
+              <div className="flex min-w-0 flex-col gap-6">
+                <TestCaseSection icon="ti-link" title={t('e2e.tmLinkedCase')}>
+                  <E2eLinkedCase
+                    apiClient={apiClient}
+                    test={test}
+                    reporting={reporting}
+                    isReadOnly={isReadOnly}
+                    disabled={active}
+                    onChanged={setTest}
+                  />
+                </TestCaseSection>
+                <TestCaseSection icon="ti-info-circle" title={t('e2e.details')}>
+                  <dl className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-y-2 text-sm">
+                    <dt className="text-[var(--text-muted)]">{t('e2e.columnType')}</dt>
+                    <dd className="text-[var(--text-primary)]">
+                      {t(test.creation.mode === 'backend' ? 'e2e.typeBackend' : 'e2e.typeFrontend')}
+                    </dd>
+                    <dt className="text-[var(--text-muted)]">{t('e2e.baseUrl')}</dt>
+                    <dd className="break-all text-[var(--text-primary)]">
+                      {test.creation.baseUrl}
+                    </dd>
+                    {test.creation.localOrigin && (
+                      <>
+                        <dt className="text-[var(--text-muted)]">{t('e2e.browserOriginLabel')}</dt>
+                        <dd className="break-all text-[var(--text-primary)]">
+                          {test.creation.localOrigin}
+                        </dd>
+                      </>
+                    )}
+                    <dt className="text-[var(--text-muted)]">{t('e2e.priority')}</dt>
+                    <dd className="text-[var(--text-primary)]">{t(priorityKeys[test.priority])}</dd>
+                    <dt className="text-[var(--text-muted)]">{t('e2e.attempts')}</dt>
+                    <dd className="text-[var(--text-primary)]">{test.attempts}</dd>
+                    {test.durationMs !== null && (
+                      <>
+                        <dt className="text-[var(--text-muted)]">{t('e2e.duration')}</dt>
+                        <dd className="text-[var(--text-primary)]">
+                          {formatDuration(test.durationMs)}
+                        </dd>
+                      </>
+                    )}
+                    {test.lastRunAt && (
+                      <>
+                        <dt className="text-[var(--text-muted)]">{t('e2e.executedOn')}</dt>
+                        <dd className="break-all text-[var(--text-primary)]">
+                          {test.executedOn ?? t('e2e.executedOnServers')}
+                        </dd>
+                        <dt className="text-[var(--text-muted)]">{t('e2e.lastRun')}</dt>
+                        <dd className="text-[var(--text-primary)]">
+                          {formatDate(test.lastRunAt, { dateStyle: 'short', timeStyle: 'short' })}
+                        </dd>
+                      </>
+                    )}
+                  </dl>
+                </TestCaseSection>
+              </div>
+            </div>
+          )}
+          {tab === 'code' && (
+            <E2eScriptPanel
+              apiClient={apiClient}
+              testId={test.id}
+              isReadOnly={isReadOnly}
+              disabled={active}
+            />
+          )}
+        </div>
+      </div>
 
-        {test.logs && (
-          <section className="rounded-lg border border-[var(--border)]">
-            <Button
-              variant="ghost"
-              className="w-full justify-between rounded-b-none"
-              aria-expanded={showLogs}
-              onClick={() => setShowLogs((value) => !value)}
-            >
-              {t('e2e.logs')}
-              <i
-                className={cn('ti ti-chevron-down transition-transform', showLogs && 'rotate-180')}
-                aria-hidden="true"
-              />
-            </Button>
-            {showLogs && (
-              <pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t border-[var(--border)] px-4 py-3 font-mono text-xs text-[var(--text-secondary)]">
-                {safeE2eOutput(test.logs)}
-              </pre>
+      {!active && test.stepResults.length > 0 && (
+        <E2eExecutedSteps apiClient={apiClient} test={test} />
+      )}
+
+      {test.error && !active && (
+        <section className="rounded-lg border border-red-500/30 bg-red-950/40">
+          <h3 className="border-b border-red-500/20 px-4 py-2 text-sm font-semibold text-red-300">
+            {t('e2e.errorTitle')}
+          </h3>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap px-4 py-3 font-mono text-xs text-red-100">
+            {safeE2eOutput(test.error)}
+          </pre>
+        </section>
+      )}
+
+      {test.analysis && !active && (
+        <section className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
+          <h3 className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-2 text-sm font-semibold text-[var(--text-primary)]">
+            <i className="ti ti-sparkles text-[var(--text-accent)]" aria-hidden="true" />
+            {t('e2e.analysisTitle')}
+            {test.verdict && (
+              <span
+                className={cn(
+                  'ml-auto rounded-full px-2 py-0.5 text-xs font-medium',
+                  test.verdict === 'app_bug'
+                    ? 'bg-red-500/15 text-red-300'
+                    : 'bg-amber-500/15 text-amber-300',
+                )}
+              >
+                {t(verdictKeys[test.verdict])}
+              </span>
             )}
-          </section>
-        )}
-      </main>
+          </h3>
+          <p className="whitespace-pre-wrap px-4 py-3 text-sm text-[var(--text-secondary)]">
+            {safeE2eOutput(test.analysis)}
+          </p>
+        </section>
+      )}
+
+      {test.logs && (
+        <section className="rounded-lg border border-[var(--border)]">
+          <Button
+            variant="ghost"
+            className="w-full justify-between rounded-b-none"
+            aria-expanded={showLogs}
+            onClick={() => setShowLogs((value) => !value)}
+          >
+            {t('e2e.logs')}
+            <i
+              className={cn('ti ti-chevron-down transition-transform', showLogs && 'rotate-180')}
+              aria-hidden="true"
+            />
+          </Button>
+          {showLogs && (
+            <pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t border-[var(--border)] px-4 py-3 font-mono text-xs text-[var(--text-secondary)]">
+              {safeE2eOutput(test.logs)}
+            </pre>
+          )}
+        </section>
+      )}
     </div>
   );
 }
@@ -411,7 +454,12 @@ function Placeholder({ icon, text }: { readonly icon: string; readonly text: str
   );
 }
 
-function InfoCard({
+// The team's test case template (bold "## Section" headings, <br> lines, box flow diagrams).
+const TEST_CASE_TEMPLATE =
+  /<br\s*\/?>|<b>\s*#|[┌└│▼]|^\s*#{1,6}\s*(caso de uso|pré-condi|dados de entrada|resultado esperado|pós-condi|fluxo|use case|precondition|input data|expected result)/im;
+
+/** Test case descriptions use the template layout; other text renders as Markdown, HTML or Mermaid. */
+function TestCaseSection({
   icon,
   title,
   children,
@@ -422,13 +470,19 @@ function InfoCard({
 }) {
   return (
     <section className="flex min-w-0 flex-col gap-2">
-      <h3 className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
-        <i className={cn('ti', icon)} aria-hidden="true" />
+      <h3 className="flex items-center gap-2 border-b border-[var(--border)] pb-1.5 text-sm font-semibold text-[var(--text-primary)]">
+        <i className={cn('ti text-[var(--text-accent)]', icon)} aria-hidden="true" />
         {title}
       </h3>
-      <div className="min-w-0 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-3">
-        {children}
-      </div>
+      {children}
     </section>
+  );
+}
+
+function TestDescription({ content }: { readonly content: string }) {
+  return TEST_CASE_TEMPLATE.test(content) ? (
+    <FormattedContent content={content} className="[overflow-wrap:anywhere]" />
+  ) : (
+    <MarkdownViewer content={content} showModeToggle={false} className="text-sm" />
   );
 }

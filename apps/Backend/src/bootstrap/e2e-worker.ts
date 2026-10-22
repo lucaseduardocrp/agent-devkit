@@ -9,6 +9,8 @@ import { IntegrationsService } from '../modules/integrations/application/integra
 import { DynamicProviderFactory } from '../modules/integrations/application/dynamic-provider-factory.js';
 import { PrismaAgentRepository } from '../modules/agents/adapters/prisma-agent-repository.js';
 import { AgentService } from '../modules/agents/application/agent-service.js';
+import { PrismaAgentWorkflowRepository } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
+import type { PrismaAgentWorkflowClient } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import { PrismaE2eStore } from '../modules/e2e/adapters/prisma-e2e-store.js';
 import { PrismaE2eJobQueue } from '../modules/e2e/adapters/prisma-e2e-queue.js';
 import { PrismaE2eRunnerTaskStore } from '../modules/e2e/adapters/prisma-runner-task-store.js';
@@ -50,6 +52,9 @@ const integrations = new IntegrationsService(
 const providers = new DynamicProviderFactory(integrations);
 const agents = new AgentService({
   agentRepository: new PrismaAgentRepository(database.client),
+  workflowRepository: new PrismaAgentWorkflowRepository(
+    database.client as unknown as PrismaAgentWorkflowClient,
+  ),
   dynamicProviderFactory: providers,
 });
 const ffmpegPath = resolveFfmpegPath();

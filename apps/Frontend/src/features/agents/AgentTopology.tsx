@@ -41,7 +41,10 @@ export function AgentTopology({
   const { t } = useI18n();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const activeRuns = useMemo(
-    () => runs.filter((run) => run.status === 'running' || run.status === 'queued'),
+    () =>
+      runs.filter((run) =>
+        ['running', 'queued', 'waiting_review', 'waiting_input'].includes(run.status),
+      ),
     [runs],
   );
   const issueById = useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues]);
@@ -90,7 +93,8 @@ export function AgentTopology({
     ? activeRuns.filter((run) => run.agentId === selectedAgent.id)
     : [];
   const runningCount = activeRuns.filter((run) => run.status === 'running').length;
-  const queuedCount = activeRuns.length - runningCount;
+  const waitingCount = activeRuns.filter((run) => run.status.startsWith('waiting_')).length;
+  const queuedCount = activeRuns.length - runningCount - waitingCount;
 
   return (
     <section className="space-y-4" data-testid="agent-topology">
@@ -114,6 +118,9 @@ export function AgentTopology({
         </Badge>
         <Badge variant="default">
           {queuedCount} {t('agents.queued')}
+        </Badge>
+        <Badge variant="outline">
+          {waitingCount} {t('agents.waitingForUser')}
         </Badge>
       </div>
 
@@ -208,15 +215,19 @@ export function AgentTopology({
               const agentRuns = activeRuns.filter((run) => run.agentId === agent.id);
               const status = agentRuns.some((run) => run.status === 'running')
                 ? 'running'
-                : agentRuns.length
-                  ? 'queued'
-                  : 'idle';
+                : agentRuns.some((run) => run.status.startsWith('waiting_'))
+                  ? 'waiting'
+                  : agentRuns.length
+                    ? 'queued'
+                    : 'idle';
               const statusText =
                 status === 'running'
                   ? t('agents.statusRunning')
                   : status === 'queued'
                     ? t('agents.statusQueued')
-                    : t('agents.idle');
+                    : status === 'waiting'
+                      ? t('agents.waitingForUser')
+                      : t('agents.idle');
               return (
                 <Button
                   key={agent.id}
@@ -240,7 +251,9 @@ export function AgentTopology({
                           ? 'text-emerald-400'
                           : status === 'queued'
                             ? 'text-amber-400'
-                            : ''
+                            : status === 'waiting'
+                              ? 'text-sky-300'
+                              : ''
                       }
                     >
                       {statusText}
@@ -263,7 +276,11 @@ export function AgentTopology({
                   }}
                 >
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">
-                    {run.status === 'running' ? t('agents.runningIssue') : t('agents.queuedIssue')}
+                    {run.status === 'running'
+                      ? t('agents.runningIssue')
+                      : run.status.startsWith('waiting_')
+                        ? t('agents.waitingIssue')
+                        : t('agents.queuedIssue')}
                   </span>
                   <span className="truncate text-sm font-medium text-[var(--text-primary)]">
                     {issue ? `#${issue.number} ${issue.title}` : `#${run.issueId.slice(0, 8)}`}

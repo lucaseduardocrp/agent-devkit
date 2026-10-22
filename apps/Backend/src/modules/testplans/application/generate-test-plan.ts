@@ -7,6 +7,7 @@ import type { KnowledgeSearchPort } from '../../knowledge/application/knowledge-
 import type { LlmPort } from '../../agents/application/agent-ports.js';
 import type { DynamicProviderFactory } from '../../integrations/application/dynamic-provider-factory.js';
 import type { AgentRepository } from '../../agents/application/agent-repository.js';
+import type { AgentService } from '../../agents/application/agent-service.js';
 import {
   PromptInjectionGuard,
   PromptInjectionError,
@@ -374,6 +375,7 @@ export interface AiKnowledgeTestPlanGeneratorOptions {
   readonly defaultLlm?: LlmPort;
   readonly fallbackGenerator?: TestPlanGeneratorPort;
   readonly agentRepository?: AgentRepository;
+  readonly agentService?: AgentService;
 }
 
 export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
@@ -402,6 +404,19 @@ export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
     context?: RequestContext,
   ): Promise<GeneratedTestPlanResult> {
     const { prompt, contextText, directive, outputLanguage } = await this.compose(input, context);
+    const workspaceId = context?.workspaceId ?? context?.ownerId;
+    if (workspaceId && this.options.agentService) {
+      const workflow = await this.options.agentService.getWorkflow(workspaceId);
+      if (workflow.enabled && workflow.steps.length > 0) {
+        return this.generateWithWorkflow(
+          input,
+          context,
+          { prompt, contextText, directive, outputLanguage },
+          workspaceId,
+          workflow.steps.find((step) => step.agentId)?.agentId,
+        );
+      }
+    }
     const { payload, nonce } = PromptInjectionGuard.wrapWithSandboxEnvelope(contextText);
     const instruction = PromptInjectionGuard.buildSystemInstruction(directive, nonce);
 
@@ -463,6 +478,75 @@ export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
       console.error('[AiKnowledgeTestPlanGenerator] LLM completion or parsing failed:', error);
       return this.fallbackGenerator.generate(input, context);
     }
+  }
+
+  private async generateWithWorkflow(
+    input: TestPlanRequest,
+    context: RequestContext | undefined,
+    composed: {
+      prompt: string;
+      contextText: string;
+      directive: string;
+      outputLanguage: OutputLanguage;
+    },
+    workspaceId: string,
+    workflowAgentId?: string,
+  ): Promise<GeneratedTestPlanResult> {
+    const agents = await this.options.agentRepository?.listByWorkspace(workspaceId);
+    const agentId =
+      input.agentId ??
+      agents?.find((agent) => agent.isDefault)?.id ??
+      agents?.find((agent) => agent.role === 'QA')?.id ??
+      workflowAgentId;
+    if (!agentId || !this.options.agentService) {
+      throw new ApplicationError(
+        'AGENT_WORKFLOW_AGENT_REQUIRED',
+        'An agent must be selected in the workflow or workspace before generating this test plan.',
+        409,
+      );
+    }
+
+    let parsedPlans: readonly TestPlan[] = [];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const qualityReminder =
+        attempt === 0
+          ? ''
+          : `\n\nCORRECTION REQUIRED: The previous response violated the language or executable-step rules. Regenerate from scratch. Use only ${composed.outputLanguage}; make every action atomic and executable; never copy the requirement into a step.`;
+      const result = await this.options.agentService.executeAgent(
+        workspaceId,
+        agentId,
+        {
+          prompt: `${composed.contextText}\n\n${composed.directive}${qualityReminder}`,
+          includeKnowledge: false,
+          ...(input.llmProvider ? { llmProvider: input.llmProvider } : {}),
+        },
+        context,
+      );
+      try {
+        parsedPlans = parseAndNormalizeTestPlans(result.result, {
+          language: localeForLanguage(composed.outputLanguage),
+        });
+      } catch {
+        parsedPlans = [];
+      }
+      if (
+        usesOutputLanguage(parsedPlans, composed.outputLanguage) &&
+        hasUsableTestSteps(parsedPlans, composed.prompt)
+      ) {
+        break;
+      }
+      parsedPlans = [];
+    }
+
+    if (parsedPlans.length === 0) {
+      throw new ApplicationError(
+        'AGENT_WORKFLOW_OUTPUT_INVALID',
+        'The agent workflow did not produce valid localized test steps.',
+        502,
+      );
+    }
+    const primary = parsedPlans[0]!;
+    return { ...primary, plans: parsedPlans };
   }
 
   private async compose(

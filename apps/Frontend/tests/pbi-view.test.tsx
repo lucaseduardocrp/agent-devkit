@@ -141,6 +141,25 @@ describe('PbiView', () => {
       await within(sidebar).findByRole('button', { name: 'Verify release' }),
     ).toBeInTheDocument();
   });
+  it('opens a list item with its full description, fetched on demand', async () => {
+    const api = Object.assign(mockClient(), {
+      getPbiItem: vi.fn().mockResolvedValue({
+        ...root,
+        description: '<p>Deliver the <b>whole</b> release</p>',
+        sourceData: { customFields: { 'Custom.Risk': 'High' } },
+      }),
+    });
+    api.getPbiItems.mockResolvedValue([
+      { ...root, description: 'Deliver the whole', partial: true },
+    ]);
+    render(<PbiView apiClient={api as unknown as ApiClient} workspaceId="ws" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(api.getPbiItem).toHaveBeenCalledWith('root');
+    expect(within(dialog).getByRole('textbox', { name: 'Descrição' }).textContent).toBe(
+      'Deliver the whole release',
+    );
+  });
   it('opens a PBI from the row and loads comments when switching to a card', async () => {
     const api = mockClient();
     api.getPbiComments.mockImplementation((id: string) =>

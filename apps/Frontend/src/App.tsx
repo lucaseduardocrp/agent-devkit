@@ -29,6 +29,7 @@ import { E2eView } from './features/e2e/E2eView.js';
 import { accessFor, allows, PermissionsProvider } from './features/workspaces/permissions.js';
 import type { ModuleOperation, PermissionModule } from './features/workspaces/workspace-types.js';
 import { canSeeTab, NAV_TAB_ORDER } from './components/layout/nav-access.js';
+import { MediaProvider } from './features/shared/media.js';
 
 export interface AppProps {
   readonly apiClient?: ApiClient;
@@ -58,12 +59,14 @@ export function App({
       onLocaleChange={(locale) => apiClient.setLocale(locale)}
     >
       <ActivityProvider>
-        <AppContent
-          apiClient={apiClient}
-          initialTab={initialTab}
-          defaultOwnerId={defaultOwnerId}
-          className={className}
-        />
+        <MediaProvider apiClient={apiClient}>
+          <AppContent
+            apiClient={apiClient}
+            initialTab={initialTab}
+            defaultOwnerId={defaultOwnerId}
+            className={className}
+          />
+        </MediaProvider>
       </ActivityProvider>
     </I18nProvider>
   );

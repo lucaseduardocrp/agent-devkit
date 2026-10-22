@@ -4,7 +4,7 @@ COPY package*.json ./
 RUN npm ci --include=dev
 
 FROM dependencies AS build
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.build.json ./
 COPY prisma.config.ts ./
 COPY prisma ./prisma
 COPY src ./src

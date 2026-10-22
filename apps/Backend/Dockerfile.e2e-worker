@@ -5,7 +5,7 @@ FROM mcr.microsoft.com/playwright:v1.63.0-noble AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --include=dev
-COPY tsconfig.json prisma.config.ts ./
+COPY tsconfig.json tsconfig.build.json prisma.config.ts ./
 COPY prisma ./prisma
 COPY src ./src
 # Client generation validates the URL shape but does not connect during image build.

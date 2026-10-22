@@ -85,13 +85,51 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+/** Description, steps, linked case and details live in the Test Case tab. */
+async function openInfoTab(view: ReturnType<typeof setup>['view']) {
+  fireEvent.click(await view.findByRole('tab', { name: 'Test Case' }));
+}
+
 describe('E2eTestDetail', () => {
   it('shows which computer executed the latest run', async () => {
     const local = setup(detail({ executedOn: 'QA-LAPTOP (win32)' }));
-    expect(await local.view.findByText('QA-LAPTOP (win32)')).toBeInTheDocument();
+    await openInfoTab(local.view);
+    expect(local.view.getByText('QA-LAPTOP (win32)')).toBeInTheDocument();
     local.view.unmount();
     const remote = setup(detail());
-    expect(await remote.view.findByText('Servidores do ADK')).toBeInTheDocument();
+    await openInfoTab(remote.view);
+    expect(remote.view.getByText('Servidores do ADK')).toBeInTheDocument();
+  });
+
+  it('shows the test case, with formatted content, in a tab between Preview and Code', async () => {
+    const { view } = setup(
+      detail({
+        description: '<b>## Caso de uso</b><br>Validar a **ordem** da lista.',
+        steps: ['Abra o evento. => A lista é exibida.', 'Vote'],
+      }),
+    );
+    await view.findByText('TC007-Ensure real-time ordering');
+    expect(view.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Preview',
+      'Test Case',
+      'Código',
+    ]);
+    expect(view.queryByText('Caso de uso')).toBeNull();
+    await openInfoTab(view);
+    expect(view.getByRole('tab', { name: 'Test Case' })).toHaveAttribute('aria-selected', 'true');
+    expect(view.queryByTestId('e2e-video')).toBeNull();
+    expect(view.getByText('Caso de uso')).toBeInTheDocument();
+    expect(view.getByText('ordem').tagName).toBe('STRONG');
+    expect(view.getByText('Abra o evento.')).toBeInTheDocument();
+    expect(view.getByText('A lista é exibida.')).toBeInTheDocument();
+    expect(view.getAllByText('Resultado Esperado:')).toHaveLength(1);
+    expect(view.getByText('Nenhum test case vinculado.')).toBeInTheDocument();
+    view.unmount();
+
+    const markdown = setup(detail({ description: '# Objetivo\n\n- Ordenar **votos**', steps: [] }));
+    await openInfoTab(markdown.view);
+    expect(markdown.view.getByTestId('markdown-viewer')).toBeInTheDocument();
+    expect(markdown.view.getByText('Nenhum passo planejado.')).toBeInTheDocument();
   });
 
   it('warns when a Quick Tunnel run has no original localhost origin', async () => {
@@ -109,22 +147,24 @@ describe('E2eTestDetail', () => {
     );
     await configured.view.findByText('TC007-Ensure real-time ordering');
     expect(configured.view.queryByText(/Informe o endereço local original/)).toBeNull();
+    await openInfoTab(configured.view);
     expect(configured.view.getByText('http://localhost:8014')).toBeInTheDocument();
   });
 
   it('shows the description, video, error and AI analysis of a failed test', async () => {
     const { view, client } = setup();
     expect(await view.findByText('TC007-Ensure real-time ordering')).toBeInTheDocument();
-    expect(view.getByText('Validate that the list reorders in real time.')).toBeInTheDocument();
-    expect(view.getByText('Vote')).toBeInTheDocument();
-    expect(view.getByText('Alta')).toBeInTheDocument();
-    expect(view.getByText('1m 5s')).toBeInTheDocument();
     expect(view.getByText('Failed')).toBeInTheDocument();
     const video = await view.findByTestId('e2e-video');
     expect(video).toHaveAttribute('src', 'blob:video');
     expect(client.getE2eTestVideo).toHaveBeenCalledWith('t1', expect.any(AbortSignal));
     expect(view.getByText('expect(locator).toBeVisible() failed')).toBeInTheDocument();
     expect(view.getByText('Bug na aplicação')).toBeInTheDocument();
+    await openInfoTab(view);
+    expect(view.getByText('Validate that the list reorders in real time.')).toBeInTheDocument();
+    expect(view.getByText('Vote')).toBeInTheDocument();
+    expect(view.getByText('Alta')).toBeInTheDocument();
+    expect(view.getByText('1m 5s')).toBeInTheDocument();
 
     fireEvent.click(view.getByRole('button', { name: /Logs da execução/ }));
     expect(view.getByText('Running 1 test')).toBeInTheDocument();
@@ -181,6 +221,8 @@ describe('E2eTestDetail', () => {
     );
     expect(await view.findByText('Nenhum vídeo disponível para este teste.')).toBeInTheDocument();
     expect(view.getByText('Problema no teste')).toBeInTheDocument();
+    // Without a description, the Test Case tab describes the test by its title.
+    await openInfoTab(view);
     expect(view.getAllByText('Ensure real-time ordering').length).toBeGreaterThan(0);
     client.getE2eScript.mockResolvedValueOnce(script(null));
     fireEvent.click(view.getByRole('tab', { name: 'Código' }));
@@ -201,6 +243,7 @@ describe('E2eTestDetail', () => {
     expect(
       await view.findByText('Testes de backend validam a API diretamente e não geram vídeo.'),
     ).toBeInTheDocument();
+    await openInfoTab(view);
     expect(view.getByText('Backend')).toBeInTheDocument();
     expect(view.getByText('Baixa')).toBeInTheDocument();
     expect(view.queryByRole('button', { name: /Executar novamente/ })).toBeNull();
@@ -243,6 +286,7 @@ describe('E2eTestDetail', () => {
     const { view, client } = setup(detail({ priority: 'medium', lastRunAt: null }));
     client.getE2eTestVideo.mockRejectedValueOnce(new Error('404'));
     expect(await view.findByText('Não foi possível carregar o vídeo.')).toBeInTheDocument();
+    await openInfoTab(view);
     expect(view.getByText('Média')).toBeInTheDocument();
   });
 

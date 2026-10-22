@@ -36,6 +36,8 @@ export interface ToolContext {
   readonly api: AdkApi;
   readonly session: Session;
   readonly apiUrl: string;
+  /** Requests an explicit decision from the connected user interface. */
+  readonly requestApproval?: (message: string) => Promise<boolean>;
 }
 
 export type ToolResult =
@@ -71,6 +73,7 @@ export interface McpTool {
   readonly openWorld: boolean;
   readonly routes: readonly string[];
   readonly input: z.ZodRawShape;
+  parseInput(rawInput: unknown): unknown;
   execute(rawInput: unknown, context: ToolContext): Promise<ToolResult>;
 }
 
@@ -96,6 +99,7 @@ export function defineTool<Shape extends z.ZodRawShape>(spec: ToolSpec<Shape>): 
     openWorld: spec.openWorld ?? execution === 'server',
     routes: spec.routes,
     input: spec.input,
+    parseInput: (rawInput) => schema.parse(rawInput ?? {}),
     execute: (rawInput, context) =>
       Promise.resolve().then(() => spec.run(schema.parse(rawInput ?? {}), context)),
   };

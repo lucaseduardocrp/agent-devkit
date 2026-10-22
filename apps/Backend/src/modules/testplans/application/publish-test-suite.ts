@@ -20,6 +20,10 @@ export interface PublishedTestSuite {
   readonly casesCount: number;
   readonly caseLinks?: Readonly<Record<string, string>>;
   readonly caseLocations?: Readonly<Record<string, { planId: string; suiteId: string }>>;
+  /** The work item the cases were linked to, when one was given. */
+  readonly workItem?: { readonly id: string; readonly type: string; readonly title: string };
+  /** Kind of the suite created; absent when the cases went into an existing suite. */
+  readonly suiteKind?: RemoteSuiteKind;
 }
 
 export interface RemoteTestPlan {
@@ -40,17 +44,29 @@ export interface TestSuiteDestinationProvider extends TestSuitePublisher {
   listCaseFields?(): Promise<readonly FieldDefinition[]>;
 }
 
+/** Kind of the suite a provider creates: a plain one, or one that belongs to a work item. */
+export type RemoteSuiteKind = 'static' | 'requirement';
+
+export interface PublishTestSuiteOptions {
+  readonly remotePlanId?: string;
+  readonly remoteParentSuiteId?: string;
+  readonly remoteSuiteId?: string;
+  readonly remoteSuiteName?: string;
+  readonly fieldTemplate?: FieldMappingTemplate;
+  /** Kind of the suite created for the published tree; static when absent. */
+  readonly suiteKind?: RemoteSuiteKind;
+  /**
+   * Remote work item (PBI, bug, task...) the published cases test: the requirement of a
+   * requirement suite, or the item each case links to otherwise.
+   */
+  readonly workItemId?: string;
+}
+
 /** Destination-neutral port. A provider owns remote plan, suite and case creation. */
 export interface TestSuitePublisher {
   publish(
     suite: PublishableTestSuite,
-    options: {
-      readonly remotePlanId?: string;
-      readonly remoteParentSuiteId?: string;
-      readonly remoteSuiteId?: string;
-      readonly remoteSuiteName?: string;
-      readonly fieldTemplate?: FieldMappingTemplate;
-    },
+    options: PublishTestSuiteOptions,
   ): Promise<PublishedTestSuite>;
 }
 
@@ -64,13 +80,7 @@ export class PublishTestSuite {
     workspaceId: string,
     suiteId: string,
     publisher: TestSuitePublisher,
-    options: {
-      readonly remotePlanId?: string;
-      readonly remoteParentSuiteId?: string;
-      readonly remoteSuiteId?: string;
-      readonly remoteSuiteName?: string;
-      readonly fieldTemplate?: FieldMappingTemplate;
-    } = {},
+    options: PublishTestSuiteOptions = {},
   ): Promise<PublishedTestSuite> {
     const root = await this.suites.find(suiteId, workspaceId);
     if (!root)

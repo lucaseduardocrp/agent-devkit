@@ -3,6 +3,7 @@ import { segment } from '../../api/http-client.js';
 import { definePrompt } from '../../core/prompt.js';
 import type { McpModule } from '../../core/registry.js';
 import { defineTool, json, text } from '../../core/tool.js';
+import { getWorkflowBrief } from '../agents/tools.js';
 import { id, page, pageSize, untrusted, UNTRUSTED_CONTENT_RULE } from '../shared.js';
 
 const testPlanId = id('Saved Test Plan id (from testplans_list).');
@@ -92,7 +93,7 @@ export const testPlansModule: McpModule = {
       toolset: 'testplans',
       access: 'read',
       execution: 'host',
-      routes: ['POST /TestPlan/brief'],
+      routes: ['POST /TestPlan/brief', 'GET /agents/workflow'],
       input: {
         prompt: generationInput.prompt,
         title: generationInput.title,
@@ -100,18 +101,22 @@ export const testPlansModule: McpModule = {
         agentId: generationInput.agentId,
       },
       run: async (input, { api }) => {
-        const brief = await api.request<{
-          instruction: string;
-          context: string;
-          outputLanguage: string;
-          knowledgeSources: string[];
-        }>({ method: 'POST', path: '/TestPlan/brief', body: input });
+        const [brief, workflowBrief] = await Promise.all([
+          api.request<{
+            instruction: string;
+            context: string;
+            outputLanguage: string;
+            knowledgeSources: string[];
+          }>({ method: 'POST', path: '/TestPlan/brief', body: input }),
+          getWorkflowBrief(api),
+        ]);
         return json({
           instruction: brief.instruction,
           outputLanguage: brief.outputLanguage,
           knowledgeSources: brief.knowledgeSources,
           context: untrusted('requirement-and-brain', brief.context),
-          rules: [UNTRUSTED_CONTENT_RULE],
+          ...workflowBrief,
+          rules: [UNTRUSTED_CONTENT_RULE, workflowBrief.rule],
           next: 'Generate the JSON array described in `instruction`, show it to the user, then call testplans_save with the plans (use `expectedResult` for each step).',
         });
       },
@@ -344,7 +349,7 @@ export const testPlansModule: McpModule = {
       name: 'testplans_push_suite',
       title: 'Push test suite',
       description:
-        'Publishes a saved suite and its test cases to the chosen provider. Provide remotePlanId and remoteSuiteId to add all test cases directly to an existing suite; use remoteParentSuiteId to create a child suite under a static suite; omit remote IDs to create a new Test Plan.',
+        'Publishes a saved suite and its test cases to the chosen provider. Provide remotePlanId and remoteSuiteId to add all test cases directly to an existing suite; use remoteParentSuiteId to create a child suite under a static suite; omit remote IDs to create a new Test Plan. On Azure DevOps, suiteKind "requirement" creates a Requirement Based Suite for workItemId (a PBI, User Story or backlog Bug) holding every case of the tree; with suiteKind "static" (default), workItemId of any type (task, bug, PBI...) links each published case to it with a Tests link.',
       toolset: 'testplans',
       access: 'write',
       routes: ['POST /TestPlan/suites/:id/push'],
@@ -370,6 +375,17 @@ export const testPlansModule: McpModule = {
           .regex(/^[1-9]\d*$/)
           .optional()
           .describe('Existing destination suite ID in remotePlanId. Adds cases directly to it.'),
+        suiteKind: z
+          .enum(['static', 'requirement'])
+          .optional()
+          .describe(
+            'Kind of the suite created (Azure DevOps). requirement needs workItemId and a new plan or remoteParentSuiteId.',
+          ),
+        workItemId: z
+          .string()
+          .regex(/^[1-9]\d*$/)
+          .optional()
+          .describe('Azure DevOps work item ID the published test cases test (PBI, bug, task...).'),
       },
       run: async ({ suiteId: target, ...body }, { api }) =>
         json(

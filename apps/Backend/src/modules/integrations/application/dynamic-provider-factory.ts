@@ -96,6 +96,79 @@ export class DynamicProviderFactory {
     );
   }
 
+  /**
+   * Credentials for a file hosted by one of the workspace's integrations (images in Azure
+   * DevOps work items and wikis, Jira and Trello attachments...), so the ADK can show it
+   * without copying it. Returns null when no enabled integration owns the URL.
+   */
+  public async resolveMediaAuthorization(
+    ownerId: string,
+    url: URL,
+  ): Promise<Record<string, string> | null> {
+    const host = url.hostname.toLowerCase();
+    const firstSegment = decodeURIComponent(url.pathname.split('/')[1] ?? '').toLowerCase();
+    const sameHost = (value: unknown) => {
+      try {
+        return new URL(asString(value)).hostname.toLowerCase() === host;
+      } catch {
+        return false;
+      }
+    };
+    const bearerOrBasic = (token: string, user = '') =>
+      /^(Basic|Bearer) /.test(token)
+        ? token
+        : `Basic ${Buffer.from(`${user}:${token}`).toString('base64')}`;
+    for (const integration of await this.integrationsService.listIntegrations(ownerId)) {
+      if (!integration.isEnabled || !integration.hasSecret) continue;
+      const settings = integration.settings;
+      let header: (secret: string) => string;
+      switch (integration.providerId) {
+        case 'azure_devops':
+        case 'azure_devops_wiki': {
+          const organization = asString(settings.organization).trim().toLowerCase();
+          const owns =
+            (organization &&
+              ((host === 'dev.azure.com' && firstSegment === organization) ||
+                host === `${organization}.visualstudio.com`)) ||
+            sameHost(settings.baseUrl);
+          if (!owns) continue;
+          header = (secret) => bearerOrBasic(secret.trim());
+          break;
+        }
+        case 'jira':
+          if (!sameHost(settings.baseUrl)) continue;
+          header = (secret) => bearerOrBasic(secret.trim(), asString(settings.email).trim());
+          break;
+        case 'github_projects':
+          if (
+            !['github.com', 'api.github.com', 'raw.githubusercontent.com'].includes(host) &&
+            !host.endsWith('.githubusercontent.com')
+          )
+            continue;
+          header = (secret) => `Bearer ${secret.trim()}`;
+          break;
+        case 'trello':
+          if (host !== 'trello.com' && host !== 'api.trello.com') continue;
+          header = (secret) =>
+            `OAuth oauth_consumer_key="${asString(settings.apiKey).trim()}", oauth_token="${secret.trim()}"`;
+          break;
+        case 'wiki_js':
+          if (!sameHost(settings.baseUrl)) continue;
+          header = (secret) => `Bearer ${secret.trim()}`;
+          break;
+        default:
+          continue;
+      }
+      const secret = await this.integrationsService.getDecryptedSecret(
+        ownerId,
+        integration.category,
+        integration.providerId,
+      );
+      if (secret?.trim()) return { authorization: header(secret) };
+    }
+    return null;
+  }
+
   public async listTestSuiteProviders(
     ownerId: string,
   ): Promise<readonly { id: string; name: string; configured: boolean }[]> {

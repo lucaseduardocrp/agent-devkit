@@ -461,6 +461,14 @@ const UI_EVIDENCE_FIXTURE = `accessBase.extend<{ __adkEvidence: void }>({
   __adkEvidence: [
     async ({ page }, use) => {
       currentPage = page;
+      testStarted = Date.now();
+      trackInspections(page);
+      const onRequest = (request: import('@playwright/test').Request) => {
+        if (['document', 'xhr', 'fetch'].includes(request.resourceType())) pending.set(request, Date.now());
+      };
+      const onRequestDone = (request: import('@playwright/test').Request) => {
+        pending.delete(request);
+      };
       const onResponse = (response: import('@playwright/test').Response) => {
         const kind = response.request().resourceType();
         if (response.status() < 400 || !['document', 'xhr', 'fetch'].includes(kind)) return;
@@ -482,13 +490,20 @@ const UI_EVIDENCE_FIXTURE = `accessBase.extend<{ __adkEvidence: void }>({
           // An invalid request URL cannot provide a safe origin.
         }
       };
+      page.on('request', onRequest);
+      page.on('requestfinished', onRequestDone);
+      page.on('requestfailed', onRequestDone);
       page.on('response', onResponse);
       page.on('requestfailed', onRequestFailed);
       try {
         await use();
       } finally {
+        page.off('request', onRequest);
+        page.off('requestfinished', onRequestDone);
+        page.off('requestfailed', onRequestDone);
         page.off('response', onResponse);
         page.off('requestfailed', onRequestFailed);
+        pending.clear();
         currentPage = null;
       }
     },
@@ -500,10 +515,12 @@ const UI_EVIDENCE_FIXTURE = `accessBase.extend<{ __adkEvidence: void }>({
  * Source of the evidence module. Each top-level step appends its outcome to
  * evidence/steps.jsonl and, for UI tests, saves a screenshot of the page as the step ended
  * (passed or failed), so test management platforms get one piece of evidence per step.
+ * Before the screenshot, the elements the step asserted on are scrolled into view and
+ * outlined, so each step's evidence shows what it verified instead of the same viewport.
  */
 export function evidenceModule(mode: E2eMode): string {
   const fixture = mode === 'frontend' ? UI_EVIDENCE_FIXTURE : 'accessBase';
-  return String.raw`import { test as base, type Page, type APIRequestContext, type Route, type APIResponse } from '@playwright/test';
+  return String.raw`import { test as base, expect as baseExpect, type Locator, type Page, type APIRequestContext, type Route, type APIResponse } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -621,6 +638,235 @@ function recordBrowserDiagnostic(message: string): void {
   if (browserDiagnostics.length > 8) browserDiagnostics.shift();
 }
 
+// Locators asserted on or read from during the current top-level step: its screenshot shows them.
+const MARK = 'data-adk-evidence';
+const OVERLAY = 'adk-evidence-overlay';
+// Loading indicators still showing after a full settle are permanent page elements: ignored later.
+const IDLE = 'data-adk-idle';
+const BUSY = [
+  '[aria-busy="true"]', '.spinner', '.spinner-border', '.spinner-grow', '.fa-spin', '.loading', '.loader',
+  '.blockUI', '.blockOverlay', '.pace-running', 'ngx-spinner', 'ngx-loading', 'mat-spinner',
+  'mat-progress-spinner', '.p-progress-spinner', '.ant-spin-spinning', '.MuiCircularProgress-root',
+  '.MuiSkeleton-root', '[class*="spinner" i]', '[class*="loading" i]', '[class*="loader" i]', '[class*="skeleton" i]',
+].join(', ');
+const SETTLE_MS = 6000;
+const QUIET_MS = 400;
+const MAX_MARKED = 12;
+/** How long the outlined evidence stays on the recording. */
+const EVIDENCE_HOLD_MS = 1200;
+// Locator reads that show what a step checked even when the value is asserted afterwards.
+const INSPECTIONS = [
+  'evaluate', 'evaluateAll', 'textContent', 'innerText', 'innerHTML', 'inputValue', 'getAttribute',
+  'isVisible', 'isChecked', 'isEnabled', 'isDisabled', 'isEditable', 'count', 'allTextContents',
+  'allInnerTexts', 'boundingBox',
+];
+let asserted: Locator[] = [];
+let testStarted = 0;
+// In-flight document/XHR/fetch requests of the page and when each started.
+const pending = new Map<object, number>();
+
+function rememberAsserted(value: unknown): void {
+  if (depth === 0 || typeof value !== 'object' || value === null) return;
+  const locator = value as Locator;
+  if (typeof locator.page !== 'function' || typeof locator.evaluateAll !== 'function') return;
+  asserted = asserted.filter((item) => item !== locator);
+  asserted.push(locator);
+  if (asserted.length > 6) asserted.shift();
+}
+
+const PATCHED = Symbol.for('adk.evidence.inspections');
+
+/** Makes locator reads count as evidence of the step, like the locators passed to expect. */
+function trackInspections(page: Page): void {
+  const prototype = Object.getPrototypeOf(page.locator('html')) as Record<string | symbol, unknown>;
+  if (prototype[PATCHED]) return;
+  prototype[PATCHED] = true;
+  for (const name of INSPECTIONS) {
+    const original = prototype[name];
+    if (typeof original !== 'function') continue;
+    prototype[name] = function (this: Locator, ...args: unknown[]) {
+      rememberAsserted(this);
+      return original.apply(this, args);
+    };
+  }
+}
+
+/** What is left of the limit before the test's own timeout, keeping room for teardown. */
+function withinTimeout(limit: number): number {
+  const timeout = extended.info().timeout;
+  if (!timeout) return limit;
+  return Math.max(0, Math.min(limit, timeout - (Date.now() - testStarted) - 10000));
+}
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/* Runs in the page: true once no loading indicator shows and the DOM stopped changing. With
+   markIdle, flags the indicators still showing so later settles ignore them. */
+function pageSettled(options: { busy: string; idle: string; quietMs: number; markIdle: boolean }): boolean {
+  const state = window as unknown as { __adkLastMutation?: number };
+  if (state.__adkLastMutation === undefined) {
+    state.__adkLastMutation = performance.now();
+    new MutationObserver(() => {
+      state.__adkLastMutation = performance.now();
+    }).observe(document, {
+      subtree: true, childList: true, characterData: true,
+      attributes: true, attributeFilter: ['class', 'hidden', 'aria-busy'],
+    });
+  }
+  const showing = Array.from(document.querySelectorAll(options.busy)).filter((node) => {
+    if (node.closest('[' + options.idle + ']')) return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 &&
+      node.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+  });
+  if (options.markIdle) {
+    for (const node of showing) node.setAttribute(options.idle, '');
+    return true;
+  }
+  return document.readyState === 'complete' && showing.length === 0 &&
+    performance.now() - (state.__adkLastMutation ?? 0) >= options.quietMs;
+}
+
+/** Waits, for a bounded time, until requests finish, loaders disappear and the DOM is stable. */
+async function settle(page: Page): Promise<void> {
+  const deadline = Date.now() + withinTimeout(SETTLE_MS);
+  let quietSince = Date.now();
+  while (Date.now() < deadline) {
+    const now = Date.now();
+    // Long polling and streams never finish; only recent requests hold the evidence back.
+    if ([...pending.values()].some((started) => now - started < 10000)) quietSince = now;
+    else if (now - quietSince >= QUIET_MS) break;
+    await pause(100);
+  }
+  const options = { busy: BUSY, idle: IDLE, quietMs: QUIET_MS, markIdle: false };
+  try {
+    await page.waitForFunction(pageSettled, options, {
+      timeout: Math.max(deadline - Date.now(), 500),
+      polling: 100,
+    });
+  } catch {
+    await page.evaluate(pageSettled, { ...options, markIdle: true }).catch(() => undefined);
+  }
+}
+
+/* Runs in the page: marks the visible elements of a locator and, when the first one is not
+   fully visible (also inside scrolled tables and panels), scrolls it to the center. */
+function markInspected(nodes: Element[], options: { mark: string; limit: number }): number {
+  const shown = (node: Element) => {
+    const rect = node.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return node;
+    // Custom elements and wrappers with display: contents take the box of their content.
+    for (const child of Array.from(node.children)) {
+      const box = child.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0) return child;
+    }
+    return null;
+  };
+  const visibleArea = (node: Element) => {
+    const rect = node.getBoundingClientRect();
+    let left = Math.max(rect.left, 0);
+    let top = Math.max(rect.top, 0);
+    let right = Math.min(rect.right, innerWidth);
+    let bottom = Math.min(rect.bottom, innerHeight);
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+      const box = parent.getBoundingClientRect();
+      left = Math.max(left, box.left);
+      top = Math.max(top, box.top);
+      right = Math.min(right, box.right);
+      bottom = Math.min(bottom, box.bottom);
+    }
+    const full = rect.width * rect.height;
+    return full ? (Math.max(0, right - left) * Math.max(0, bottom - top)) / full : 0;
+  };
+  let marked = 0;
+  for (const node of nodes) {
+    if (marked >= options.limit) break;
+    const target = shown(node);
+    if (!target || !target.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+    if (marked === 0 && visibleArea(target) < 0.9)
+      target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    target.setAttribute(options.mark, '');
+    marked += 1;
+  }
+  return marked;
+}
+
+/* Runs in the page: draws a red box over every marked element, above any clipping or overlay. */
+function drawEvidence(options: { mark: string; overlay: string }): void {
+  document.getElementById(options.overlay)?.remove();
+  const layer = document.createElement('div');
+  layer.id = options.overlay;
+  layer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
+  for (const node of Array.from(document.querySelectorAll('[' + options.mark + ']'))) {
+    const rect = node.getBoundingClientRect();
+    let left = Math.max(rect.left, 0);
+    let top = Math.max(rect.top, 0);
+    let right = Math.min(rect.right, innerWidth);
+    let bottom = Math.min(rect.bottom, innerHeight);
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+      const box = parent.getBoundingClientRect();
+      left = Math.max(left, box.left);
+      top = Math.max(top, box.top);
+      right = Math.min(right, box.right);
+      bottom = Math.min(bottom, box.bottom);
+    }
+    if (right <= left || bottom <= top) continue;
+    const frame = document.createElement('div');
+    frame.style.cssText = 'position:fixed;box-sizing:border-box;border:3px solid #e11d48;border-radius:4px;' +
+      'box-shadow:0 0 0 1px rgba(255,255,255,.85);' +
+      'left:' + (left - 4) + 'px;top:' + (top - 4) + 'px;width:' + (right - left + 8) + 'px;height:' + (bottom - top + 8) + 'px;';
+    layer.appendChild(frame);
+  }
+  if (layer.childElementCount) document.documentElement.appendChild(layer);
+}
+
+function clearEvidence(options: { mark: string; overlay: string }): void {
+  document.getElementById(options.overlay)?.remove();
+  for (const node of Array.from(document.querySelectorAll('[' + options.mark + ']'))) node.removeAttribute(options.mark);
+}
+
+function tracked<T extends object>(target: T): T {
+  return new Proxy(target, {
+    apply: (fn, thisArg, args: unknown[]) => {
+      rememberAsserted(args[0]);
+      return Reflect.apply(fn as (...items: unknown[]) => unknown, thisArg, args);
+    },
+  });
+}
+
+export const expect = new Proxy(tracked(baseExpect), {
+  get: (target, property, receiver) => {
+    const value = Reflect.get(target, property, receiver);
+    return property === 'soft' && typeof value === 'function' ? tracked(value) : value;
+  },
+});
+
+/** Scrolls to the asserted elements and boxes them; false when none of them is showing. */
+async function highlightAsserted(page: Page): Promise<boolean> {
+  let marked = 0;
+  for (const locator of asserted) {
+    try {
+      if (locator.page() !== page) continue;
+      marked += await locator.evaluateAll(markInspected, { mark: MARK, limit: MAX_MARKED });
+    } catch {
+      // An element that detached or never rendered is left out of the evidence.
+    }
+  }
+  if (!marked) return false;
+  for (const frame of page.frames())
+    await frame.evaluate(drawEvidence, { mark: MARK, overlay: OVERLAY }).catch(() => undefined);
+  return true;
+}
+
+async function clearHighlight(page: Page): Promise<void> {
+  for (const frame of page.frames())
+    await frame.evaluate(clearEvidence, { mark: MARK, overlay: OVERLAY }).catch(() => undefined);
+}
+
 const extended = ${fixture};
 type StepBody = (...args: unknown[]) => unknown;
 const runStep = extended.step as unknown as (title: string, body: StepBody, options?: unknown) => Promise<unknown>;
@@ -630,6 +876,7 @@ async function step(title: string, body: StepBody, options?: unknown): Promise<u
   if (depth > 0) return runStep(title, body, options);
   depth += 1;
   browserDiagnostics = [];
+  asserted = [];
   const index = ++position;
   const started = Date.now();
   let failure: unknown = null;
@@ -643,13 +890,19 @@ async function step(title: string, body: StepBody, options?: unknown): Promise<u
     fs.mkdirSync(directory, { recursive: true });
     let screenshot: string | null = null;
     if (currentPage && !currentPage.isClosed()) {
+      const page = currentPage;
       const file = 'step-' + String(index).padStart(2, '0') + '.png';
+      // The step may end on a navigation or a request still loading its data.
+      await settle(page);
+      const highlighted = await highlightAsserted(page);
       try {
-        await currentPage.screenshot({ path: path.join(directory, file), timeout: 5000 });
+        await page.screenshot({ path: path.join(directory, file), timeout: 5000, animations: 'disabled' });
         screenshot = file;
       } catch {
         // Evidence is best effort; the outcome of the step is still recorded.
       }
+      if (highlighted) await pause(withinTimeout(EVIDENCE_HOLD_MS));
+      await clearHighlight(page);
     }
     const message = failure instanceof Error ? failure.message : failure ? String(failure) : null;
     let browserAddress: string | null = null;

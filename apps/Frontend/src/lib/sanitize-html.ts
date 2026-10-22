@@ -1,3 +1,5 @@
+import { isSafeImageSource } from '../features/shared/media.js';
+
 const removedTags = new Set([
   'SCRIPT',
   'STYLE',
@@ -31,6 +33,7 @@ const allowedTags = new Set([
   'H6',
   'HR',
   'I',
+  'IMG',
   'INS',
   'KBD',
   'LI',
@@ -60,10 +63,11 @@ const allowedAttributes: Readonly<Record<string, readonly string[]>> = {
   TD: ['colspan', 'rowspan'],
   TH: ['colspan', 'rowspan'],
   DETAILS: ['open'],
+  IMG: ['src', 'alt', 'title', 'width', 'height'],
 };
 
 export const INLINE_HTML_TAG =
-  /<\/?(?:a|abbr|b|br|code|del|em|i|ins|kbd|mark|s|small|span|strong|sub|sup|u)\b[^>]*>/i;
+  /<\/?(?:a|abbr|b|br|code|del|em|i|img|ins|kbd|mark|s|small|span|strong|sub|sup|u)\b[^>]*>/i;
 
 /** Keeps a conservative subset of HTML, drops scripts/attributes and makes links open safely. */
 export function sanitizeHtml(value: string): string {
@@ -81,6 +85,10 @@ export function sanitizeHtml(value: string): string {
     const keep = allowedAttributes[element.tagName] ?? [];
     for (const attribute of [...element.attributes]) {
       if (!keep.includes(attribute.name)) element.removeAttribute(attribute.name);
+    }
+    if (element.tagName === 'IMG' && !isSafeImageSource(element.getAttribute('src') ?? '')) {
+      element.remove();
+      continue;
     }
     if (element.tagName === 'A') {
       const href = element.getAttribute('href')?.trim() ?? '';

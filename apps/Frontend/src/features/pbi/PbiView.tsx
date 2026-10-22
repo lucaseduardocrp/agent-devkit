@@ -16,6 +16,7 @@ import { Button } from '../../components/ui/button.js';
 import { ActionsMenu } from '../../components/ui/actions-menu.js';
 import { Input } from '../../components/ui/input.js';
 import { Select } from '../../components/ui/select.js';
+import { Pagination, PagingSentinel, usePaging } from '../../components/ui/pagination.js';
 import { Modal } from '../../components/ui/modal.js';
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog.js';
 import { SkeletonCard } from '../../components/ui/skeleton.js';
@@ -29,6 +30,15 @@ import { HistoryViewer } from '../audit/HistoryViewer.js';
 import { usePermissions } from '../workspaces/permissions.js';
 import { PbiPushDialog } from './PbiPushDialog.js';
 import { PbiLinks } from './PbiLinks.js';
+import { AttachmentPanel } from '../shared/AttachmentPanel.js';
+import {
+  discardDrafts,
+  editorHtml,
+  isSafeImageSource,
+  saveWithDrafts,
+  useInlineImages,
+  useRichTextImageInput,
+} from '../shared/media.js';
 
 interface Props {
   apiClient: ApiClient;
@@ -256,6 +266,7 @@ const allowedHtmlTags = new Set([
   'H5',
   'H6',
   'HR',
+  'IMG',
   'I',
   'LI',
   'OL',
@@ -322,6 +333,14 @@ function sanitizeHtml(value: string): string {
           element.removeAttribute('href');
         continue;
       }
+      if (element.tagName === 'IMG' && ['alt', 'title'].includes(attribute.name)) continue;
+      // Invalid image sources are removed below.
+      if (
+        element.tagName === 'IMG' &&
+        attribute.name === 'src' &&
+        isSafeImageSource(attribute.value)
+      )
+        continue;
       if (attribute.name !== 'style') element.removeAttribute(attribute.name);
     }
     const styles: string[] = [];
@@ -418,6 +437,7 @@ const emptyForm: ItemForm = {
   description: '',
   status: 'backlog',
   parentId: null,
+  attachments: [],
 };
 const copy = {
   'pt-BR': {
@@ -467,11 +487,6 @@ const copy = {
     saveItem: 'Salvar item',
     agentError: 'Não foi possível carregar os agentes.',
     perPage: 'PBIs por página',
-    showing: 'Exibindo',
-    of: 'de',
-    previousPage: 'Página anterior',
-    nextPage: 'Próxima página',
-    page: 'Página',
     expand: 'Expandir',
     collapse: 'Recolher',
     addCard: 'Adicionar card',
@@ -547,11 +562,6 @@ const copy = {
     saveItem: 'Save item',
     agentError: 'Could not load agents.',
     perPage: 'PBIs per page',
-    showing: 'Showing',
-    of: 'of',
-    previousPage: 'Previous page',
-    nextPage: 'Next page',
-    page: 'Page',
     expand: 'Expand',
     collapse: 'Collapse',
     addCard: 'Add card',
@@ -623,8 +633,6 @@ export function PbiView({
   const iterationTouched = useRef(false);
   const expandedWorkspace = useRef<string | null>(null);
   const mounted = useRef(false);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [visibleColumns, setVisibleColumns] = useState<ColumnId[]>(() => readColumns(workspaceId));
   const [columnWidths, setColumnWidths] = useState<Record<ColumnId, number>>(() =>
@@ -654,6 +662,10 @@ export function PbiView({
   const [deleteItem, setDeleteItem] = useState<PbiItem | null>(null);
   const descriptionEditorRef = useRef<HTMLDivElement>(null);
   const formOpen = Boolean(form);
+  useInlineImages(descriptionEditorRef, form?.description);
+  const descriptionImages = useRichTextImageInput('pbi', descriptionEditorRef, (html) =>
+    setForm((current) => (current ? { ...current, description: sanitizeHtml(html) } : current)),
+  );
 
   useEffect(() => {
     mounted.current = true;
@@ -809,9 +821,6 @@ export function PbiView({
       active = false;
     };
   }, [apiClient, form?.id, commentsRequest, c.commentsError]);
-  useEffect(() => {
-    setPage(1);
-  }, [query, sourceFilter, statusFilter, iterationFilter, assigneeFilter, pageSize]);
   const showColumn = (id: ColumnId) => id === 'actions' || visibleColumns.includes(id);
   const toggleExpanded = (id: string) => {
     setExpanded((current) => {
@@ -1007,8 +1016,11 @@ export function PbiView({
     () => (children.get(null) ?? []).filter((item) => !shownIds || shownIds.has(item.id)),
     [children, shownIds],
   );
-  const pageCount = Math.max(1, Math.ceil(filteredRoots.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
+  // Root items are paged (or loaded while scrolling); their expanded subtrees come along.
+  const paging = usePaging(filteredRoots.length, {
+    storageKey: `adk:pbi-paging:${workspaceId ?? 'default'}`,
+    resetKey: JSON.stringify([query, sourceFilter, statusFilter, iterationFilter, assigneeFilter]),
+  });
   const visible = useMemo(() => {
     const rows: { item: PbiItem; depth: number }[] = [];
     const visit = (parentId: string, depth: number) => {
@@ -1018,13 +1030,13 @@ export function PbiView({
         if (expanded.has(item.id)) visit(item.id, depth + 1);
       }
     };
-    const pageRoots = filteredRoots.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+    const pageRoots = filteredRoots.slice(paging.start, paging.end);
     for (const root of pageRoots) {
       rows.push({ item: root, depth: 0 });
       if (expanded.has(root.id)) visit(root.id, 1);
     }
     return rows;
-  }, [children, currentPage, expanded, filteredRoots, shownIds, pageSize]);
+  }, [children, paging.start, paging.end, expanded, filteredRoots, shownIds]);
   const visibleChildren = useMemo(() => {
     const map = new Map<string, typeof visible>();
     for (const row of visible) {
@@ -1078,11 +1090,23 @@ export function PbiView({
         if (mounted.current) setPulling(false);
       });
   };
+  /** Closing the form without saving drops what was typed, pasted and attached. */
+  const closeForm = () => {
+    if (form) {
+      const editorValue = descriptionEditorRef.current
+        ? editorHtml(descriptionEditorRef.current)
+        : form.description;
+      discardDrafts({ ...form, description: editorValue });
+    }
+    setForm(null);
+  };
   const save = (event: FormEvent) => {
     event.preventDefault();
     if (!form) return;
     void runAction(async () => {
-      const editorValue = descriptionEditorRef.current?.innerHTML ?? form.description ?? '';
+      const editorValue = descriptionEditorRef.current
+        ? editorHtml(descriptionEditorRef.current)
+        : (form.description ?? '');
       const { id, kind, sourceData, ...fields } = form;
       const values = {
         ...fields,
@@ -1094,8 +1118,16 @@ export function PbiView({
           adkCardType: sourceText(sourceData?.adkCardType),
         },
       };
-      if (id) await apiClient.updatePbiItem(id, values);
-      else await apiClient.createPbiItem({ ...values, kind });
+      // Pasted and attached files are drafts until this save uploads them.
+      await saveWithDrafts(
+        apiClient,
+        'pbi',
+        { description: values.description, attachments: values.attachments },
+        (files) =>
+          id
+            ? apiClient.updatePbiItem(id, { ...values, ...files })
+            : apiClient.createPbiItem({ ...values, ...files, kind }),
+      );
       if (fields.parentId) setExpanded((current) => new Set(current).add(fields.parentId!));
       setForm(null);
       await load();
@@ -1140,25 +1172,44 @@ export function PbiView({
           });
       });
   };
+  /** The item with every field: the list only carries an excerpt of each description. */
+  const fullItem = (item: PbiItem): Promise<PbiItem> =>
+    item.partial ? apiClient.getPbiItem(item.id) : Promise.resolve(item);
+  /** Calls `open` with the full item: at once when it is loaded, after fetching it otherwise. */
+  const withFullItem = (item: PbiItem, open: (full: PbiItem) => void) => {
+    if (!item.partial) {
+      open(item);
+      return;
+    }
+    void runAction(async () => {
+      const full = await fullItem(item);
+      if (mounted.current) open(full);
+    });
+  };
   const openPush = (item: PbiItem) => {
     const first = providers[0];
     if (!first) {
       setError(c.configureForPush);
       return;
     }
-    setPushItem(item);
+    withFullItem(item, setPushItem);
   };
+  // The form opens with the full item only: saving a list item would overwrite its
+  // description and provider fields with the excerpt.
   const editItem = (item: PbiItem) =>
-    setForm({
-      id: item.id,
-      kind: item.kind,
-      title: item.title,
-      description: item.description,
-      status: item.status,
-      parentId: item.parentId,
-      position: item.position,
-      sourceData: item.sourceData,
-    });
+    withFullItem(item, (full) =>
+      setForm({
+        id: full.id,
+        kind: full.kind,
+        title: full.title,
+        description: full.description,
+        status: full.status,
+        parentId: full.parentId,
+        position: full.position,
+        sourceData: full.sourceData,
+        attachments: full.attachments,
+      }),
+    );
   const openItem = (id: string) => {
     const target = itemsRef.current.find((entry) => entry.id === id);
     if (target) editItem(target);
@@ -1169,9 +1220,12 @@ export function PbiView({
       setNotice(c.issueCreated);
       onOpenIssues?.();
     });
-  const createTests = (item: PbiItem) =>
+  const createTests = (listed: PbiItem) =>
     void runAction(async () => {
-      const { descendants } = await apiClient.getPbiContext(item.id);
+      const [item, { descendants }] = await Promise.all([
+        fullItem(listed),
+        apiClient.getPbiContext(listed.id),
+      ]);
       const prompt = [
         item.title,
         item.description,
@@ -1677,44 +1731,39 @@ export function PbiView({
                                 </span>
                               </td>
                             )}
-                            <td className="overflow-hidden px-3 py-2">
-                              <div className="flex items-center gap-2">
-                                <div className="min-w-0 max-w-full overflow-hidden">
+                            <td className="min-w-0 overflow-hidden px-3 py-2">
+                              <div className="min-w-0 max-w-full overflow-hidden">
+                                <div className="flex min-w-0 items-center gap-2">
                                   <Button
                                     variant="link"
-                                    className="h-auto max-w-full truncate p-0 text-left font-medium text-[var(--text-primary)] no-underline hover:text-[var(--text-primary)]"
+                                    className="h-auto min-w-0 flex-1 justify-start overflow-hidden p-0 text-left font-medium text-[var(--text-primary)] no-underline hover:text-[var(--text-primary)]"
+                                    title={item.title}
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      setForm({
-                                        id: item.id,
-                                        kind: item.kind,
-                                        title: item.title,
-                                        description: item.description,
-                                        status: item.status,
-                                        parentId: item.parentId,
-                                        position: item.position,
-                                        sourceData: item.sourceData,
-                                      });
+                                      editItem(item);
                                     }}
                                   >
-                                    {item.title}
+                                    <span className="block min-w-0 truncate">{item.title}</span>
                                   </Button>
                                   {(children.get(item.id)?.length ?? 0) > 0 && (
-                                    <span className="ml-2 rounded-full bg-[var(--surface-2)] px-1.5 text-xs text-[var(--text-muted)]">
+                                    <span className="shrink-0 rounded-full bg-[var(--surface-2)] px-1.5 text-xs text-[var(--text-muted)]">
                                       {children.get(item.id)?.length}
                                     </span>
                                   )}
-                                  {descriptionText.get(item.id) && (
-                                    <div className="max-w-full truncate text-xs text-[var(--text-muted)]">
-                                      {descriptionText.get(item.id)}
-                                    </div>
-                                  )}
                                 </div>
+                                {descriptionText.get(item.id) && (
+                                  <div className="max-w-full truncate text-xs text-[var(--text-muted)]">
+                                    {descriptionText.get(item.id)}
+                                  </div>
+                                )}
                               </div>
                             </td>
                             {showColumn('state') && (
-                              <td className="px-3 py-2">
-                                <span className="rounded-full bg-[var(--surface-2)] px-2 py-1 text-xs">
+                              <td className="overflow-hidden px-3 py-2">
+                                <span
+                                  className="inline-block max-w-full truncate whitespace-nowrap rounded-full bg-[var(--surface-2)] px-2 py-1 text-xs align-middle"
+                                  title={item.status}
+                                >
                                   {item.status}
                                 </span>
                               </td>
@@ -1796,18 +1845,7 @@ export function PbiView({
                                     variant="ghost"
                                     role="menuitem"
                                     className="flex w-full justify-start text-left"
-                                    onClick={() =>
-                                      setForm({
-                                        id: item.id,
-                                        kind: item.kind,
-                                        title: item.title,
-                                        description: item.description,
-                                        status: item.status,
-                                        parentId: item.parentId,
-                                        position: item.position,
-                                        sourceData: item.sourceData,
-                                      })
-                                    }
+                                    onClick={() => editItem(item)}
                                   >
                                     <i className="ti ti-pencil" aria-hidden="true" />{' '}
                                     {t('common.edit')}
@@ -1916,56 +1954,8 @@ export function PbiView({
                 </tbody>
               </table>
             </div>
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm">
-              <div className="flex flex-wrap items-center gap-3 text-[var(--text-muted)]">
-                <span>
-                  {c.showing} {filteredRoots.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}–
-                  {Math.min(currentPage * pageSize, filteredRoots.length)} {c.of}{' '}
-                  {filteredRoots.length}
-                </span>
-                <label className="flex items-center gap-2">
-                  {c.perPage}
-                  <Select
-                    aria-label={c.perPage}
-                    value={pageSize}
-                    onChange={(event) => setPageSize(Number(event.target.value))}
-                    containerClassName="w-24"
-                    selectSize="sm"
-                  >
-                    {[25, 50, 100].map((size) => (
-                      <option key={size} value={size}>
-                        {size}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  aria-label={c.previousPage}
-                  disabled={currentPage <= 1}
-                  onClick={() => setPage((value) => Math.max(1, value - 1))}
-                >
-                  <i className="ti ti-chevron-left" aria-hidden="true" />
-                </Button>
-                <span className="text-[var(--text-muted)]">
-                  {c.page} {currentPage} {c.of} {pageCount}
-                </span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  aria-label={c.nextPage}
-                  disabled={currentPage >= pageCount}
-                  onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
-                >
-                  <i className="ti ti-chevron-right" aria-hidden="true" />
-                </Button>
-              </div>
-            </div>
+            <PagingSentinel paging={paging} />
+            <Pagination paging={paging} perPageLabel={c.perPage} className="mt-3" />
           </section>
           <aside className="h-fit rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4">
             <section>
@@ -1987,7 +1977,7 @@ export function PbiView({
         </div>
       )}
 
-      <Modal open={Boolean(form)} onClose={() => setForm(null)} labelledBy="pbi-item-title">
+      <Modal open={Boolean(form)} onClose={closeForm} labelledBy="pbi-item-title">
         {form && (
           <form
             onSubmit={save}
@@ -2003,7 +1993,7 @@ export function PbiView({
                 variant="ghost"
                 size="icon"
                 aria-label={t('common.close')}
-                onClick={() => setForm(null)}
+                onClick={closeForm}
               >
                 <i className="ti ti-x" aria-hidden="true" />
               </Button>
@@ -2032,7 +2022,7 @@ export function PbiView({
                   resolveValue={resolveAuditValue}
                 />
               )}
-              <Button type="button" variant="ghost" onClick={() => setForm(null)}>
+              <Button type="button" variant="ghost" onClick={closeForm}>
                 {t('common.cancel')}
               </Button>
               {!isReadOnly && (
@@ -2095,11 +2085,23 @@ export function PbiView({
                   contentEditable={!isReadOnly}
                   suppressContentEditableWarning
                   onBlur={(event) =>
-                    setForm({ ...form, description: sanitizeHtml(event.currentTarget.innerHTML) })
+                    setForm({ ...form, description: sanitizeHtml(editorHtml(event.currentTarget)) })
                   }
+                  onPaste={isReadOnly ? undefined : descriptionImages.onPaste}
+                  onDrop={isReadOnly ? undefined : descriptionImages.onDrop}
                   dangerouslySetInnerHTML={{ __html: formatDescription(form.description ?? '') }}
                   className="min-h-[220px] max-w-none overflow-x-auto overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm leading-6 text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-accent)] lg:min-h-[360px] [&_a]:text-[var(--text-accent)] [&_a]:underline [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-[var(--border-strong)] [&_blockquote]:pl-4 [&_code]:rounded [&_code]:bg-[var(--surface-1)] [&_code]:px-1 [&_code]:font-mono [&_h1]:my-4 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:my-4 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:my-3 [&_h3]:font-semibold [&_h4]:my-3 [&_h4]:font-semibold [&_h5]:my-2 [&_h5]:font-semibold [&_h6]:my-2 [&_h6]:font-semibold [&_hr]:my-4 [&_hr]:border-[var(--border)] [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-3 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-[var(--surface-1)] [&_pre]:p-3 [&_table]:my-4 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--border)] [&_td]:p-2 [&_th]:border [&_th]:border-[var(--border)] [&_th]:p-2 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6"
                 />
+                <div className="mt-6 border-t border-[var(--border)] pt-4">
+                  <AttachmentPanel
+                    apiClient={apiClient}
+                    scope="pbi"
+                    attachments={form.attachments ?? []}
+                    disabled={isReadOnly}
+                    onChange={(attachments) => setForm({ ...form, attachments })}
+                    onInsertInline={descriptionImages.insertAttachment}
+                  />
+                </div>
                 {form.id && (
                   <section
                     className="mt-6 border-t border-[var(--border)] pt-4"
@@ -2337,18 +2339,7 @@ export function PbiView({
                           type="button"
                           variant="ghost"
                           className="flex h-auto w-full min-w-0 justify-start gap-2 whitespace-normal text-left"
-                          onClick={() =>
-                            setForm({
-                              id: child.id,
-                              kind: child.kind,
-                              title: child.title,
-                              description: child.description,
-                              status: child.status,
-                              parentId: child.parentId,
-                              position: child.position,
-                              sourceData: child.sourceData,
-                            })
-                          }
+                          onClick={() => editItem(child)}
                         >
                           <i className="ti ti-file-description shrink-0" aria-hidden="true" />
                           <span className="min-w-0 break-words">{child.title}</span>

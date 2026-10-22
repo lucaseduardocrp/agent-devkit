@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { ApiClient } from '../../lib/api-client.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import { Select } from '../../components/ui/select.js';
+import { Pagination, PagingSentinel, usePaging } from '../../components/ui/pagination.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Modal } from '../../components/ui/modal.js';
 import { Skeleton, SkeletonCard } from '../../components/ui/skeleton.js';
@@ -14,6 +15,17 @@ import type { PbiItem } from '../pbi/pbi-types.js';
 import type { WorkspaceMember } from '../workspaces/workspace-types.js';
 import { HistoryViewer } from '../audit/HistoryViewer.js';
 import { usePermissions } from '../workspaces/permissions.js';
+import { AttachmentPanel } from '../shared/AttachmentPanel.js';
+import type { ImageAttachment } from '../shared/image-attachment-types.js';
+import {
+  ImageInputStatus,
+  discardDrafts,
+  isSafeImageSource,
+  markdownImage,
+  useInlineImages,
+  useMarkdownImageInput,
+  saveWithDrafts,
+} from '../shared/media.js';
 import type {
   AgentRun,
   DashboardSummary,
@@ -39,6 +51,12 @@ const statusOrder: IssueStatus[] = [
   'cancelled',
 ];
 const priorityOrder: IssuePriority[] = ['urgent', 'high', 'medium', 'low'];
+const activeRunStatuses: AgentRun['status'][] = [
+  'queued',
+  'running',
+  'waiting_review',
+  'waiting_input',
+];
 
 function formatIssueDescription(value: string): string {
   if (typeof DOMParser === 'undefined') return value.replace(/<[^>]*>/g, ' ');
@@ -53,7 +71,7 @@ function formatIssueDescription(value: string): string {
       continue;
     }
     if (
-      !/^(A|B|BLOCKQUOTE|BR|CODE|DIV|EM|H[1-6]|HR|I|LI|OL|P|PRE|S|SPAN|STRONG|TABLE|TBODY|TD|TFOOT|TH|THEAD|TR|U|UL)$/.test(
+      !/^(A|B|BLOCKQUOTE|BR|CODE|DIV|EM|H[1-6]|HR|I|IMG|LI|OL|P|PRE|S|SPAN|STRONG|TABLE|TBODY|TD|TFOOT|TH|THEAD|TR|U|UL)$/.test(
         element.tagName,
       )
     ) {
@@ -67,14 +85,42 @@ function formatIssueDescription(value: string): string {
         /^(https?:|mailto:|tel:|\/|#|\.\.?\/)/i.test(attribute.value.trim())
       )
         continue;
+      if (element.tagName === 'IMG' && ['alt', 'title'].includes(attribute.name)) continue;
+      // Invalid image sources are removed below.
+      if (
+        element.tagName === 'IMG' &&
+        attribute.name === 'src' &&
+        isSafeImageSource(attribute.value)
+      )
+        continue;
       element.removeAttribute(attribute.name);
     }
   }
   return parsed.body.innerHTML;
 }
 
+interface IssueForm {
+  title: string;
+  description: string;
+  attachments: readonly ImageAttachment[];
+  status: IssueStatus;
+  priority: IssuePriority;
+  assigneeAgentId: string;
+  assigneeUserId: string;
+}
+
+const emptyIssueForm: IssueForm = {
+  title: '',
+  description: '',
+  attachments: [],
+  status: 'todo',
+  priority: 'medium',
+  assigneeAgentId: '',
+  assigneeUserId: '',
+};
+
 function isHtmlDescription(value: string): boolean {
-  return /<\/?(?:a|b|blockquote|br|code|div|em|h[1-6]|hr|i|li|ol|p|pre|span|strong|table|td|th|tr|u|ul)\b[^>]*>/i.test(
+  return /<\/?(?:a|b|blockquote|br|code|div|em|h[1-6]|hr|i|img|li|ol|p|pre|span|strong|table|td|th|tr|u|ul)\b[^>]*>/i.test(
     value.replace(/&lt;/gi, '<').replace(/&gt;/gi, '>'),
   );
 }
@@ -84,6 +130,7 @@ const copy = {
     dashboard: 'Dashboard',
     inbox: 'Inbox',
     issues: 'Issues',
+    perPage: 'Issues por página',
     newIssue: 'Nova issue',
     agents: 'Agentes',
     recentIssues: 'Issues recentes',
@@ -100,6 +147,8 @@ const copy = {
     noIssues: 'Nenhuma issue encontrada.',
     createFirst: 'Crie a primeira issue para começar.',
     mine: 'Minhas',
+    inboxEmpty: 'Nenhuma execução foi feita enquanto uma issue estava atribuída a você.',
+    runCount: (count: number) => (count === 1 ? '1 execução' : `${count} execuções`),
     recent: 'Recentes',
     unread: 'Não lidas',
     blocked: 'Bloqueadas',
@@ -176,9 +225,22 @@ const copy = {
     startRun: 'Executar agente',
     cancelRun: 'Cancelar execução',
     noRuns: 'Nenhuma execução ainda.',
+    stepProgress: 'Etapa',
+    of: 'de',
+    approveAndContinue: 'Aprovar e continuar',
+    approveFinal: 'Aprovar resultado final',
+    revisionPlaceholder: 'Descreva o ajuste necessário...',
+    requestRevision: 'Pedir ajuste',
+    answerQuestion: 'Responder ao agente',
+    answerPlaceholder: 'Escreva sua resposta para continuar esta etapa...',
+    submitAnswer: 'Enviar resposta',
+    waitingForReview: 'Revise o resultado desta etapa para liberar a próxima.',
+    waitingForAnswer: 'O agente pausou porque precisa desta informação:',
     runStatus: {
       queued: 'Na fila',
       running: 'Executando',
+      waiting_review: 'Aguardando sua aprovação',
+      waiting_input: 'Aguardando sua resposta',
       succeeded: 'Concluída',
       failed: 'Falhou',
       cancelled: 'Cancelada',
@@ -199,6 +261,7 @@ const copy = {
     dashboard: 'Dashboard',
     inbox: 'Inbox',
     issues: 'Issues',
+    perPage: 'Issues per page',
     newIssue: 'New issue',
     agents: 'Agents',
     recentIssues: 'Recent issues',
@@ -215,6 +278,8 @@ const copy = {
     noIssues: 'No issues found.',
     createFirst: 'Create your first issue to get started.',
     mine: 'Mine',
+    inboxEmpty: 'No runs were executed while an issue was assigned to you.',
+    runCount: (count: number) => (count === 1 ? '1 run' : `${count} runs`),
     recent: 'Recent',
     unread: 'Unread',
     blocked: 'Blocked',
@@ -291,9 +356,22 @@ const copy = {
     startRun: 'Run agent',
     cancelRun: 'Cancel run',
     noRuns: 'No runs yet.',
+    stepProgress: 'Step',
+    of: 'of',
+    approveAndContinue: 'Approve and continue',
+    approveFinal: 'Approve final result',
+    revisionPlaceholder: 'Describe the change needed...',
+    requestRevision: 'Request changes',
+    answerQuestion: 'Answer the agent',
+    answerPlaceholder: 'Write your answer to continue this step...',
+    submitAnswer: 'Send answer',
+    waitingForReview: 'Review this step result to release the next step.',
+    waitingForAnswer: 'The agent paused because it needs this information:',
     runStatus: {
       queued: 'Queued',
       running: 'Running',
+      waiting_review: 'Waiting for your approval',
+      waiting_input: 'Waiting for your answer',
       succeeded: 'Succeeded',
       failed: 'Failed',
       cancelled: 'Cancelled',
@@ -363,6 +441,12 @@ function readSavedFilters(workspaceId: string | null): SavedIssueFilter[] {
   }
 }
 
+/** When an inbox item last changed: its newest run, or the issue itself when that is later. */
+function lastActivity(item: InboxItem): string {
+  const run = item.runs[0]?.createdAt;
+  return run && run > item.issue.updatedAt ? run : item.issue.updatedAt;
+}
+
 function relativeDate(value: string, locale: string): string {
   const time = new Date(value).getTime();
   if (!Number.isFinite(time)) return '';
@@ -423,6 +507,7 @@ export function WorkView({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedComments, setSelectedComments] = useState<readonly IssueComment[]>([]);
   const [selectedRuns, setSelectedRuns] = useState<readonly AgentRun[]>([]);
+  const [workflowAnswerDraft, setWorkflowAnswerDraft] = useState('');
   const [selectedDetailsLoading, setSelectedDetailsLoading] = useState(false);
   const [budgetDraft, setBudgetDraft] = useState('0');
   const [rateDraft, setRateDraft] = useState({
@@ -434,7 +519,11 @@ export function WorkView({
   const [commentText, setCommentText] = useState('');
   const [commentError, setCommentError] = useState<string | null>(null);
   const [editingDetails, setEditingDetails] = useState(false);
-  const [detailDraft, setDetailDraft] = useState({ title: '', description: '' });
+  const [detailDraft, setDetailDraft] = useState<{
+    title: string;
+    description: string;
+    attachments: readonly ImageAttachment[];
+  }>({ title: '', description: '', attachments: [] });
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState<Omit<IssueFilters, 'query'>>(emptyFilters);
   const [savedFilters, setSavedFilters] = useState<SavedIssueFilter[]>(() =>
@@ -445,21 +534,15 @@ export function WorkView({
   const canViewPbis = permissions.can('pbis');
   const [issuesView, setIssuesView] = useState<'list' | 'board'>('list');
   const [inboxTab, setInboxTab] = useState<InboxTab>('mine');
-  const [form, setForm] = useState<{
-    title: string;
-    description: string;
-    status: IssueStatus;
-    priority: IssuePriority;
-    assigneeAgentId: string;
-    assigneeUserId: string;
-  }>({
-    title: '',
-    description: '',
-    status: 'todo',
-    priority: 'medium',
-    assigneeAgentId: '',
-    assigneeUserId: '',
-  });
+  const [form, setForm] = useState<IssueForm>(emptyIssueForm);
+  const formImages = useMarkdownImageInput('issue', (description) =>
+    setForm((current) => ({ ...current, description })),
+  );
+  const detailImages = useMarkdownImageInput('issue', (description) =>
+    setDetailDraft((current) => ({ ...current, description })),
+  );
+  const appendImage = (description: string, attachment: ImageAttachment) =>
+    `${description.trimEnd()}${description.trim() ? '\n\n' : ''}${markdownImage(attachment)}\n`;
 
   const reload = useCallback(
     async (signal?: AbortSignal) => {
@@ -568,6 +651,8 @@ export function WorkView({
   }, [newIssueRequest, onNewIssueHandled]);
 
   const selectedIssue = issues.find((issue) => issue.id === selectedId) ?? null;
+  const issueDescriptionRef = useRef<HTMLDivElement>(null);
+  useInlineImages(issueDescriptionRef, selectedIssue?.description);
   const selectedInbox = inbox.find((item) => item.issue.id === selectedId);
 
   const openIssue = async (issue: Issue) => {
@@ -577,8 +662,13 @@ export function WorkView({
     setCommentError(null);
     setSelectedRuns([]);
     setSelectedDetailsLoading(true);
+    discardDrafts(detailDraft);
     setEditingDetails(false);
-    setDetailDraft({ title: issue.title, description: issue.description });
+    setDetailDraft({
+      title: issue.title,
+      description: issue.description,
+      attachments: issue.attachments ?? [],
+    });
     setError(null);
     try {
       const [detail, runs] = await Promise.all([
@@ -615,26 +705,37 @@ export function WorkView({
     }
   };
 
+  /** Cancelling the composer drops what was typed, pasted and attached. */
+  const closeComposer = () => {
+    discardDrafts(form);
+    setForm(emptyIssueForm);
+    setComposerOpen(false);
+  };
+  const cancelDetailEdit = () => {
+    discardDrafts(detailDraft);
+    setEditingDetails(false);
+  };
+
   const createIssue = async (event: FormEvent) => {
     event.preventDefault();
     await runAction(async () => {
-      const issue = await apiClient.createIssue({
-        title: form.title.trim(),
-        description: form.description,
-        status: form.status,
-        priority: form.priority,
-        assigneeAgentId: form.assigneeAgentId || null,
-        assigneeUserId: form.assigneeUserId || null,
-      });
+      // Pasted and attached files are drafts until this save uploads them.
+      const issue = await saveWithDrafts(
+        apiClient,
+        'issue',
+        { description: form.description, attachments: form.attachments },
+        (files) =>
+          apiClient.createIssue({
+            title: form.title.trim(),
+            ...files,
+            status: form.status,
+            priority: form.priority,
+            assigneeAgentId: form.assigneeAgentId || null,
+            assigneeUserId: form.assigneeUserId || null,
+          }),
+      );
       setComposerOpen(false);
-      setForm({
-        title: '',
-        description: '',
-        status: 'todo',
-        priority: 'medium',
-        assigneeAgentId: '',
-        assigneeUserId: '',
-      });
+      setForm(emptyIssueForm);
       setSelectedId(issue.id);
       setSelectedComments([]);
       onOpenIssues?.();
@@ -770,14 +871,10 @@ export function WorkView({
       inbox
         .filter((item) => {
           if (item.archivedAt && inboxTab !== 'all') return false;
-          if (inboxTab === 'mine')
-            return (
-              item.issue.createdBy === currentUserId || item.issue.assigneeUserId === currentUserId
-            );
           if (inboxTab === 'unread') return !item.readAt;
           if (inboxTab === 'blocked') return item.issue.status === 'blocked';
           if (inboxTab === 'recent')
-            return new Date(item.issue.updatedAt).getTime() >= Date.now() - 14 * 86400000;
+            return new Date(lastActivity(item)).getTime() >= Date.now() - 14 * 86400000;
           return true;
         })
         .filter((item) =>
@@ -785,8 +882,18 @@ export function WorkView({
             .toLocaleLowerCase(locale)
             .includes(search.toLocaleLowerCase(locale)),
         ),
-    [inbox, inboxTab, currentUserId, search, locale],
+    [inbox, inboxTab, search, locale],
   );
+
+  const issuesPaging = usePaging(filteredIssues.length, {
+    storageKey: `adk:issues-paging:${workspaceId ?? 'default'}`,
+    resetKey: JSON.stringify([search, filters]),
+  });
+  const inboxPaging = usePaging(filteredInbox.length, {
+    storageKey: `adk:inbox-paging:${workspaceId ?? 'default'}`,
+    resetKey: JSON.stringify([search, inboxTab]),
+  });
+  const listPaging = tab === 'issues' ? issuesPaging : inboxPaging;
 
   const issueRow = (issue: Issue, item?: InboxItem) => (
     <div
@@ -822,11 +929,19 @@ export function WorkView({
           {issue.title}
         </span>
       </Button>
+      {item?.runs[0] && (
+        <span
+          className="hidden shrink-0 text-xs text-[var(--text-secondary)] sm:inline"
+          data-testid={`inbox-runs-${issue.id}`}
+        >
+          {t.runCount(item.runs.length)} · {t.runStatus[item.runs[0].status]}
+        </span>
+      )}
       <span className="hidden rounded bg-[var(--surface-2)] px-2 py-0.5 text-xs text-[var(--text-secondary)] sm:inline">
         {t.statusNames[issue.status]}
       </span>
       <span className="hidden w-16 text-right text-xs text-[var(--text-muted)] md:inline">
-        {relativeDate(issue.updatedAt, locale)}
+        {relativeDate(item ? lastActivity(item) : issue.updatedAt, locale)}
       </span>
       {item && (
         <Button
@@ -1485,16 +1600,24 @@ export function WorkView({
           ) : (
             <div className={panel}>
               {tab === 'issues'
-                ? filteredIssues.map((issue) => issueRow(issue))
-                : filteredInbox.map((item) => issueRow(item.issue, item))}
+                ? filteredIssues
+                    .slice(issuesPaging.start, issuesPaging.end)
+                    .map((issue) => issueRow(issue))
+                : filteredInbox
+                    .slice(inboxPaging.start, inboxPaging.end)
+                    .map((item) => issueRow(item.issue, item))}
               {(tab === 'issues' ? filteredIssues.length : filteredInbox.length) === 0 &&
                 !loading && (
                   <div className="p-8 text-center text-sm text-[var(--text-muted)]">
-                    <p>{t.noIssues}</p>
-                    {!isReadOnly && <p className="mt-1">{t.createFirst}</p>}
+                    <p>{tab === 'inbox' ? t.inboxEmpty : t.noIssues}</p>
+                    {!isReadOnly && tab === 'issues' && <p className="mt-1">{t.createFirst}</p>}
                   </div>
                 )}
+              <PagingSentinel paging={listPaging} />
             </div>
+          )}
+          {(tab === 'inbox' || issuesView === 'list') && listPaging.total > 0 && (
+            <Pagination paging={listPaging} perPageLabel={t.perPage} />
           )}
           {tab === 'issues' &&
             issuesView === 'board' &&
@@ -1543,7 +1666,7 @@ export function WorkView({
 
       <Modal
         open={composerOpen && !isReadOnly}
-        onClose={() => setComposerOpen(false)}
+        onClose={closeComposer}
         labelledBy="issue-composer-title"
       >
         <form
@@ -1558,7 +1681,7 @@ export function WorkView({
               type="button"
               variant="ghost"
               size="icon"
-              onClick={() => setComposerOpen(false)}
+              onClick={closeComposer}
               aria-label={t.close}
             >
               <i className="ti ti-x" aria-hidden="true" />
@@ -1580,8 +1703,20 @@ export function WorkView({
               rows={5}
               value={form.description}
               onChange={(event) => setForm({ ...form, description: event.target.value })}
+              onPaste={formImages.onPaste}
+              onDrop={formImages.onDrop}
             />
+            <ImageInputStatus state={formImages} />
           </label>
+          <AttachmentPanel
+            apiClient={apiClient}
+            scope="issue"
+            attachments={form.attachments}
+            onChange={(attachments) => setForm({ ...form, attachments })}
+            onInsertInline={(attachment) =>
+              setForm({ ...form, description: appendImage(form.description, attachment) })
+            }
+          />
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1 text-sm">
               <span>{t.status}</span>
@@ -1637,7 +1772,7 @@ export function WorkView({
             </label>
           </div>
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => setComposerOpen(false)}>
+            <Button type="button" variant="ghost" onClick={closeComposer}>
               {t.cancel}
             </Button>
             <Button type="submit" disabled={busy || !form.title.trim()} isLoading={busy}>
@@ -1649,7 +1784,10 @@ export function WorkView({
 
       <Modal
         open={Boolean(selectedIssue)}
-        onClose={() => setSelectedId(null)}
+        onClose={() => {
+          cancelDetailEdit();
+          setSelectedId(null);
+        }}
         labelledBy="issue-detail-title"
       >
         <div className="flex h-[min(90vh,900px)] w-[min(96vw,1800px)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)]">
@@ -1775,7 +1913,14 @@ export function WorkView({
                           type="button"
                           variant="ghost"
                           size="sm"
-                          onClick={() => setEditingDetails(true)}
+                          onClick={() => {
+                            setDetailDraft({
+                              title: selectedIssue.title,
+                              description: selectedIssue.description,
+                              attachments: selectedIssue.attachments ?? [],
+                            });
+                            setEditingDetails(true);
+                          }}
                         >
                           {t.edit}
                         </Button>
@@ -1787,10 +1932,19 @@ export function WorkView({
                         onSubmit={(event) => {
                           event.preventDefault();
                           void runAction(async () => {
-                            await apiClient.updateIssue(selectedIssue.id, {
-                              title: detailDraft.title.trim(),
-                              description: detailDraft.description,
-                            });
+                            await saveWithDrafts(
+                              apiClient,
+                              'issue',
+                              {
+                                description: detailDraft.description,
+                                attachments: detailDraft.attachments,
+                              },
+                              (files) =>
+                                apiClient.updateIssue(selectedIssue.id, {
+                                  title: detailDraft.title.trim(),
+                                  ...files,
+                                }),
+                            );
                             setEditingDetails(false);
                           });
                         }}
@@ -1814,7 +1968,10 @@ export function WorkView({
                             onChange={(event) =>
                               setDetailDraft({ ...detailDraft, description: event.target.value })
                             }
+                            onPaste={detailImages.onPaste}
+                            onDrop={detailImages.onDrop}
                           />
+                          <ImageInputStatus state={detailImages} />
                         </label>
                         <div className="flex gap-2">
                           <Button
@@ -1828,7 +1985,14 @@ export function WorkView({
                             type="button"
                             size="sm"
                             variant="ghost"
-                            onClick={() => setEditingDetails(false)}
+                            onClick={() => {
+                              cancelDetailEdit();
+                              setDetailDraft({
+                                title: selectedIssue.title,
+                                description: selectedIssue.description,
+                                attachments: selectedIssue.attachments ?? [],
+                              });
+                            }}
                           >
                             {t.cancel}
                           </Button>
@@ -1843,7 +2007,8 @@ export function WorkView({
                       />
                     ) : (
                       <div
-                        className="mt-2 break-words text-sm leading-6 text-[var(--text-secondary)] [&_a]:text-[var(--text-accent)] [&_a]:underline [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-[var(--border-strong)] [&_blockquote]:pl-4 [&_h1]:my-4 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:my-4 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:my-3 [&_h3]:font-semibold [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-[var(--surface-2)] [&_pre]:p-3 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--border)] [&_td]:px-2 [&_th]:border [&_th]:border-[var(--border)] [&_th]:px-2 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6"
+                        ref={issueDescriptionRef}
+                        className="mt-2 break-words text-sm leading-6 text-[var(--text-secondary)] [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded [&_a]:text-[var(--text-accent)] [&_a]:underline [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-[var(--border-strong)] [&_blockquote]:pl-4 [&_h1]:my-4 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:my-4 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:my-3 [&_h3]:font-semibold [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-[var(--surface-2)] [&_pre]:p-3 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--border)] [&_td]:px-2 [&_th]:border [&_th]:border-[var(--border)] [&_th]:px-2 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6"
                         dangerouslySetInnerHTML={{
                           __html: selectedIssue.description
                             ? formatIssueDescription(selectedIssue.description)
@@ -1851,6 +2016,29 @@ export function WorkView({
                         }}
                       />
                     )}
+                    <div className="mt-4">
+                      <AttachmentPanel
+                        apiClient={apiClient}
+                        scope="issue"
+                        attachments={
+                          editingDetails
+                            ? detailDraft.attachments
+                            : (selectedIssue.attachments ?? [])
+                        }
+                        disabled={isReadOnly}
+                        onChange={
+                          editingDetails
+                            ? (attachments) => setDetailDraft({ ...detailDraft, attachments })
+                            : undefined
+                        }
+                        onInsertInline={(attachment) =>
+                          setDetailDraft({
+                            ...detailDraft,
+                            description: appendImage(detailDraft.description, attachment),
+                          })
+                        }
+                      />
+                    </div>
                   </div>
                 </div>
                 <aside className="min-w-0 space-y-5">
@@ -1859,7 +2047,7 @@ export function WorkView({
                       <h3 className="text-sm font-semibold">{t.runs}</h3>
                       {!isReadOnly &&
                         selectedIssue.assigneeAgentId &&
-                        !selectedRuns.some((run) => ['queued', 'running'].includes(run.status)) && (
+                        !selectedRuns.some((run) => activeRunStatuses.includes(run.status)) && (
                           <Button
                             type="button"
                             size="sm"
@@ -1913,6 +2101,55 @@ export function WorkView({
                                   : ''}
                               </p>
                             )}
+                            {run.mode === 'server' &&
+                              run.workflowState &&
+                              run.workflowState.steps.length > 0 && (
+                                <div className="mt-2 rounded-md bg-[var(--surface-2)] p-2 text-xs text-[var(--text-secondary)]">
+                                  <p>
+                                    {run.workflowState.currentStepIndex >=
+                                    run.workflowState.steps.length
+                                      ? t.approveFinal
+                                      : `${t.stepProgress} ${run.workflowState.currentStepIndex + 1} ${t.of} ${run.workflowState.steps.length}`}
+                                  </p>
+                                  <ol className="mt-2 space-y-1">
+                                    {run.workflowState.steps.map((step, index) => {
+                                      const completed = run.workflowState?.results.some(
+                                        (result) =>
+                                          result.stepId === step.id &&
+                                          (result.kind === undefined || result.kind === 'result'),
+                                      );
+                                      return (
+                                        <li
+                                          key={step.id}
+                                          className={cn(
+                                            'flex items-center gap-2',
+                                            completed && 'text-emerald-400',
+                                            index === run.workflowState?.currentStepIndex &&
+                                              (run.status.startsWith('waiting_') ||
+                                                run.status === 'running') &&
+                                              'text-amber-300',
+                                          )}
+                                        >
+                                          <i
+                                            className={cn(
+                                              'ti',
+                                              completed
+                                                ? 'ti-circle-check-filled'
+                                                : index === run.workflowState?.currentStepIndex &&
+                                                    (run.status.startsWith('waiting_') ||
+                                                      run.status === 'running')
+                                                  ? 'ti-circle-dot'
+                                                  : 'ti-circle',
+                                            )}
+                                            aria-hidden="true"
+                                          />
+                                          <span>{step.name}</span>
+                                        </li>
+                                      );
+                                    })}
+                                  </ol>
+                                </div>
+                              )}
                             {run.output && (
                               <MarkdownViewer
                                 content={run.output}
@@ -1920,8 +2157,112 @@ export function WorkView({
                                 className="mt-2 min-w-0 break-words text-sm"
                               />
                             )}
+                            {!isReadOnly && run.status === 'waiting_review' && (
+                              <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                                <p className="mb-2 text-xs text-amber-200">{t.waitingForReview}</p>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void runAction(async () => {
+                                      await apiClient.continueAgentRun(run.id, {
+                                        action: 'approve',
+                                      });
+                                      setSelectedRuns(
+                                        await apiClient.getAgentRuns(selectedIssue.id),
+                                      );
+                                    })
+                                  }
+                                >
+                                  <i className="ti ti-check mr-2" aria-hidden="true" />
+                                  {run.workflowState &&
+                                  run.workflowState.currentStepIndex <
+                                    run.workflowState.steps.length
+                                    ? t.approveAndContinue
+                                    : t.approveFinal}
+                                </Button>
+                                <div className="mt-3 border-t border-amber-500/20 pt-3">
+                                  <label className="sr-only" htmlFor={`run-revision-${run.id}`}>
+                                    {t.revisionPlaceholder}
+                                  </label>
+                                  <Textarea
+                                    id={`run-revision-${run.id}`}
+                                    value={workflowAnswerDraft}
+                                    onChange={(event) => setWorkflowAnswerDraft(event.target.value)}
+                                    placeholder={t.revisionPlaceholder}
+                                    rows={2}
+                                    disabled={busy}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="mt-2"
+                                    disabled={busy || !workflowAnswerDraft.trim()}
+                                    onClick={() =>
+                                      void runAction(async () => {
+                                        await apiClient.continueAgentRun(run.id, {
+                                          action: 'revise',
+                                          answer: workflowAnswerDraft.trim(),
+                                        });
+                                        setWorkflowAnswerDraft('');
+                                        setSelectedRuns(
+                                          await apiClient.getAgentRuns(selectedIssue.id),
+                                        );
+                                      })
+                                    }
+                                  >
+                                    <i className="ti ti-edit mr-2" aria-hidden="true" />
+                                    {t.requestRevision}
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                            {!isReadOnly && run.status === 'waiting_input' && (
+                              <form
+                                className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/10 p-3"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  if (!workflowAnswerDraft.trim()) return;
+                                  void runAction(async () => {
+                                    await apiClient.continueAgentRun(run.id, {
+                                      action: 'answer',
+                                      answer: workflowAnswerDraft.trim(),
+                                    });
+                                    setWorkflowAnswerDraft('');
+                                    setSelectedRuns(await apiClient.getAgentRuns(selectedIssue.id));
+                                  });
+                                }}
+                              >
+                                <p className="mb-2 text-xs text-sky-200">{t.waitingForAnswer}</p>
+                                <p className="mb-3 whitespace-pre-wrap text-sm">
+                                  {run.workflowState?.question}
+                                </p>
+                                <label className="sr-only" htmlFor={`run-answer-${run.id}`}>
+                                  {t.answerQuestion}
+                                </label>
+                                <Textarea
+                                  id={`run-answer-${run.id}`}
+                                  value={workflowAnswerDraft}
+                                  onChange={(event) => setWorkflowAnswerDraft(event.target.value)}
+                                  placeholder={t.answerPlaceholder}
+                                  rows={3}
+                                  disabled={busy}
+                                />
+                                <Button
+                                  type="submit"
+                                  size="sm"
+                                  className="mt-2"
+                                  disabled={busy || !workflowAnswerDraft.trim()}
+                                >
+                                  <i className="ti ti-send mr-2" aria-hidden="true" />
+                                  {t.submitAnswer}
+                                </Button>
+                              </form>
+                            )}
                             {run.error && <p className="mt-2 text-red-400">{run.error}</p>}
-                            {!isReadOnly && ['queued', 'running'].includes(run.status) && (
+                            {!isReadOnly && activeRunStatuses.includes(run.status) && (
                               <Button
                                 type="button"
                                 variant="outline"

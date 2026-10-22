@@ -1,4 +1,5 @@
-import type { PrismaClient } from '../../generated/prisma/client.js';
+import type { Prisma, PrismaClient } from '../../generated/prisma/client.js';
+import type { ImageAttachment } from '../shared/image-attachment.js';
 
 export type IssueStatus =
   'backlog' | 'todo' | 'in_progress' | 'in_review' | 'blocked' | 'done' | 'cancelled';
@@ -10,6 +11,7 @@ export interface Issue {
   number: number;
   title: string;
   description: string;
+  attachments?: ImageAttachment[];
   status: IssueStatus;
   priority: IssuePriority;
   assigneeAgentId: string | null;
@@ -40,6 +42,7 @@ export type IssueChanges = Partial<
     Issue,
     | 'title'
     | 'description'
+    | 'attachments'
     | 'status'
     | 'priority'
     | 'assigneeAgentId'
@@ -99,6 +102,7 @@ export class InMemoryIssueStore implements IssueStore {
       number,
       title: changes.title,
       description: changes.description ?? '',
+      attachments: changes.attachments ?? [],
       status: changes.status ?? 'todo',
       priority: changes.priority ?? 'medium',
       assigneeAgentId: changes.assigneeAgentId ?? null,
@@ -162,15 +166,22 @@ export class InMemoryIssueStore implements IssueStore {
 export class PrismaIssueStore implements IssueStore {
   constructor(private readonly db: PrismaClient) {}
   async list(workspaceId: string): Promise<Issue[]> {
-    return this.db.issueRecord.findMany({
+    const rows = await this.db.issueRecord.findMany({
       where: { workspaceId },
       orderBy: { updatedAt: 'desc' },
-    }) as Promise<Issue[]>;
+    });
+    return rows.map((row) => {
+      const issue = row as unknown as Issue;
+      return { ...issue, attachments: row.attachments as unknown as ImageAttachment[] };
+    });
   }
   async get(workspaceId: string, issueId: string): Promise<Issue | null> {
-    return this.db.issueRecord.findFirst({
+    const row = await this.db.issueRecord.findFirst({
       where: { id: issueId, workspaceId },
-    }) as Promise<Issue | null>;
+    });
+    if (!row) return null;
+    const issue = row as unknown as Issue;
+    return { ...issue, attachments: row.attachments as unknown as ImageAttachment[] };
   }
   async create(
     workspaceId: string,
@@ -183,12 +194,13 @@ export class PrismaIssueStore implements IssueStore {
         create: { workspaceId, nextNumber: 2 },
         update: { nextNumber: { increment: 1 } },
       });
-      return tx.issueRecord.create({
+      const row = await tx.issueRecord.create({
         data: {
           workspaceId,
           number: counter.nextNumber - 1,
           title: changes.title,
           description: changes.description ?? '',
+          attachments: (changes.attachments ?? []) as unknown as Prisma.InputJsonValue,
           status: changes.status ?? 'todo',
           priority: changes.priority ?? 'medium',
           assigneeAgentId: changes.assigneeAgentId,
@@ -196,13 +208,18 @@ export class PrismaIssueStore implements IssueStore {
           pbiItemId: changes.pbiItemId,
           createdBy: actorId,
         },
-      }) as Promise<Issue>;
+      });
+      const issue = row as unknown as Issue;
+      return { ...issue, attachments: changes.attachments ?? [] };
     });
   }
   async update(workspaceId: string, issueId: string, changes: IssueChanges): Promise<Issue | null> {
     const result = await this.db.issueRecord.updateMany({
       where: { id: issueId, workspaceId },
-      data: changes,
+      data: {
+        ...changes,
+        attachments: changes.attachments as unknown as Prisma.InputJsonValue | undefined,
+      },
     });
     return result.count ? this.get(workspaceId, issueId) : null;
   }

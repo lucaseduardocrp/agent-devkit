@@ -1642,7 +1642,15 @@ export function TestPlansView({
           onPublish={pushSuite}
           onPublished={(result) => {
             setSuiteToPublish(null);
-            showTemporarySuccess(t('testplans.suitePushed'), result.remoteUrl);
+            showTemporarySuccess(
+              result.workItem
+                ? t('testplans.suitePushedLinked', {
+                    type: result.workItem.type,
+                    id: result.workItem.id,
+                  })
+                : t('testplans.suitePushed'),
+              result.remoteUrl,
+            );
           }}
         />
       )}

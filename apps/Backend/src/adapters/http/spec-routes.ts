@@ -7,6 +7,8 @@ import { requireAuth, requireModulePermission } from './auth-middleware.js';
 import { resolveWorkspaceId } from './agents-routes.js';
 import { parseBody } from './validation.js';
 import { ApplicationError } from '../../shared/errors.js';
+import type { E2eArtifactStore } from '../../modules/e2e/application/artifact-store.js';
+import { validateAttachments } from './attachments-routes.js';
 
 const sectionSchema = z.object({
   id: z.string().min(1),
@@ -31,12 +33,17 @@ const specificationSchema = z.object({
   parentId: z.string().optional(),
   title: z.string().trim().min(1),
   sections: z.array(specificationSectionSchema),
+  attachments: z.array(z.unknown()).max(20).optional(),
 });
 const chatSchema = z.object({ agentId: z.string().min(1), content: z.string().trim().min(1) });
 const hostChatSchema = z.object({
   userMessage: z.string().trim().min(1).max(20_000),
   assistantMessage: z.string().trim().min(1).max(100_000),
 });
+
+function missingStore(): never {
+  throw new ApplicationError('ATTACHMENTS_UNAVAILABLE', 'File storage is not configured.', 503);
+}
 
 function requireTemplateManager(role: string | undefined): void {
   if (role !== 'ADMIN') {
@@ -51,8 +58,24 @@ function requireTemplateManager(role: string | undefined): void {
 export function createSpecRouter(
   service: SpecService,
   contextResolver?: RequestContextResolver,
+  attachmentStore?: E2eArtifactStore,
 ): Router {
   const router = Router();
+  const withAttachments = async <T extends { attachments?: unknown[] }>(
+    workspaceId: string,
+    body: T,
+  ) => ({
+    ...body,
+    attachments:
+      body.attachments === undefined
+        ? undefined
+        : await validateAttachments(
+            attachmentStore ?? missingStore(),
+            workspaceId,
+            body.attachments,
+            ['spec'],
+          ),
+  });
   if (contextResolver)
     router.use('/spec', async (req, res, next) => {
       try {
@@ -116,7 +139,7 @@ export function createSpecRouter(
         .json(
           await service.saveSpecification(
             resolveWorkspaceId(req),
-            parseBody(specificationSchema, req),
+            await withAttachments(resolveWorkspaceId(req), parseBody(specificationSchema, req)),
           ),
         );
     } catch (error) {
@@ -125,7 +148,10 @@ export function createSpecRouter(
   });
   router.put('/spec/specifications/:id', requireAuth, async (req, res, next) => {
     try {
-      const body = parseBody(specificationSchema.omit({ id: true }), req);
+      const body = await withAttachments(
+        resolveWorkspaceId(req),
+        parseBody(specificationSchema.omit({ id: true }), req),
+      );
       res.json(
         await service.saveSpecification(resolveWorkspaceId(req), {
           ...body,

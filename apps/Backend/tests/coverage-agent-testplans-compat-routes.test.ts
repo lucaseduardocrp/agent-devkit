@@ -33,7 +33,8 @@ interface Setup {
   context?: RequestContextResolver;
   plans?: SavedTestPlanStore;
   suites?: TestSuiteStore;
-  factory?: Partial<DynamicProviderFactory>;
+  // Stubs only implement the provider methods each scenario exercises.
+  factory?: { [K in keyof DynamicProviderFactory]?: (...args: never[]) => unknown };
   mappings?: FieldMappingStore;
   testManagement?: TestManagementResolver;
 }
@@ -48,7 +49,7 @@ function build(setup: Setup = {}) {
       setup.context ?? owner,
       setup.plans ?? new InMemorySavedTestPlanStore(),
       setup.suites ?? new InMemoryTestSuiteStore(),
-      setup.factory as DynamicProviderFactory | undefined,
+      setup.factory as unknown as DynamicProviderFactory | undefined,
       setup.mappings ?? new InMemoryFieldMappingStore(),
       setup.testManagement,
     ),
@@ -316,6 +317,53 @@ describe('suite field sources and previews', () => {
       .post(`/TestPlan/suites/${root.id}/field-preview`)
       .send({ providerId: 'azure_devops', templateId: caseTemplate.id });
     expect(noFactory.body.code).toBe('FIELD_MAPPING_UNSUPPORTED');
+  });
+});
+
+describe('POST /TestPlan/suites/:id/push suite kind', () => {
+  it('passes the suite kind and work item, and requires a work item for requirement suites', async () => {
+    const suites = new InMemoryTestSuiteStore();
+    const plans = new InMemorySavedTestPlanStore();
+    const root = await new TestSuiteService(suites).create('ws', 'Root');
+    await plans.save(createSavedTestPlan('ws', { suiteId: root.id }, [testCase('Case')]));
+    const publish = vi.fn(async () => ({
+      provider: 'azure_devops',
+      remotePlanId: '1',
+      remoteSuiteId: '2',
+      remoteUrl: 'https://example.com',
+      suitesCount: 1,
+      casesCount: 1,
+      suiteKind: 'requirement' as const,
+      workItem: { id: '50', type: 'Product Backlog Item', title: 'Cores' },
+    }));
+    const app = build({
+      suites,
+      plans,
+      factory: { resolveTestSuitePublisher: vi.fn(async () => ({ publish })) },
+    });
+    const push = (body: object) =>
+      request(app)
+        .post(`/TestPlan/suites/${root.id}/push`)
+        .send({ providerId: 'azure_devops', ...body });
+
+    const ok = await push({ suiteKind: 'requirement', workItemId: '50' });
+    expect(ok.status).toBe(200);
+    expect(ok.body.workItem).toEqual({ id: '50', type: 'Product Backlog Item', title: 'Cores' });
+    expect(publish).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ suiteKind: 'requirement', workItemId: '50' }),
+    );
+    for (const body of [
+      { suiteKind: 'requirement' },
+      { suiteKind: 'requirement', workItemId: '50', remotePlanId: '1', remoteSuiteId: '2' },
+      { suiteKind: 'dynamic', workItemId: '50' },
+      { workItemId: 'abc' },
+    ]) {
+      const rejected = await push(body);
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.code).toBe('VALIDATION_ERROR');
+    }
+    expect(publish).toHaveBeenCalledOnce();
   });
 });
 

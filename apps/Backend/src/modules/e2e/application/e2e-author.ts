@@ -130,6 +130,12 @@ export const scriptRules = (creation: E2eCreation): string[] => [
   creation.mode === 'backend'
     ? '- Use the `request` fixture; assert status codes and response bodies with expect.'
     : '- Use the `page` fixture. Prefer getByRole/getByLabel/getByPlaceholder/getByText/getByTestId based on the snapshot; avoid brittle CSS or XPath. Assert every expected result with expect. Do not use fixed waits unless strictly necessary.',
+  ...(creation.mode === 'frontend'
+    ? [
+        '- The step screenshot waits for the page to finish loading, then scrolls to and boxes in red the locators the step passed to expect or read from (textContent, getAttribute, evaluateAll, count...). So check what the step verifies on the element that shows it (e.g. the row of the record, then the cell, badge or icon inside it), read values through locators of that element instead of API responses or page.evaluate, and do not end a step on page-wide text, URLs or counts only.',
+        '- Before asserting on data that loads asynchronously (tables, lists, reports), wait for it with expect on the element that holds it (e.g. the first row or the target cell toBeVisible), not on a heading that renders before the data. Keep each step about its own expected result: actions that belong to the next step (navigation, language switch, reload) go in that step.',
+      ]
+    : []),
   creation.mode === 'frontend'
     ? '- After submitting login credentials, wait for the application to finish navigating and assert an application-specific URL or element observed in the snapshot or product specification. Never assume a generic greeting such as "welcome" appears unless it was observed.'
     : '- Assert only documented API responses; do not invent status codes or response fields.',
@@ -250,6 +256,24 @@ export class AgentE2eAuthor implements E2eAuthor {
     signal?: AbortSignal,
   ): Promise<string> {
     const agent = await this.options.agents.getAgent(creation.workspaceId, creation.agentId);
+    const workflow = await this.options.agents.getWorkflow(creation.workspaceId);
+    if (workflow.enabled && workflow.steps.length > 0) {
+      const result = await this.options.agents.executeAgent(
+        creation.workspaceId,
+        agent.id,
+        {
+          prompt: `${task}\n\nE2E task context:\n${JSON.stringify(context, null, 2)}`,
+          includeKnowledge: false,
+        },
+        {
+          requestId: `e2e-agent-${creation.id}`,
+          workspaceId: creation.workspaceId,
+          ownerId: creation.ownerId,
+        },
+        signal,
+      );
+      return result.result;
+    }
     const llm =
       (await this.options.providers?.resolveLlmProvider(
         creation.ownerId,

@@ -60,6 +60,14 @@ export class R2ArtifactStore implements E2eArtifactStore {
     return Buffer.from(await response.arrayBuffer());
   }
 
+  async listKeys(prefix: string): Promise<string[]> {
+    const full = this.fullKey(prefix);
+    const own = this.prefix ? `${this.prefix}/` : '';
+    return (await this.list(full))
+      .filter((key) => key === full || key.startsWith(`${full}/`))
+      .map((key) => key.slice(own.length));
+  }
+
   async removePrefix(prefix: string): Promise<void> {
     for (const key of await this.list(this.fullKey(prefix)))
       if (key === this.fullKey(prefix) || key.startsWith(`${this.fullKey(prefix)}/`)) {

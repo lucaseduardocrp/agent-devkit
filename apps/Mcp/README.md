@@ -143,7 +143,7 @@ fails when a route has no tool.
 | `workspaces`   | list, select, create, delete, members and permissions                                                                                                                                              |
 | `integrations` | list, save, test, delete, Azure DevOps members                                                                                                                                                     |
 | `brain`        | documents CRUD, search, relations, sync, publish to Azure Wiki,`brain_prepare_answer` (host) / `brain_ask` (server)                                                                                |
-| `agents`       | CRUD,`agents_prepare_run` (host) / `agents_execute` (server)                                                                                                                                       |
+| `agents`       | CRUD, workspace Workflow, `agents_prepare_run` (host) / `agents_execute` (server)                                                                                                                  |
 | `issues`       | issue CRUD, inbox, dashboard, agent run lifecycle (server or host), token usage, monthly spend, budget and model rates                                                                             |
 | `pbi`          | workspace backlog and card CRUD, provider list, pull, push, context and issue creation                                                                                                             |
 | `spec`         | templates, specs CRUD,`spec_update_sections`, export, publish, `spec_prepare_draft` (host) / `spec_chat` and `spec_generate_from_brain` (server)                                                   |

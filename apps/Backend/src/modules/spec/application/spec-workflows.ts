@@ -6,7 +6,8 @@ import {
   type KnowledgeChunkRepository,
 } from '../../knowledge/application/knowledge-provider.js';
 import { renderSpecificationMarkdown, type Specification } from '../domain/specification.js';
-import type { SpecCollaborator, SpecRepository } from './spec-service.js';
+import type { E2eArtifactStore } from '../../e2e/application/artifact-store.js';
+import { syncSpecFiles, type SpecCollaborator, type SpecRepository } from './spec-service.js';
 import { distributeProposalSections } from './proposal-sections.js';
 
 export class SpecWorkflows {
@@ -14,6 +15,7 @@ export class SpecWorkflows {
     private readonly specs: SpecRepository,
     private readonly knowledge: KnowledgeChunkRepository,
     private readonly collaborator: SpecCollaborator,
+    private readonly files?: E2eArtifactStore,
   ) {}
 
   private async find(workspaceId: string, id: string) {
@@ -150,7 +152,7 @@ export class SpecWorkflows {
         502,
       );
     const byId = new Map(updates.map((section) => [section.templateSectionId, section.content]));
-    return this.specs.saveSpecification({
+    const saved = await this.specs.saveSpecification({
       ...draft,
       title: answer.title?.trim() || draft.title,
       sections: draft.sections.map((section) => ({
@@ -158,5 +160,7 @@ export class SpecWorkflows {
         content: byId.get(section.templateSectionId) ?? '',
       })),
     });
+    await syncSpecFiles(this.files, workspaceId, null, saved);
+    return saved;
   }
 }

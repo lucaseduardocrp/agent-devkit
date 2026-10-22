@@ -11,6 +11,8 @@ import type { RunService } from '../../modules/issues/run-service.js';
 import type { PbiItem } from '../../modules/pbi/pbi-store.js';
 import type { WorkspaceService } from '../../modules/workspaces/application/workspace-service.js';
 import type { PushAssignee } from '../../modules/pbi/push-contract.js';
+import type { E2eArtifactStore } from '../../modules/e2e/application/artifact-store.js';
+import { validateAttachments } from './attachments-routes.js';
 import { pbiLinkTypes } from '../../modules/pbi/pbi-relations.js';
 
 const customValue = z.union([
@@ -25,6 +27,7 @@ const itemFields = z.object({
   kind: z.enum(['pbi', 'card']),
   title: z.string().trim().min(1).max(240),
   description: z.string().max(30000).optional(),
+  attachments: z.array(z.unknown()).max(20).optional(),
   status: z.string().trim().min(1).max(100).optional(),
   parentId: z.string().uuid().nullable().optional(),
   position: z.number().finite().optional(),
@@ -120,6 +123,7 @@ export function createPbiRouter(
   runs: RunService,
   contextResolver?: RequestContextResolver,
   workspaces?: WorkspaceService,
+  imageStore?: E2eArtifactStore,
 ): Router {
   const router = Router();
   if (contextResolver)
@@ -133,6 +137,11 @@ export function createPbiRouter(
     });
   router.get('/pbi', requireAuth, async (request, response, next) => {
     try {
+      // The list screen: every item without its detail fields, already serialized.
+      if (request.query['view'] === 'summary') {
+        response.type('application/json').send(await service.summariesJson(workspaceId(request)));
+        return;
+      }
       if (Object.keys(request.query).length) {
         const { compact, ...options } = parseQuery(searchFields, request);
         const result = await service.search(workspaceId(request), options);
@@ -202,14 +211,14 @@ export function createPbiRouter(
   router.post('/pbi/pull', requireAuth, async (request, response, next) => {
     try {
       requireWrite(request);
-      const { summaryOnly } = parseQuery(
-        z.object({ summaryOnly: z.enum(['true']).optional() }),
+      const { summaryOnly, providerId } = parseQuery(
+        z.object({ summaryOnly: z.enum(['true']).optional(), providerId: providerIds.optional() }),
         request,
       );
       response.json(
         summaryOnly
-          ? await service.pull(workspaceId(request), false)
-          : await service.pull(workspaceId(request)),
+          ? await service.pull(workspaceId(request), false, providerId)
+          : await service.pull(workspaceId(request), true, providerId),
       );
     } catch (error) {
       next(error);
@@ -218,9 +227,17 @@ export function createPbiRouter(
   router.post('/pbi/items', requireAuth, async (request, response, next) => {
     try {
       requireWrite(request);
-      const fields = parseBody(itemFields, request);
+      const { attachments: rawAttachments, ...parsed } = parseBody(itemFields, request);
+      const fields = {
+        ...parsed,
+        attachments:
+          rawAttachments === undefined
+            ? []
+            : await validateAttachments(imageStore!, workspaceId(request), rawAttachments, ['pbi']),
+      };
       await validateAssignee(workspaces, request, fields.sourceData);
-      response.status(201).json({ item: await service.create(workspaceId(request), fields) });
+      const item = await service.create(workspaceId(request), fields);
+      response.status(201).json({ item });
     } catch (error) {
       next(error);
     }
@@ -256,17 +273,25 @@ export function createPbiRouter(
   router.patch('/pbi/items/:id', requireAuth, async (request, response, next) => {
     try {
       requireWrite(request);
-      const fields = parseBody(updateFields, request);
+      const { attachments: rawAttachments, ...parsed } = parseBody(updateFields, request);
+      const fields = {
+        ...parsed,
+        ...(rawAttachments === undefined
+          ? {}
+          : {
+              attachments: await validateAttachments(
+                imageStore!,
+                workspaceId(request),
+                rawAttachments,
+                ['pbi'],
+              ),
+            }),
+      };
+      const existing = await service.get(workspaceId(request), String(request.params['id']));
       if (fields.sourceData?.adkAssigneeUserId)
-        await validateAssignee(
-          workspaces,
-          request,
-          fields.sourceData,
-          await service.get(workspaceId(request), String(request.params['id'])),
-        );
-      response.json({
-        item: await service.update(workspaceId(request), String(request.params['id']), fields),
-      });
+        await validateAssignee(workspaces, request, fields.sourceData, existing);
+      const item = await service.update(workspaceId(request), existing.id, fields);
+      response.json({ item });
     } catch (error) {
       next(error);
     }
@@ -413,6 +438,7 @@ export function createPbiRouter(
       const issue = await issues.create(ws, request.context!.actorId!, {
         title: input.title ?? item.title,
         description: context,
+        attachments: item.attachments,
         pbiItemId: item.id,
         assigneeAgentId: input.assigneeAgentId ?? null,
       });

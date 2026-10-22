@@ -109,14 +109,20 @@ export const pbiModule: McpModule = {
       name: 'pbi_pull',
       title: 'Pull all boards',
       description:
-        'Imports PBIs and cards from every connected board provider and returns per-provider counts without dumping the entire backlog.',
+        'Imports PBIs and cards from connected board providers. Pass providerId to pull from one provider; otherwise pulls all configured providers.',
       toolset: 'pbi',
       access: 'write',
       routes: ['POST /pbi/pull'],
-      input: {},
-      run: async (_, { api }) =>
+      input: {
+        providerId: providerId.optional().describe('Pull only from this configured provider.'),
+      },
+      run: async ({ providerId: provider }, { api }) =>
         json(
-          await api.request({ method: 'POST', path: '/pbi/pull', query: { summaryOnly: true } }),
+          await api.request({
+            method: 'POST',
+            path: '/pbi/pull',
+            query: { summaryOnly: true, providerId: provider },
+          }),
         ),
     }),
     defineTool({
@@ -310,7 +316,7 @@ export const pbiModule: McpModule = {
       name: 'pbi_create_issue',
       title: 'Create issue from PBI item',
       description:
-        'Creates an issue grounded in the PBI or card. If assigned to an agent, use the returned host brief and finish with issues_complete_run.',
+        'Creates an Issue grounded in a PBI or card. The server requests approval first when required by the workspace workflow.',
       toolset: 'pbi',
       access: 'write',
       routes: ['POST /pbi/items/:id/issues'],

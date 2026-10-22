@@ -11,6 +11,7 @@ interface RecordShape {
   title?: string;
   sections: unknown;
   messages?: unknown;
+  attachments?: unknown;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -47,6 +48,7 @@ export class PrismaSpecRepository implements SpecRepository {
       title: record.title!,
       sections: record.sections as Specification['sections'],
       messages: (record.messages ?? []) as Specification['messages'],
+      attachments: (record.attachments ?? []) as Specification['attachments'],
       createdAt: record.createdAt.toISOString(),
       updatedAt: record.updatedAt.toISOString(),
     };
@@ -103,6 +105,7 @@ export class PrismaSpecRepository implements SpecRepository {
           title: value.title,
           sections: value.sections,
           messages: value.messages,
+          attachments: value.attachments ?? [],
           updatedAt: new Date(value.updatedAt),
         },
       }),

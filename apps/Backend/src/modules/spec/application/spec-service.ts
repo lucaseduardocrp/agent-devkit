@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import { ApplicationError } from '../../../shared/errors.js';
 import type { SupportedLocale } from '../../../shared/i18n.js';
+import type { E2eArtifactStore } from '../../e2e/application/artifact-store.js';
+import { fileOwner, syncItemFilesSafely } from '../../shared/attachment-files.js';
 import type {
   SpecMessage,
   Specification,
@@ -91,10 +93,31 @@ export class InMemorySpecRepository implements SpecRepository {
 
 const now = () => new Date().toISOString();
 
+/** What of a specification can reference stored files. */
+const specFiles = (spec: Specification | null | undefined) =>
+  spec && { sections: spec.sections, attachments: spec.attachments };
+
+/** Keeps exactly the stored files a saved specification references; `next` is null on delete. */
+export function syncSpecFiles(
+  files: E2eArtifactStore | undefined,
+  workspaceId: string,
+  previous: Specification | null | undefined,
+  next: Specification | null,
+): Promise<void> {
+  return syncItemFilesSafely(
+    files,
+    workspaceId,
+    fileOwner('spec', (next ?? previous)!.id),
+    specFiles(previous),
+    specFiles(next),
+  );
+}
+
 export class SpecService {
   public constructor(
     private readonly repository: SpecRepository,
     private readonly collaborator?: SpecCollaborator,
+    private readonly files?: E2eArtifactStore,
   ) {}
 
   public async saveTemplate(
@@ -131,6 +154,7 @@ export class SpecService {
       parentId?: string;
       title: string;
       sections: Specification['sections'];
+      attachments?: Specification['attachments'];
     },
   ): Promise<Specification> {
     const existing = input.id
@@ -166,7 +190,7 @@ export class SpecService {
       }
     }
     const timestamp = now();
-    return this.repository.saveSpecification({
+    const saved = await this.repository.saveSpecification({
       id: existing?.id ?? crypto.randomUUID(),
       workspaceId,
       templateId: input.templateId,
@@ -175,9 +199,13 @@ export class SpecService {
       title: input.title,
       sections: input.sections,
       messages: existing?.messages ?? [],
+      attachments: input.attachments ?? existing?.attachments ?? [],
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
     });
+    // Rewriting a section (by hand or applying an agent proposal) drops the images it removed.
+    await syncSpecFiles(this.files, workspaceId, existing, saved);
+    return saved;
   }
   public listSpecifications(workspaceId: string) {
     return this.repository.listSpecifications(workspaceId);
@@ -188,9 +216,15 @@ export class SpecService {
     return value;
   }
   public async deleteSpecification(workspaceId: string, id: string): Promise<void> {
+    // Child specifications are deleted with their parent, and so are their files.
+    const all = this.files ? await this.repository.listSpecifications(workspaceId) : [];
+    const removed = all.filter((spec) => spec.id === id);
+    for (let index = 0; index < removed.length; index++)
+      removed.push(...all.filter((spec) => spec.parentId === removed[index]!.id));
     if (!(await this.repository.deleteSpecification(id, workspaceId))) {
       throw new ApplicationError('SPEC_NOT_FOUND', 'Especificação não encontrada.', 404);
     }
+    for (const spec of removed) await syncSpecFiles(this.files, workspaceId, spec, null);
   }
 
   public async saveHostChatReply(

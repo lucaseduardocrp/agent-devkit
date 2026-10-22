@@ -12,8 +12,8 @@ import { InMemoryE2eArtifactStore } from '../src/modules/e2e/application/artifac
 import type { E2eAuthor } from '../src/modules/e2e/application/e2e-author.js';
 import type { E2eRunner } from '../src/modules/e2e/application/e2e-runner.js';
 import { HttpAdkClient } from '../../Mcp/src/api/http-client.js';
-import { LocalRunnerAgent } from '../../Mcp/src/modules/e2e/local-runner/agent.js';
-import { createLocalBrowser } from '../../Mcp/src/modules/e2e/local-runner/playwright-setup.js';
+import { LocalRunnerAgent } from '../../Cli/src/e2e/local-runner/agent.js';
+import { createLocalBrowser } from '../../Cli/src/e2e/local-runner/playwright-setup.js';
 import { FakeScriptRepository } from './helpers/fake-script-repository.js';
 
 const browsersPath =
@@ -22,7 +22,7 @@ const browserInstalled =
   existsSync(browsersPath) &&
   (await fs.readdir(browsersPath).catch(() => [])).some((name) => name.startsWith('chromium'));
 const cliInstalled = existsSync(
-  path.join(import.meta.dirname, '..', '..', 'Mcp', 'node_modules', '@playwright', 'test'),
+  path.join(import.meta.dirname, '..', '..', 'Cli', 'node_modules', '@playwright', 'test'),
 );
 
 const passing = `import { test, expect } from '@playwright/test';

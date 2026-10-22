@@ -382,9 +382,11 @@ describe('SettingsView', () => {
     // Verify N/A rendered for empty createdAt
     expect(await findByText('N/A')).toBeInTheDocument();
 
-    // Invite with role select
+    // Non-administrators can only add Members; access comes from permission groups.
     const roleSelect = getByLabelText('Função');
-    fireEvent.change(roleSelect, { target: { value: 'VIEWER' } });
+    expect([...(roleSelect as HTMLSelectElement).options].map((option) => option.value)).toEqual([
+      'MEMBER',
+    ]);
 
     const emailInput = getByPlaceholderText('email@exemplo.com');
     fireEvent.change(emailInput, { target: { value: 'viewer@corp.com' } });
@@ -393,7 +395,7 @@ describe('SettingsView', () => {
     expect(await findByText('Membro adicionado com sucesso.')).toBeInTheDocument();
     expect(addMemberSpy).toHaveBeenCalledWith('ws-active-1', {
       email: 'viewer@corp.com',
-      role: 'VIEWER',
+      role: 'MEMBER',
     });
 
     // Fallback string error for add member

@@ -1,5 +1,6 @@
 import type { TestManagementProviderId } from '../e2e/e2e-types.js';
 import { TEST_MANAGEMENT_NAMES } from '../e2e/e2e-types.js';
+import { isSafeImageSource } from '../shared/media.js';
 
 /** Where an imported test case lives on its test management platform. */
 export interface TestCaseOrigin {
@@ -26,14 +27,49 @@ export interface TestCaseField {
  * ADK or brought from a platform can be shown and edited safely.
  */
 export function sanitizeRichText(value: string): string {
+  // Images keep only a safe source and their text; they are set aside while the other
+  // tags are cleaned and put back rebuilt from those two values.
+  const images: string[] = [];
+  // Private-use characters mark where each image goes; any in the input are dropped first.
+  const shielded = value.replace(/[]/g, '').replace(/<img\b[^>]*>/gi, (tag) => {
+    const src = decodeAttribute(attribute(tag, 'src'));
+    if (!isSafeImageSource(src)) return '';
+    images.push(
+      `<img src="${escapeAttribute(src)}" alt="${escapeAttribute(decodeAttribute(attribute(tag, 'alt')))}">`,
+    );
+    return `${images.length - 1}`;
+  });
   return (
-    value
+    shielded
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<style[\s\S]*?<\/style>/gi, '')
       .replace(/<(?!\/?(?:b|strong|i|em|u|br|p|div|h[1-6]|ul|ol|li)\b)[^>]*>/gi, '')
       // Allowed tags lose every attribute, including handlers written without a space.
       .replace(/<(\/?)(b|strong|i|em|u|br|p|div|h[1-6]|ul|ol|li)\b[^>]*>/gi, '<$1$2>')
+      .replace(/(\d+)/g, (_, index: string) => images[Number(index)] ?? '')
   );
+}
+
+function attribute(tag: string, name: string): string {
+  const match = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(tag);
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? '';
+}
+
+function decodeAttribute(value: string): string {
+  return value
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&');
+}
+
+function escapeAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function record(value: unknown): Record<string, unknown> {

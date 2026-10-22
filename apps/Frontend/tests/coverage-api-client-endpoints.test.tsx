@@ -117,7 +117,17 @@ const endpoints: readonly Endpoint[] = [
     {},
     undefined,
   ],
-  ['getPbiItems', (c) => c.getPbiItems(), 'GET', '/pbi', undefined, { items: [R] }, [R]],
+  // The list carries an excerpt of each description; items are marked partial.
+  [
+    'getPbiItems',
+    (c) => c.getPbiItems(),
+    'GET',
+    '/pbi?view=summary',
+    undefined,
+    { items: [{ ...R, descriptionExcerpt: 'Start' }] },
+    [{ ...R, description: 'Start', partial: true }],
+  ],
+  ['getPbiItem', (c) => c.getPbiItem('p 1'), 'GET', '/pbi/items/p%201', undefined, { item: R }, R],
   ['getPbiContext', (c) => c.getPbiContext('p1'), 'GET', '/pbi/items/p1/context', undefined, R, R],
   [
     'getPbiComments',
@@ -259,7 +269,16 @@ const endpoints: readonly Endpoint[] = [
     { comment: R },
     { comment: R },
   ],
-  ['getInbox', (c) => c.getInbox(), 'GET', '/inbox', undefined, { items: [R] }, [R]],
+  // An API older than the private inbox answers without runs: the client fills them in.
+  [
+    'getInbox',
+    (c) => c.getInbox(),
+    'GET',
+    '/inbox',
+    undefined,
+    { items: [R] },
+    [{ ...R, runs: [] }],
+  ],
   [
     'updateInboxItem',
     (c) => c.updateInboxItem('n1', { read: true }),

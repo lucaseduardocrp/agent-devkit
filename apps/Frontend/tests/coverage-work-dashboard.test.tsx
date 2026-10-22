@@ -395,9 +395,9 @@ describe('WorkView loading lifecycle', () => {
     const onInboxCountChange = vi.fn();
     const { api } = createApi({
       inbox: [
-        { issue: makeIssue({ id: 'a' }), readAt: null, archivedAt: null },
-        { issue: makeIssue({ id: 'b' }), readAt: NOW, archivedAt: null },
-        { issue: makeIssue({ id: 'c' }), readAt: null, archivedAt: NOW },
+        { issue: makeIssue({ id: 'a' }), runs: [], readAt: null, archivedAt: null },
+        { issue: makeIssue({ id: 'b' }), runs: [], readAt: NOW, archivedAt: null },
+        { issue: makeIssue({ id: 'c' }), runs: [], readAt: null, archivedAt: NOW },
       ],
     });
     renderView(api, { tab: 'inbox', onInboxCountChange });

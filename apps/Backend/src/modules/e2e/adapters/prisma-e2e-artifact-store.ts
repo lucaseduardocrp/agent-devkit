@@ -22,6 +22,14 @@ export class PrismaE2eArtifactStore implements E2eArtifactStore {
     return row ? Buffer.from(row.content) : null;
   }
 
+  async listKeys(prefix: string): Promise<string[]> {
+    const rows = await this.db.e2eArtifactRecord.findMany({
+      where: { OR: [{ key: prefix }, { key: { startsWith: `${prefix}/` } }] },
+      select: { key: true },
+    });
+    return rows.map((row) => row.key);
+  }
+
   async removePrefix(prefix: string): Promise<void> {
     await this.db.e2eArtifactRecord.deleteMany({
       where: { OR: [{ key: prefix }, { key: { startsWith: `${prefix}/` } }] },

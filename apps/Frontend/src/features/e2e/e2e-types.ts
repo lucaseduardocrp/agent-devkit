@@ -340,6 +340,29 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
 }
 
+export interface E2eStepText {
+  readonly action: string;
+  readonly expectedResult: string;
+}
+
+/** Splits a planned step written as "action => expected result". */
+export function splitStepText(text: string): E2eStepText {
+  const match = /^([\s\S]*?)\s*(?:=>|⇒|→)\s*([\s\S]*)$/.exec(text);
+  return match
+    ? { action: match[1]!.trim(), expectedResult: match[2]!.trim() }
+    : { action: text.trim(), expectedResult: '' };
+}
+
+/** Steps of a test with their expected results: the linked case's when there is one. */
+export function testStepTexts(test: {
+  readonly steps: readonly string[];
+  readonly externalCase: ExternalTestCase | null;
+}): readonly E2eStepText[] {
+  return test.externalCase?.steps.length
+    ? test.externalCase.steps.map(({ action, expectedResult }) => ({ action, expectedResult }))
+    : test.steps.map(splitStepText);
+}
+
 /** Default folder for a run's specs, derived from its name. */
 export function suggestedScriptFolder(name: string): string {
   const slug = name

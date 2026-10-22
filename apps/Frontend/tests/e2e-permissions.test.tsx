@@ -112,8 +112,10 @@ describe('E2eView permissions', () => {
   it('hides importing cases from test plans without access to them', async () => {
     const { ui } = await view(access({ testplans: 'none' }));
 
-    expect(ui.getByRole('button', { name: /Gestão de testes/ })).toBeInTheDocument();
-    expect(ui.queryByRole('button', { name: /Importar test cases/ })).toBeNull();
+    fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
+    expect(await ui.findByRole('menuitem', { name: /Gestão de testes/ })).toBeInTheDocument();
+    expect(ui.queryByRole('menuitem', { name: /Importar test cases/ })).toBeNull();
+    fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
     fireEvent.click(ui.getByRole('button', { name: /Nova execução/ }));
     expect(await ui.findByTestId('e2e-config-form')).toBeInTheDocument();
     expect(ui.queryByRole('radiogroup', { name: 'Origem dos testes' })).toBeNull();
@@ -122,7 +124,8 @@ describe('E2eView permissions', () => {
   it('offers importing cases and choosing them as the source with access to test plans', async () => {
     const { ui } = await view(access({ testplans: 'view' }));
 
-    fireEvent.click(ui.getByRole('button', { name: /Importar test cases/ }));
+    fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
+    fireEvent.click(await ui.findByRole('menuitem', { name: /Importar test cases/ }));
     expect(await ui.findByRole('dialog', { name: /Importar test cases · ama/ })).toBeTruthy();
     fireEvent.click(ui.getByRole('button', { name: 'Cancelar' }));
     fireEvent.click(ui.getByRole('button', { name: /Nova execução/ }));

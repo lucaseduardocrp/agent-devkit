@@ -6,11 +6,13 @@ import { usePermissions } from '../workspaces/permissions.js';
 import { Button } from '../../components/ui/button.js';
 import { Modal } from '../../components/ui/modal.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
+import { FormattedContent } from '../../components/ui/formatted-content.js';
 import { E2eCasePicker, errorMessage, type TestManagementSelection } from './E2eTestManagement.js';
 import {
   TEST_MANAGEMENT_NAMES,
   formatDuration,
   safeE2eOutput,
+  testStepTexts,
   type E2eReporting,
   type E2eTestDetail,
   type TestManagementProviderId,
@@ -172,6 +174,7 @@ export function E2eExecutedSteps({
   const { t } = useI18n();
   const [enlarged, setEnlarged] = useState<Enlarged | null>(null);
   const version = `${test.lastRunAt ?? ''}:${test.attempts}`;
+  const steps = testStepTexts(test);
 
   return (
     <section
@@ -184,7 +187,9 @@ export function E2eExecutedSteps({
       </h3>
       <ol className="divide-y divide-[var(--border)]">
         {test.stepResults.map((step) => {
-          const expected = test.externalCase?.steps[step.position - 1]?.expectedResult.trim();
+          const planned = steps[step.position - 1];
+          const action = planned?.action.trim();
+          const expected = planned?.expectedResult.trim();
           const passed = step.status === 'passed';
           return (
             <li key={step.position} className="flex gap-3 px-4 py-3">
@@ -207,13 +212,29 @@ export function E2eExecutedSteps({
                     {formatDuration(step.durationMs)}
                   </span>
                 </p>
-                {expected && (
-                  <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                    <span className="font-medium text-[var(--text-muted)]">
-                      {t('e2e.expectedResult')}:
-                    </span>{' '}
-                    {expected}
-                  </p>
+                {(action || expected) && (
+                  <dl className="mt-1.5 space-y-1 text-xs text-[var(--text-secondary)]">
+                    {action && (
+                      <div>
+                        <dt className="inline font-semibold text-[var(--text-accent)]">
+                          {t('e2e.executedStep')}:
+                        </dt>{' '}
+                        <dd className="inline">
+                          <FormattedContent content={action} inline />
+                        </dd>
+                      </div>
+                    )}
+                    {expected && (
+                      <div>
+                        <dt className="inline font-semibold text-emerald-400">
+                          {t('e2e.expectedResult')}:
+                        </dt>{' '}
+                        <dd className="inline">
+                          <FormattedContent content={expected} inline />
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
                 )}
                 {step.error && (
                   <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-red-950/40 px-2 py-1 font-mono text-xs text-red-200">

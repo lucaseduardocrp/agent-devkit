@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { segment, type AdkApi } from '../../api/http-client.js';
 import type { McpModule } from '../../core/registry.js';
 import { defineTool, json, text } from '../../core/tool.js';
-import { getAgent } from '../agents/tools.js';
+import { getAgent, getWorkflowBrief } from '../agents/tools.js';
 import { searchKnowledge } from '../brain/tools.js';
 import { id, knowledgeBlock, untrusted, UNTRUSTED_CONTENT_RULE } from '../shared.js';
 
@@ -223,7 +223,12 @@ export const releaseNotesModule: McpModule = {
       toolset: 'releasenotes',
       access: 'read',
       execution: 'host',
-      routes: ['GET /pbi/items/:id', 'GET /agents/:id', 'GET /TestPlan/search'],
+      routes: [
+        'GET /pbi/items/:id',
+        'GET /agents/:id',
+        'GET /agents/workflow',
+        'GET /TestPlan/search',
+      ],
       input: {
         title,
         version,
@@ -244,7 +249,7 @@ export const releaseNotesModule: McpModule = {
           (await getItems(api, parentIds)).map((item) => [item.id, item.title] as const),
         );
         for (const item of items) parents.set(item.id, item.title);
-        const [agent, chunks] = await Promise.all([
+        const [agent, chunks, workflowBrief] = await Promise.all([
           input.agentId ? getAgent(api, input.agentId) : Promise.resolve(undefined),
           input.knowledgeLimit
             ? searchKnowledge(
@@ -253,6 +258,7 @@ export const releaseNotesModule: McpModule = {
                 input.knowledgeLimit,
               )
             : Promise.resolve([]),
+          getWorkflowBrief(api),
         ]);
         const describe = (item: PbiItemDto) => {
           const description = plainText(item.description);
@@ -275,6 +281,7 @@ export const releaseNotesModule: McpModule = {
           instructions: input.instructions ?? null,
           items: items.map((item) => untrusted(`pbi:${item.id}`, describe(item))).join('\n\n'),
           agentInstructions: agent?.instructions ?? null,
+          ...workflowBrief,
           knowledge: chunks.length ? knowledgeBlock(chunks) : null,
           rules: [
             'Write Markdown for end users: start with a level-1 heading and a short summary, then group the changes into sections such as New features, Improvements, Bug fixes and Known issues (omit empty sections).',
@@ -282,6 +289,7 @@ export const releaseNotesModule: McpModule = {
             'Write in the language of the user request unless the user asks otherwise.',
             'Show the draft to the user and confirm before saving.',
             UNTRUSTED_CONTENT_RULE,
+            workflowBrief.rule,
           ],
           save: 'release_notes_create { title, version?, content, itemIds }',
         });

@@ -2,6 +2,7 @@ import { ApplicationError } from '../../../shared/errors.js';
 import type {
   PublishableTestSuite,
   PublishedTestSuite,
+  PublishTestSuiteOptions,
   RemoteTestPlan,
   RemoteTestSuite,
   TestSuiteDestinationProvider,
@@ -11,7 +12,6 @@ import {
   resolveFieldMapping,
   type FieldDefinition,
   type FieldValue,
-  type FieldMappingTemplate,
 } from '../../field-mapping/field-mapping.js';
 
 interface AzureReference {
@@ -19,6 +19,9 @@ interface AzureReference {
   readonly rootSuite?: { readonly id?: number };
   readonly suiteType?: string;
 }
+
+/** Link from a Test Case to the work item it tests (shown as "Tests" / "Tested By"). */
+const TESTS_RELATION = 'Microsoft.VSTS.Common.TestedBy-Reverse';
 
 const escapeXml = (value: string): string =>
   value
@@ -244,16 +247,88 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
     return value.id;
   }
 
+  /** Type and title of a work item, or a clear error when it does not exist. */
+  private async workItem(id: number): Promise<{ type: string; title: string }> {
+    let item: { fields?: Record<string, unknown> };
+    try {
+      item = (
+        await this.requestPage<{ fields?: Record<string, unknown> }>(
+          `wit/workitems/${id}`,
+          'GET',
+          undefined,
+          false,
+          { fields: 'System.WorkItemType,System.Title' },
+        )
+      ).data;
+    } catch (error) {
+      const status = error instanceof ApplicationError ? error.details?.[0]?.['status'] : undefined;
+      if (status === 404 || status === 400)
+        throw new ApplicationError(
+          'WORK_ITEM_NOT_FOUND',
+          `O work item #${id} não existe neste projeto do Azure DevOps.`,
+          400,
+          [],
+          { id },
+        );
+      throw error;
+    }
+    const type = item.fields?.['System.WorkItemType'];
+    const title = item.fields?.['System.Title'];
+    return {
+      type: typeof type === 'string' ? type : 'Work Item',
+      title: typeof title === 'string' ? title : '',
+    };
+  }
+
+  /**
+   * Work item types Azure accepts as the requirement of a requirement suite: the requirement
+   * category (PBI, User Story...) and bugs, which teams may track as requirements.
+   */
+  private async requirementTypes(): Promise<Set<string>> {
+    const categories = await this.requestPage<{
+      value?: { referenceName?: string; workItemTypes?: { name?: string }[] }[];
+    }>('wit/workitemtypecategories', 'GET');
+    return new Set(
+      (categories.data.value ?? [])
+        .filter((category) =>
+          ['Microsoft.RequirementCategory', 'Microsoft.BugCategory'].includes(
+            category.referenceName ?? '',
+          ),
+        )
+        .flatMap((category) => category.workItemTypes ?? [])
+        .map((type) => type.name)
+        .filter((name): name is string => typeof name === 'string'),
+    );
+  }
+
   public async publish(
     suite: PublishableTestSuite,
-    options: {
-      readonly remotePlanId?: string;
-      readonly remoteParentSuiteId?: string;
-      readonly remoteSuiteId?: string;
-      readonly remoteSuiteName?: string;
-      readonly fieldTemplate?: FieldMappingTemplate;
-    },
+    options: PublishTestSuiteOptions,
   ): Promise<PublishedTestSuite> {
+    const requirementSuite = options.suiteKind === 'requirement';
+    if (requirementSuite && !options.workItemId)
+      throw new ApplicationError(
+        'WORK_ITEM_REQUIRED',
+        'Informe o work item que a Requirement Based Suite vai cobrir.',
+        400,
+      );
+    if (requirementSuite && options.remoteSuiteId)
+      throw new ApplicationError(
+        'REQUIREMENT_SUITE_NEEDS_NEW_SUITE',
+        'Uma Requirement Based Suite é criada pelo ADK: escolha um novo Test Plan ou uma nova suite dentro da selecionada.',
+        400,
+      );
+    // Checked before anything is created, so a wrong item leaves no empty plan or suite behind.
+    const workItemId = options.workItemId ? this.parseId(options.workItemId) : null;
+    const workItem = workItemId ? { id: workItemId, ...(await this.workItem(workItemId)) } : null;
+    if (workItem && requirementSuite && !(await this.requirementTypes()).has(workItem.type))
+      throw new ApplicationError(
+        'REQUIREMENT_SUITE_REJECTED',
+        `O Azure DevOps só cria Requirement Based Suites para itens de requisito (como PBI, User Story ou Bug). O item #${workItem.id} é um ${workItem.type}: use uma Static Suite, que também vincula os test cases a ele.`,
+        400,
+        [],
+        { id: workItem.id, type: workItem.type },
+      );
     if (
       options.fieldTemplate &&
       (options.fieldTemplate.providerId !== 'azure_devops' ||
@@ -304,6 +379,8 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
       );
 
     let parentId = rootId;
+    // Cases added to a requirement suite are linked to its requirement by Azure itself.
+    let destinationIsRequirement = false;
     const destinationId = options.remoteParentSuiteId ?? options.remoteSuiteId;
     if (destinationId) {
       parentId = this.parseId(destinationId);
@@ -328,15 +405,44 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
             : 'Escolha uma suite estática como destino.',
           400,
         );
+      destinationIsRequirement = remoteDestination.suiteType === 'requirementTestSuite';
     }
 
     let suitesCount = 0;
     let casesCount = 0;
     const caseLinks: Record<string, string> = {};
     const caseLocations: Record<string, { planId: string; suiteId: string }> = {};
-    const publishCases = async (node: PublishableTestSuite, suiteId: number): Promise<void> => {
+    const testsLink = workItem && {
+      rel: TESTS_RELATION,
+      url: `${this.baseUrl}/_apis/wit/workItems/${workItem.id}`,
+    };
+    /** Links the case to the work item ("Tests"), unless an earlier publish already did. */
+    const linkChanges = async (existingId: string | null) => {
+      if (!testsLink) return [];
+      if (existingId) {
+        const current = await this.requestPage<{ relations?: { rel?: string; url?: string }[] }>(
+          `wit/workitems/${existingId}`,
+          'GET',
+          undefined,
+          false,
+          { $expand: 'relations' },
+        );
+        const linked = (current.data.relations ?? []).some(
+          (relation) =>
+            relation.rel === TESTS_RELATION &&
+            relation.url?.toLowerCase().endsWith(`/workitems/${workItem.id}`),
+        );
+        if (linked) return [];
+      }
+      return [{ op: 'add', path: '/relations/-', value: testsLink }];
+    };
+    const publishCases = async (
+      node: PublishableTestSuite,
+      suiteId: number,
+      linkedBySuite: boolean,
+    ): Promise<void> => {
       for (const testCase of node.cases) {
-        const changes = [
+        const changes: { op: string; path: string; value: unknown }[] = [
           { op: 'add', path: '/fields/System.Title', value: testCase.title },
           { op: 'add', path: '/fields/System.Description', value: testCase.description },
           { op: 'add', path: '/fields/Microsoft.VSTS.TCM.Steps', value: azureTestSteps(testCase) },
@@ -351,6 +457,7 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
         )?.['azure_devops'];
         const existingId =
           typeof existing === 'string' && /^[1-9]\d*$/.test(existing) ? existing : null;
+        if (!linkedBySuite) changes.push(...(await linkChanges(existingId)));
         const caseId = this.requireId(
           await this.request(
             existingId ? `wit/workitems/${existingId}` : 'wit/workitems/$Test%20Case',
@@ -381,12 +488,20 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
         casesCount++;
       }
     };
+    const linked = workItem
+      ? { workItem: { id: String(workItem.id), type: workItem.type, title: workItem.title } }
+      : {};
+    /** Every case of the tree, into one suite (which cannot hold child suites). */
+    const publishAllCases = async (
+      node: PublishableTestSuite,
+      suiteId: number,
+      linkedBySuite: boolean,
+    ): Promise<void> => {
+      await publishCases(node, suiteId, linkedBySuite);
+      for (const child of node.children) await publishAllCases(child, suiteId, linkedBySuite);
+    };
     if (options.remoteSuiteId) {
-      const publishAllCases = async (node: PublishableTestSuite): Promise<void> => {
-        await publishCases(node, parentId);
-        for (const child of node.children) await publishAllCases(child);
-      };
-      await publishAllCases(suite);
+      await publishAllCases(suite, parentId, destinationIsRequirement);
       return {
         provider: 'azure_devops',
         remotePlanId: String(remotePlanId),
@@ -396,6 +511,44 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
         casesCount,
         caseLinks,
         caseLocations,
+        ...linked,
+      };
+    }
+    if (requirementSuite && workItem) {
+      // Azure names the suite after its requirement ("<id> : <title>").
+      let created: AzureReference;
+      try {
+        created = await this.request(`testplan/Plans/${remotePlanId}/suites`, 'POST', {
+          suiteType: 'requirementTestSuite',
+          requirementId: workItem.id,
+          parentSuite: { id: parentId },
+        });
+      } catch (error) {
+        // Bugs only count as requirements when the team tracks them on the backlog.
+        if (error instanceof ApplicationError && error.details?.[0]?.['status'] === 400)
+          throw new ApplicationError(
+            'REQUIREMENT_SUITE_REJECTED',
+            `O Azure DevOps não aceitou o ${workItem.type} #${workItem.id} como requisito.`,
+            400,
+            [],
+            { id: workItem.id, type: workItem.type },
+          );
+        throw error;
+      }
+      const requirementSuiteId = this.requireId(created, 'create-suite');
+      suitesCount++;
+      await publishAllCases(suite, requirementSuiteId, true);
+      return {
+        provider: 'azure_devops',
+        remotePlanId: String(remotePlanId),
+        remoteSuiteId: String(requirementSuiteId),
+        remoteUrl: `${this.baseUrl}/${encodeURIComponent(this.project)}/_testPlans/define?planId=${remotePlanId}&suiteId=${requirementSuiteId}`,
+        suitesCount,
+        casesCount,
+        caseLinks,
+        caseLocations,
+        suiteKind: 'requirement',
+        ...linked,
       };
     }
     const publishNode = async (node: PublishableTestSuite, parentId: number): Promise<number> => {
@@ -408,7 +561,7 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
         'create-suite',
       );
       suitesCount++;
-      await publishCases(node, suiteId);
+      await publishCases(node, suiteId, false);
       for (const child of node.children) await publishNode(child, suiteId);
       return suiteId;
     };
@@ -422,6 +575,8 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
       casesCount,
       caseLinks,
       caseLocations,
+      suiteKind: 'static',
+      ...linked,
     };
   }
 }

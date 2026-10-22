@@ -77,14 +77,12 @@ export function SettingsView({
   // Invite state
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<WorkspaceRole>('MEMBER');
-  const [inviteGroupIds, setInviteGroupIds] = useState<readonly string[]>([]);
   const [isSubmittingInvite, setIsSubmittingInvite] = useState(false);
   const [groups, setGroups] = useState<readonly PermissionGroup[]>([]);
-  // Member whose workspace permissions and groups are being edited.
+  // Member whose workspace permissions are being edited; groups are managed in their own section.
   const [accessDraft, setAccessDraft] = useState<{
     memberId: string;
     permissions: WorkspacePermissions;
-    groupIds: readonly string[];
   } | null>(null);
   const [workspaceName, setWorkspaceName] = useState(activeMembership?.workspace.name ?? '');
   const [isRenaming, setIsRenaming] = useState(false);
@@ -147,7 +145,6 @@ export function SettingsView({
       void loadGroups();
       setInviteEmail('');
       setInviteRole('MEMBER');
-      setInviteGroupIds([]);
       setAccessDraft(null);
       setActionError(null);
       setActionSuccess(null);
@@ -182,10 +179,8 @@ export function SettingsView({
       await apiClient.addWorkspaceMember(activeMembership!.workspace.id, {
         email,
         role: inviteRole,
-        ...(inviteGroupIds.length ? { groupIds: inviteGroupIds } : {}),
       });
       setInviteEmail('');
-      setInviteGroupIds([]);
       setActionSuccess(t('settings.inviteSuccess'));
       await loadMembers();
     } catch (err) {
@@ -226,8 +221,7 @@ export function SettingsView({
     setActionSuccess(null);
     try {
       await apiClient!.updateWorkspaceMember(activeMembership!.workspace.id, draft.memberId, {
-        ...(canManageRoles ? { permissions: draft.permissions } : {}),
-        ...(canManageGroups ? { groupIds: draft.groupIds } : {}),
+        permissions: draft.permissions,
       });
       setAccessDraft(null);
       setActionSuccess(t('permissions.permissionsSaved'));
@@ -524,10 +518,8 @@ export function SettingsView({
                         disabled={isSubmittingInvite}
                         aria-label={t('common.role')}
                       >
-                        {isAdmin && <option value="ADMIN">{t('workspaces.roleAdmin')}</option>}
-                        <option value="INTEGRATOR">{t('workspaces.roleIntegrator')}</option>
                         <option value="MEMBER">{t('workspaces.roleMember')}</option>
-                        <option value="VIEWER">{t('workspaces.roleViewer')}</option>
+                        {isAdmin && <option value="ADMIN">{t('workspaces.roleAdmin')}</option>}
                       </Select>
                     </div>
                     <Button
@@ -540,35 +532,20 @@ export function SettingsView({
                       {t('workspaces.addMember')}
                     </Button>
                   </div>
-                  {canManageGroups && groups.length > 0 && inviteRole !== 'ADMIN' && (
-                    <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
-                      <legend className="sr-only">{t('permissions.memberGroups')}</legend>
-                      <span className="text-[11px] font-semibold text-muted">
-                        {t('permissions.memberGroups')}:
-                      </span>
-                      {groups.map((group) => (
-                        <label
-                          key={group.id}
-                          className="flex cursor-pointer items-center gap-1.5 text-xs"
-                        >
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 cursor-pointer rounded border-[var(--border)]"
-                            checked={inviteGroupIds.includes(group.id)}
-                            disabled={isSubmittingInvite}
-                            onChange={() =>
-                              setInviteGroupIds((current) =>
-                                current.includes(group.id)
-                                  ? current.filter((id) => id !== group.id)
-                                  : [...current, group.id],
-                              )
-                            }
-                          />
-                          {group.name}
-                        </label>
-                      ))}
-                    </fieldset>
-                  )}
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
+                    {t('settings.memberAccessHint')}
+                    {canManageGroups && (
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="sm"
+                        className="h-auto p-0 text-[11px]"
+                        onClick={() => setSettingsSection('groups')}
+                      >
+                        {t('settings.openPermissionGroups')}
+                      </Button>
+                    )}
+                  </p>
                 </form>
               )}
 
@@ -648,31 +625,28 @@ export function SettingsView({
                             </div>
 
                             <div className="flex items-center gap-2">
-                              {(canManageRoles || canManageGroups) &&
-                                canTouch &&
-                                m.role !== 'ADMIN' && (
-                                  <Button
-                                    type="button"
-                                    variant={editingAccess ? 'secondary' : 'ghost'}
-                                    size="sm"
-                                    aria-expanded={editingAccess}
-                                    aria-label={`${t('permissions.editPermissions')} ${displayName}`}
-                                    onClick={() =>
-                                      setAccessDraft(
-                                        editingAccess
-                                          ? null
-                                          : {
-                                              memberId: m.id,
-                                              permissions: m.permissions ?? {},
-                                              groupIds: m.groupIds ?? [],
-                                            },
-                                      )
-                                    }
-                                  >
-                                    <i className="ti ti-shield-lock" aria-hidden="true" />
-                                    {t('permissions.editPermissions')}
-                                  </Button>
-                                )}
+                              {canManageRoles && canTouch && m.role !== 'ADMIN' && (
+                                <Button
+                                  type="button"
+                                  variant={editingAccess ? 'secondary' : 'ghost'}
+                                  size="sm"
+                                  aria-expanded={editingAccess}
+                                  aria-label={`${t('permissions.editPermissions')} ${displayName}`}
+                                  onClick={() =>
+                                    setAccessDraft(
+                                      editingAccess
+                                        ? null
+                                        : {
+                                            memberId: m.id,
+                                            permissions: m.permissions ?? {},
+                                          },
+                                    )
+                                  }
+                                >
+                                  <i className="ti ti-shield-lock" aria-hidden="true" />
+                                  {t('permissions.editPermissions')}
+                                </Button>
+                              )}
                               {canManageRoles && canTouch ? (
                                 <div className="w-32">
                                   <Select
@@ -683,14 +657,16 @@ export function SettingsView({
                                     }}
                                     aria-label={`${t('common.role')} ${displayName}`}
                                   >
+                                    <option value="MEMBER">{t('workspaces.roleMember')}</option>
                                     {isAdmin && (
                                       <option value="ADMIN">{t('workspaces.roleAdmin')}</option>
                                     )}
-                                    <option value="INTEGRATOR">
-                                      {t('workspaces.roleIntegrator')}
-                                    </option>
-                                    <option value="MEMBER">{t('workspaces.roleMember')}</option>
-                                    <option value="VIEWER">{t('workspaces.roleViewer')}</option>
+                                    {/* Roles from before permission groups stay visible until changed. */}
+                                    {(m.role === 'VIEWER' || m.role === 'INTEGRATOR') && (
+                                      <option value={m.role} disabled>
+                                        {getRoleLabel(m.role)}
+                                      </option>
+                                    )}
                                   </Select>
                                 </div>
                               ) : (
@@ -726,80 +702,40 @@ export function SettingsView({
                               className="space-y-3 border-t border-border bg-surface-1 p-3 text-xs"
                               data-testid={`member-access-${m.id}`}
                             >
-                              {canManageRoles && (
-                                <fieldset className="space-y-1">
-                                  <legend className="font-semibold text-[var(--text-primary)]">
-                                    {t('permissions.workspaceSection')}
-                                  </legend>
-                                  <p className="text-[11px] text-muted">
-                                    {t('permissions.workspaceSectionDesc')}
-                                  </p>
-                                  <div className="grid gap-1 sm:grid-cols-2">
-                                    {WORKSPACE_PERMISSION_KEYS.map(
-                                      (key: WorkspacePermissionKey) => (
-                                        <label
-                                          key={key}
-                                          className="flex cursor-pointer items-center gap-2"
-                                        >
-                                          <input
-                                            type="checkbox"
-                                            className="h-4 w-4 cursor-pointer rounded border-[var(--border)]"
-                                            checked={accessDraft.permissions[key] === true}
-                                            // Members can only grant what they hold themselves.
-                                            disabled={!workspaceAccess[key]}
-                                            onChange={(event) =>
-                                              setAccessDraft({
-                                                ...accessDraft,
-                                                permissions: {
-                                                  ...accessDraft.permissions,
-                                                  [key]: event.target.checked,
-                                                },
-                                              })
-                                            }
-                                          />
-                                          {t(`permissions.workspace.${key}`)}
-                                        </label>
-                                      ),
-                                    )}
-                                  </div>
-                                </fieldset>
-                              )}
-                              {canManageGroups && (
-                                <fieldset className="space-y-1">
-                                  <legend className="font-semibold text-[var(--text-primary)]">
-                                    {t('permissions.memberGroups')}
-                                  </legend>
-                                  {groups.length === 0 ? (
-                                    <p className="text-muted">{t('permissions.noGroups')}</p>
-                                  ) : (
-                                    <div className="grid gap-1 sm:grid-cols-2">
-                                      {groups.map((group) => (
-                                        <label
-                                          key={group.id}
-                                          className="flex cursor-pointer items-center gap-2"
-                                        >
-                                          <input
-                                            type="checkbox"
-                                            className="h-4 w-4 cursor-pointer rounded border-[var(--border)]"
-                                            checked={accessDraft.groupIds.includes(group.id)}
-                                            onChange={() =>
-                                              setAccessDraft({
-                                                ...accessDraft,
-                                                groupIds: accessDraft.groupIds.includes(group.id)
-                                                  ? accessDraft.groupIds.filter(
-                                                      (id) => id !== group.id,
-                                                    )
-                                                  : [...accessDraft.groupIds, group.id],
-                                              })
-                                            }
-                                          />
-                                          {group.name}
-                                        </label>
-                                      ))}
-                                    </div>
-                                  )}
-                                </fieldset>
-                              )}
+                              <fieldset className="space-y-1">
+                                <legend className="font-semibold text-[var(--text-primary)]">
+                                  {t('permissions.workspaceSection')}
+                                </legend>
+                                <p className="text-[11px] text-muted">
+                                  {t('permissions.workspaceSectionDesc')}
+                                </p>
+                                <div className="grid gap-1 sm:grid-cols-2">
+                                  {WORKSPACE_PERMISSION_KEYS.map((key: WorkspacePermissionKey) => (
+                                    <label
+                                      key={key}
+                                      className="flex cursor-pointer items-center gap-2"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        className="h-4 w-4 cursor-pointer rounded border-[var(--border)]"
+                                        checked={accessDraft.permissions[key] === true}
+                                        // Members can only grant what they hold themselves.
+                                        disabled={!workspaceAccess[key]}
+                                        onChange={(event) =>
+                                          setAccessDraft({
+                                            ...accessDraft,
+                                            permissions: {
+                                              ...accessDraft.permissions,
+                                              [key]: event.target.checked,
+                                            },
+                                          })
+                                        }
+                                      />
+                                      {t(`permissions.workspace.${key}`)}
+                                    </label>
+                                  ))}
+                                </div>
+                              </fieldset>
                               <div className="flex justify-end gap-2">
                                 <Button
                                   type="button"

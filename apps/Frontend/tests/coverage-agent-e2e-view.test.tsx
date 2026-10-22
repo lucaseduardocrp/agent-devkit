@@ -99,6 +99,12 @@ async function setup() {
   return client;
 }
 
+/** Managing test management and importing cases are actions of the run menu. */
+async function chooseRunAction(name: RegExp) {
+  fireEvent.click(screen.getByRole('button', { name: 'Ações' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name }));
+}
+
 describe('E2eView test management', () => {
   it('shows the case linked to each test', async () => {
     await setup();
@@ -115,18 +121,16 @@ describe('E2eView test management', () => {
 
   it('saves the reporting target and tells the user', async () => {
     const client = await setup();
-    fireEvent.click(screen.getByRole('button', { name: /Gestão de testes/ }));
+    await chooseRunAction(/Gestão de testes/);
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('Gestão de testes · ama')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /Gestão de testes/ }));
+    await chooseRunAction(/Gestão de testes/);
     await within(await screen.findByRole('dialog')).findByRole('option', { name: 'Permissões' });
     fireEvent.click(screen.getByRole('button', { name: 'Salvar' }));
-    expect(
-      await screen.findByText('Gestão de testes de "ama" atualizada.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Gestão de testes de "ama" atualizada.')).toBeInTheDocument();
     expect(client.setE2eReporting).toHaveBeenCalledWith('c1', {
       provider: 'azure_devops',
       planId: '1',
@@ -139,12 +143,12 @@ describe('E2eView test management', () => {
 
   it('imports cases into the run and reports how many were added', async () => {
     const client = await setup();
-    fireEvent.click(screen.getByRole('button', { name: /Importar test cases/ }));
+    await chooseRunAction(/Importar test cases/);
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /Importar test cases/ }));
+    await chooseRunAction(/Importar test cases/);
     fireEvent.click(await within(await screen.findByRole('dialog')).findByLabelText(/50606/));
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Importar (1)' }));

@@ -48,6 +48,59 @@ const brainQuerySchema = z.object({
   history: z.string().trim().max(8000).optional(),
 });
 
+const agentWorkflowSchema = z.object({
+  enabled: z.boolean(),
+  autonomy: z.enum(['supervised', 'balanced', 'autonomous']).default('balanced'),
+  finalReview: z.boolean().default(true),
+  uncertaintyBehavior: z.enum(['ask', 'assume']).default('ask'),
+  issueCreationBehavior: z.enum(['ask', 'allow']).default('ask'),
+  defaultAction: z.enum(['allow', 'deny']).default('allow'),
+  rules: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1).max(100),
+        name: z.string().trim().min(1).max(100),
+        toolset: z.enum([
+          'all',
+          'agents',
+          'integrations',
+          'brain',
+          'issues',
+          'pbi',
+          'spec',
+          'testplans',
+          'design',
+          'e2e',
+          'releasenotes',
+          'audit',
+          'workspaces',
+        ]),
+        toolName: z
+          .string()
+          .trim()
+          .regex(/^[a-z][a-z0-9_]{2,63}$/)
+          .optional(),
+        effect: z.enum(['allow', 'deny']).default('allow'),
+        allowedProviders: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
+        createIssueForAction: z.boolean().optional(),
+        requireApproval: z.boolean().optional(),
+      }),
+    )
+    .max(100)
+    .default([]),
+  steps: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1).max(100),
+        name: z.string().trim().min(1).max(100),
+        agentId: z.string().uuid().optional(),
+        instructions: z.string().trim().min(1).max(10000),
+        reviewRequired: z.boolean().optional(),
+      }),
+    )
+    .max(20),
+});
+
 export function resolveWorkspaceId(request: Request): string {
   const wsId =
     request.context?.workspaceId ?? request.header('x-workspace-id') ?? request.context?.ownerId;
@@ -81,6 +134,47 @@ export function createAgentsRouter(
       const role = typeof req.query.role === 'string' ? (req.query.role as AgentRole) : undefined;
       const agents = await agentService.listAgents(workspaceId, role);
       res.status(200).json({ agents: agents.map((a) => a.toJSON()) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/agents/workflow', requireAuth, async (req, res, next) => {
+    try {
+      const workspaceId = resolveWorkspaceId(req);
+      const workflow = await agentService.getWorkflow(workspaceId);
+      const steps = await Promise.all(
+        workflow.steps.map(async (step) => {
+          if (!step.agentId) return step;
+          let agent;
+          try {
+            agent = await agentService.getAgent(workspaceId, step.agentId);
+          } catch (error) {
+            if (error instanceof ApplicationError && error.code === 'AGENT_NOT_FOUND') return step;
+            throw error;
+          }
+          return {
+            ...step,
+            agent: {
+              id: agent.id,
+              name: agent.name,
+              role: agent.role,
+              instructions: agent.instructions,
+            },
+          };
+        }),
+      );
+      res.status(200).json({ workflow: { ...workflow, steps } });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.put('/agents/workflow', requireAuth, async (req, res, next) => {
+    try {
+      const workflow = parseBody(agentWorkflowSchema, req);
+      const saved = await agentService.setWorkflow(resolveWorkspaceId(req), workflow);
+      res.status(200).json({ workflow: saved });
     } catch (err) {
       next(err);
     }

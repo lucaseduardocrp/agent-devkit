@@ -13,6 +13,9 @@ import type { KnowledgeSearchPort } from '../../modules/knowledge/application/kn
 import { createRequestContext } from '../../shared/context.js';
 import { ApplicationError, toErrorResponse } from '../../shared/errors.js';
 import { consoleLogger, createRequestLogger, type Logger } from '../../shared/observability.js';
+import { noCache, type Cache } from '../../shared/cache.js';
+import { cachedKnowledgeRepository } from '../../modules/knowledge/application/knowledge-cache.js';
+import compression from 'compression';
 import { createCompatibilityRouter, type RequestContextResolver } from './compatibility-routes.js';
 import { AuthService } from '../../modules/identity/application/auth-service.js';
 import { AccessTokenService } from '../../modules/identity/application/access-tokens.js';
@@ -39,13 +42,19 @@ import { InMemoryAgentRepository } from '../../modules/agents/adapters/in-memory
 import type { AgentRepository } from '../../modules/agents/application/agent-repository.js';
 import { createAgentsRouter } from './agents-routes.js';
 import { createIssuesRouter } from './issues-routes.js';
+import { createAttachmentsRouter } from './attachments-routes.js';
 import { createPbiRouter } from './pbi-routes.js';
 import { createFieldMappingRouter } from './field-mapping-routes.js';
 import {
   InMemoryFieldMappingStore,
   type FieldMappingStore,
 } from '../../modules/field-mapping/field-mapping.js';
-import { InMemoryPbiStore, type PbiStore } from '../../modules/pbi/pbi-store.js';
+import {
+  InMemoryPbiStore,
+  pbiCacheScope,
+  withPbiChangeHook,
+  type PbiStore,
+} from '../../modules/pbi/pbi-store.js';
 import { PbiService } from '../../modules/pbi/pbi-service.js';
 import {
   InMemoryPbiRelationStore,
@@ -126,6 +135,8 @@ export interface ReadinessProbe {
 }
 
 export interface AppOptions {
+  /** Shared read cache (Redis in production); without one every read goes to the stores. */
+  readonly cache?: Cache;
   readonly auditPersistence?: AuditPersistence;
   readonly logger?: Logger;
   readonly readinessProbes?: readonly ReadinessProbe[];
@@ -221,6 +232,7 @@ const corsMiddleware: RequestHandler = (request, response, next) => {
 
 export function createApp(options: AppOptions = {}) {
   const app = express();
+  const cache = options.cache ?? noCache();
   const authRepository = new InMemoryAuthRepository();
   const accessTokens =
     options.accessTokenService ??
@@ -242,7 +254,7 @@ export function createApp(options: AppOptions = {}) {
   };
   const audit = options.auditPersistence ?? new MemoryAuditPersistence(raw);
   const audited = auditedRepositories(raw, audit);
-  const knowledgeRepository = audited.knowledge;
+  const knowledgeRepository = cachedKnowledgeRepository(audited.knowledge, cache);
   const resolveContext =
     options.requestContextResolver ?? createAuthContextResolver(authService, workspaceService);
   const contextResolver: RequestContextResolver = async (req, res) => {
@@ -273,12 +285,16 @@ export function createApp(options: AppOptions = {}) {
     next();
   });
   app.use(createRequestLogger(options.logger ?? consoleLogger));
+  // Lists such as PBIs and Brain documents are megabytes of repetitive JSON: gzip shrinks them
+  // several times over. Media and other incompressible types are left as they are.
+  app.use(compression());
   // Design requests may contain up to four transient 5 MB reference images encoded as base64.
   app.use('/design', express.json({ limit: '30mb' }));
   // E2E runs carry the product spec and an optional code diff (up to 500k characters each).
   app.use('/e2e', express.json({ limit: '5mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(modulePolicy);
+  const e2eArtifacts = options.e2eArtifacts ?? new InMemoryE2eArtifactStore();
   const agentRepository = options.agentRepository ?? new InMemoryAgentRepository();
   const agentService =
     options.agentService ??
@@ -296,9 +312,11 @@ export function createApp(options: AppOptions = {}) {
       dynamicProviderFactory,
       defaultLlm: options.defaultLlm,
       agentRepository,
+      agentService,
     });
 
   app.use(createAuditRouter(audit, contextResolver));
+  app.use(createAttachmentsRouter(e2eArtifacts, contextResolver, dynamicProviderFactory));
   app.use(createAuthRouter(authService, { accessTokens, ...options.authRouterOptions }));
   app.use(
     createWorkspacesRouter(workspaceService, contextResolver, (id, remove) =>
@@ -306,11 +324,20 @@ export function createApp(options: AppOptions = {}) {
     ),
   );
   app.use(createIntegrationsRouter(integrationsService, contextResolver, dynamicProviderFactory));
-  app.use(createKnowledgeRouter(knowledgeRepository, dynamicProviderFactory, contextResolver));
+  app.use(
+    createKnowledgeRouter(
+      knowledgeRepository,
+      dynamicProviderFactory,
+      contextResolver,
+      e2eArtifacts,
+    ),
+  );
   app.use(createAgentsRouter(agentService, contextResolver));
   const entityAudit = new EntityAuditLog(audit);
   const issueStore = auditedIssueStore(options.issueStore ?? new InMemoryIssueStore(), entityAudit);
-  const pbiStore = options.pbiStore ?? new InMemoryPbiStore();
+  const pbiStore = withPbiChangeHook(options.pbiStore ?? new InMemoryPbiStore(), (workspaceId) =>
+    cache.invalidate(pbiCacheScope(workspaceId)),
+  );
   const fieldMappings = options.fieldMappingStore ?? new InMemoryFieldMappingStore();
   app.use(createFieldMappingRouter(fieldMappings, contextResolver));
   const runService = new RunService(
@@ -319,12 +346,20 @@ export function createApp(options: AppOptions = {}) {
     agentService,
     pbiStore,
     options.usageStore ?? new InMemoryUsageStore(),
+    e2eArtifacts,
   );
   void runService
     .recover()
     .catch((error: unknown) => console.error('[RunService] Recovery failed:', error));
   app.use(
-    createIssuesRouter(issueStore, agentService, workspaceService, runService, contextResolver),
+    createIssuesRouter(
+      issueStore,
+      agentService,
+      workspaceService,
+      runService,
+      contextResolver,
+      e2eArtifacts,
+    ),
   );
   app.use(
     createPbiRouter(
@@ -335,11 +370,14 @@ export function createApp(options: AppOptions = {}) {
         entityAudit,
         options.pbiRelationStore ?? new InMemoryPbiRelationStore(),
         fieldMappings,
+        cache,
+        e2eArtifacts,
       ),
       issueStore,
       runService,
       contextResolver,
       workspaceService,
+      e2eArtifacts,
     ),
   );
   app.use(
@@ -365,7 +403,6 @@ export function createApp(options: AppOptions = {}) {
   const e2eStore = options.e2eStore ?? new InMemoryE2eStore();
   const e2eQueue = options.e2eQueue ?? new InMemoryE2eJobQueue();
   const e2eScripts = options.e2eScripts ?? new GitScriptRepository(integrationsService);
-  const e2eArtifacts = options.e2eArtifacts ?? new InMemoryE2eArtifactStore();
   const e2eRunnerTasks = options.e2eRunnerTasks ?? new InMemoryE2eRunnerTaskStore();
   const testManagement =
     options.testManagement ?? new IntegrationTestManagementResolver(integrationsService);
@@ -426,10 +463,16 @@ export function createApp(options: AppOptions = {}) {
   );
   const specRepository = audited.specs;
   const specCollaborator = new AgentSpecCollaborator(agentService);
-  app.use(createSpecRouter(new SpecService(specRepository, specCollaborator), contextResolver));
+  app.use(
+    createSpecRouter(
+      new SpecService(specRepository, specCollaborator, e2eArtifacts),
+      contextResolver,
+      e2eArtifacts,
+    ),
+  );
   app.use(
     createSpecWorkflowRouter(
-      new SpecWorkflows(specRepository, knowledgeRepository, specCollaborator),
+      new SpecWorkflows(specRepository, knowledgeRepository, specCollaborator, e2eArtifacts),
     ),
   );
   app.use(
@@ -442,6 +485,7 @@ export function createApp(options: AppOptions = {}) {
       dynamicProviderFactory,
       fieldMappings,
       testManagement,
+      e2eArtifacts,
     ),
   );
 

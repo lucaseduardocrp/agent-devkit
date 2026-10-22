@@ -7,8 +7,16 @@ import { parseBody } from './validation.js';
 import type { RequestContextResolver } from './compatibility-routes.js';
 import type { AgentService } from '../../modules/agents/application/agent-service.js';
 import type { WorkspaceService } from '../../modules/workspaces/application/workspace-service.js';
-import type { IssueStore, IssueChanges } from '../../modules/issues/issue-store.js';
+import type { Issue, IssueStore, IssueChanges } from '../../modules/issues/issue-store.js';
 import type { RunService } from '../../modules/issues/run-service.js';
+import type { E2eArtifactStore } from '../../modules/e2e/application/artifact-store.js';
+import type { ImageAttachmentScope } from '../../modules/shared/image-attachment.js';
+import { validateAttachments } from './attachments-routes.js';
+import { fileOwner, syncItemFilesSafely } from '../../modules/shared/attachment-files.js';
+
+/** What of an issue can reference stored files. */
+const issueFiles = (issue: Pick<Issue, 'description' | 'attachments'> | null) =>
+  issue && { description: issue.description, attachments: issue.attachments };
 
 const status = z.enum([
   'backlog',
@@ -23,6 +31,7 @@ const priority = z.enum(['urgent', 'high', 'medium', 'low']);
 const issueFields = z.object({
   title: z.string().trim().min(1).max(240),
   description: z.string().max(30000).optional(),
+  attachments: z.array(z.unknown()).max(20).optional(),
   status: status.optional(),
   priority: priority.optional(),
   assigneeAgentId: z.string().uuid().nullable().optional(),
@@ -51,6 +60,15 @@ const completionFields = z.object({
   inputTokens: z.number().int().min(0).optional(),
   outputTokens: z.number().int().min(0).optional(),
 });
+const continueRunFields = z
+  .object({
+    action: z.enum(['approve', 'answer', 'revise']),
+    answer: z.string().trim().min(1).max(10000).optional(),
+  })
+  .refine((value) => value.action === 'approve' || Boolean(value.answer), {
+    message: 'A response is required to continue this workflow.',
+    path: ['answer'],
+  });
 const tokenCount = z.number().int().min(0).max(2_147_483_647);
 const usageFields = z.object({
   tool: z.string().trim().min(1).max(100),
@@ -117,6 +135,7 @@ export function createIssuesRouter(
   workspaces: WorkspaceService,
   runs: RunService,
   contextResolver?: RequestContextResolver,
+  imageStore?: E2eArtifactStore,
 ): Router {
   const router = Router();
   if (contextResolver)
@@ -142,9 +161,30 @@ export function createIssuesRouter(
   router.post('/issues', requireAuth, async (request, response, next) => {
     try {
       requireWrite(request);
-      const { runMode, ...fields } = parseBody(issueCreateFields, request);
+      const {
+        runMode,
+        attachments: rawAttachments,
+        ...fields
+      } = parseBody(issueCreateFields, request);
       await validateAssignee(agents, workspaces, workspaceId(request), actorId(request), fields);
-      const issue = await store.create(workspaceId(request), actorId(request), fields);
+      const attachments =
+        rawAttachments === undefined
+          ? []
+          : await validateAttachments(imageStore!, workspaceId(request), rawAttachments, [
+              'issue',
+              'pbi',
+            ] satisfies readonly ImageAttachmentScope[]);
+      const issue = await store.create(workspaceId(request), actorId(request), {
+        ...fields,
+        attachments,
+      });
+      await syncItemFilesSafely(
+        imageStore,
+        workspaceId(request),
+        fileOwner('issue', issue.id),
+        null,
+        issueFiles(issue),
+      );
       let automationError: string | undefined;
       let run;
       if (issue.assigneeAgentId && ['todo', 'in_progress'].includes(issue.status)) {
@@ -177,11 +217,24 @@ export function createIssuesRouter(
     try {
       requireWrite(request);
       const existing = await findIssue(store, request);
-      const { runMode, ...fields } = parseBody(updateFields, request);
+      const { runMode, attachments: rawAttachments, ...fields } = parseBody(updateFields, request);
+      const changes = {
+        ...fields,
+        ...(rawAttachments === undefined
+          ? {}
+          : {
+              attachments: await validateAttachments(
+                imageStore!,
+                workspaceId(request),
+                rawAttachments,
+                ['issue', 'pbi'],
+              ),
+            }),
+      };
       // Changing the responsible user does not affect a running agent.
-      if (fields.status !== undefined || fields.assigneeAgentId !== undefined) {
+      if (changes.status !== undefined || changes.assigneeAgentId !== undefined) {
         const active = (await runs.list(workspaceId(request), existing.id)).some((run) =>
-          ['queued', 'running'].includes(run.status),
+          ['queued', 'running', 'waiting_review', 'waiting_input'].includes(run.status),
         );
         if (active)
           throw new ApplicationError(
@@ -192,22 +245,31 @@ export function createIssuesRouter(
       }
       await validateAssignee(agents, workspaces, workspaceId(request), actorId(request), {
         assigneeAgentId:
-          fields.assigneeAgentId === undefined ? existing.assigneeAgentId : fields.assigneeAgentId,
+          changes.assigneeAgentId === undefined
+            ? existing.assigneeAgentId
+            : changes.assigneeAgentId,
         // An unchanged user stays valid even if they later left the workspace.
         assigneeUserId:
-          fields.assigneeUserId === undefined || fields.assigneeUserId === existing.assigneeUserId
+          changes.assigneeUserId === undefined || changes.assigneeUserId === existing.assigneeUserId
             ? null
-            : fields.assigneeUserId,
+            : changes.assigneeUserId,
       });
-      const updated = await store.update(workspaceId(request), existing.id, fields);
+      const updated = await store.update(workspaceId(request), existing.id, changes);
+      await syncItemFilesSafely(
+        imageStore,
+        workspaceId(request),
+        fileOwner('issue', existing.id),
+        issueFiles(existing),
+        issueFiles(updated),
+      );
       let automationError: string | undefined;
       let run;
       const shouldStart =
         updated?.assigneeAgentId &&
         ['todo', 'in_progress'].includes(updated.status) &&
-        ((fields.assigneeAgentId !== undefined &&
-          fields.assigneeAgentId !== existing.assigneeAgentId) ||
-          (fields.status === 'todo' && existing.status !== 'todo'));
+        ((changes.assigneeAgentId !== undefined &&
+          changes.assigneeAgentId !== existing.assigneeAgentId) ||
+          (changes.status === 'todo' && existing.status !== 'todo'));
       if (shouldStart) {
         try {
           run = await runs.create(existing.id, request.context!, runMode);
@@ -237,6 +299,13 @@ export function createIssuesRouter(
           409,
         );
       await store.remove(workspaceId(request), issue.id);
+      await syncItemFilesSafely(
+        imageStore,
+        workspaceId(request),
+        fileOwner('issue', issue.id),
+        issueFiles(issue),
+        null,
+      );
       response.status(204).end();
     } catch (error) {
       next(error);
@@ -282,21 +351,41 @@ export function createIssuesRouter(
     try {
       const wsId = workspaceId(request);
       const userId = actorId(request);
-      const [issues, states] = await Promise.all([
+      const [issues, states, assigned] = await Promise.all([
         store.list(wsId),
         store.inboxStates(wsId, userId),
+        runs.assignedTo(wsId, userId),
       ]);
+      // The inbox is private: it lists only the issues with runs executed while the issue was
+      // assigned to this user, newest run first, and only those runs.
+      const runsByIssue = new Map<string, typeof assigned>();
+      for (const run of assigned)
+        runsByIssue.set(run.issueId, [...(runsByIssue.get(run.issueId) ?? []), run]);
       const stateByIssue = new Map(states.map((state) => [state.issueId, state]));
       response.json({
-        items: issues.map((issue) => {
-          const state = stateByIssue.get(issue.id);
-          return {
-            issue,
-            readAt: state?.readAt && state.readAt >= issue.updatedAt ? state.readAt : null,
-            archivedAt:
-              state?.archivedAt && state.archivedAt >= issue.updatedAt ? state.archivedAt : null,
-          };
-        }),
+        items: issues
+          .filter((issue) => runsByIssue.has(issue.id))
+          .map((issue) => {
+            const state = stateByIssue.get(issue.id);
+            return {
+              issue,
+              runs: (runsByIssue.get(issue.id) ?? []).map((run) => ({
+                id: run.id,
+                agentId: run.agentId,
+                status: run.status,
+                attempt: run.attempt,
+                createdAt: run.createdAt,
+                finishedAt: run.finishedAt,
+              })),
+              readAt: state?.readAt && state.readAt >= issue.updatedAt ? state.readAt : null,
+              archivedAt:
+                state?.archivedAt && state.archivedAt >= issue.updatedAt ? state.archivedAt : null,
+            };
+          })
+          .sort(
+            (a, b) =>
+              new Date(b.runs[0]!.createdAt).getTime() - new Date(a.runs[0]!.createdAt).getTime(),
+          ),
       });
     } catch (error) {
       next(error);
@@ -334,7 +423,9 @@ export function createIssuesRouter(
       response.json({
         agents: agentList.map((agent) => agent.toJSON()),
         recentRuns: agentRuns.slice(0, 10),
-        activeRuns: agentRuns.filter((run) => ['queued', 'running'].includes(run.status)).length,
+        activeRuns: agentRuns.filter((run) =>
+          ['queued', 'running', 'waiting_review', 'waiting_input'].includes(run.status),
+        ).length,
         costs: {
           monthSpendMicros: costs.monthSpendMicros,
           totalInputTokens: costs.totalInputTokens,
@@ -414,6 +505,21 @@ export function createIssuesRouter(
       const fields = parseBody(completionFields, request);
       response.json({
         run: await runs.completeHost(workspaceId(request), request.params['id'] as string, fields),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+  router.post('/runs/:id/continue', requireAuth, async (request, response, next) => {
+    try {
+      requireWrite(request);
+      const fields = parseBody(continueRunFields, request);
+      response.json({
+        run: await runs.continueWorkflow(
+          workspaceId(request),
+          request.params['id'] as string,
+          fields,
+        ),
       });
     } catch (error) {
       next(error);

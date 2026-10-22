@@ -14,6 +14,7 @@ import type {
   UpdateAgentDto,
   ExecuteAgentDto,
   ExecuteAgentResponse,
+  AgentWorkflowDto,
 } from '../features/agents/agent-types.js';
 import type { SupportedLocale } from './i18n/types.js';
 import type {
@@ -37,6 +38,7 @@ import type {
   PbiRelation,
   PbiLinkType,
 } from '../features/pbi/pbi-types.js';
+import type { Attachment, AttachmentScope } from '../features/shared/attachment-types.js';
 import type {
   GenerateReleaseNoteFields,
   ReleaseNote,
@@ -276,7 +278,14 @@ export interface PublishedTestSuiteDto {
   readonly remoteUrl: string;
   readonly suitesCount: number;
   readonly casesCount: number;
+  /** The work item the cases were linked to, when one was given. */
+  readonly workItem?: { readonly id: string; readonly type: string; readonly title: string };
+  /** Kind of the suite created; absent when the cases went into an existing suite. */
+  readonly suiteKind?: RemoteSuiteKind;
 }
+
+/** Azure DevOps suite kinds: a requirement suite belongs to a work item. */
+export type RemoteSuiteKind = 'static' | 'requirement';
 
 export interface TestSuiteProviderDto {
   readonly id: string;
@@ -302,6 +311,10 @@ export interface PublishTestSuiteInput {
   readonly remoteParentSuiteId?: string;
   readonly remoteSuiteId?: string;
   readonly remoteSuiteName?: string;
+  /** Kind of the suite created (Azure DevOps); a requirement suite needs workItemId. */
+  readonly suiteKind?: RemoteSuiteKind;
+  /** Remote work item the published cases test (PBI, bug, task...). */
+  readonly workItemId?: string;
   readonly templateId?: string;
   /** Values filled in for template fields, keyed by destination field. */
   readonly fieldValues?: Readonly<Record<string, FieldValue>>;
@@ -366,6 +379,7 @@ export interface SpecificationDto {
   readonly title: string;
   readonly sections: readonly SpecificationSectionDto[];
   readonly messages: readonly SpecMessageDto[];
+  readonly attachments?: readonly Attachment[];
   readonly proposal?: {
     readonly title?: string;
     readonly sections: readonly { templateSectionId: string; content: string }[];
@@ -382,6 +396,117 @@ export class ApiClientError extends Error {
     super(message);
     this.name = 'ApiClientError';
   }
+}
+
+const EMPTY_AGENT_WORKFLOW: AgentWorkflowDto = {
+  enabled: false,
+  autonomy: 'balanced',
+  finalReview: true,
+  uncertaintyBehavior: 'ask',
+  issueCreationBehavior: 'ask',
+  defaultAction: 'allow',
+  steps: [],
+  rules: [],
+};
+
+const AGENT_WORKFLOW_TOOLSETS = new Set([
+  'all',
+  'agents',
+  'integrations',
+  'brain',
+  'issues',
+  'pbi',
+  'spec',
+  'testplans',
+  'design',
+  'e2e',
+  'releasenotes',
+  'audit',
+  'workspaces',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeAgentWorkflow(
+  raw: unknown,
+  fallback: AgentWorkflowDto = EMPTY_AGENT_WORKFLOW,
+): AgentWorkflowDto {
+  const value = isRecord(raw) ? raw : {};
+  const steps = Array.isArray(value['steps'])
+    ? value['steps'].filter(
+        (step): step is AgentWorkflowDto['steps'][number] =>
+          isRecord(step) &&
+          typeof step['id'] === 'string' &&
+          typeof step['name'] === 'string' &&
+          typeof step['instructions'] === 'string',
+      )
+    : fallback.steps;
+  const rules = Array.isArray(value['rules'])
+    ? value['rules'].flatMap((rule): AgentWorkflowDto['rules'][number][] => {
+        if (
+          !isRecord(rule) ||
+          typeof rule['id'] !== 'string' ||
+          typeof rule['name'] !== 'string' ||
+          typeof rule['toolset'] !== 'string' ||
+          !AGENT_WORKFLOW_TOOLSETS.has(rule['toolset']) ||
+          (rule['effect'] !== 'allow' && rule['effect'] !== 'deny') ||
+          (rule['allowedProviders'] !== undefined &&
+            (!Array.isArray(rule['allowedProviders']) ||
+              !rule['allowedProviders'].every((provider) => typeof provider === 'string')))
+        )
+          return [];
+        const allowedProviders = rule['allowedProviders'] as string[] | undefined;
+        return [
+          {
+            id: rule['id'],
+            name: rule['name'],
+            toolset: rule['toolset'] as AgentWorkflowDto['rules'][number]['toolset'],
+            effect: rule['effect'] as AgentWorkflowDto['rules'][number]['effect'],
+            ...(typeof rule['toolName'] === 'string' ? { toolName: rule['toolName'] } : {}),
+            ...(allowedProviders ? { allowedProviders } : {}),
+            ...(typeof rule['createIssueForAction'] === 'boolean'
+              ? { createIssueForAction: rule['createIssueForAction'] }
+              : {}),
+            ...(typeof rule['requireApproval'] === 'boolean'
+              ? { requireApproval: rule['requireApproval'] }
+              : {}),
+          },
+        ];
+      })
+    : fallback.rules;
+
+  return {
+    enabled: typeof value['enabled'] === 'boolean' ? value['enabled'] : fallback.enabled,
+    autonomy:
+      value['autonomy'] === 'supervised' ||
+      value['autonomy'] === 'balanced' ||
+      value['autonomy'] === 'autonomous'
+        ? value['autonomy']
+        : fallback.autonomy,
+    finalReview:
+      typeof value['finalReview'] === 'boolean' ? value['finalReview'] : fallback.finalReview,
+    uncertaintyBehavior:
+      value['uncertaintyBehavior'] === 'ask' || value['uncertaintyBehavior'] === 'assume'
+        ? value['uncertaintyBehavior']
+        : fallback.uncertaintyBehavior,
+    issueCreationBehavior:
+      value['issueCreationBehavior'] === 'ask' || value['issueCreationBehavior'] === 'allow'
+        ? value['issueCreationBehavior']
+        : fallback.issueCreationBehavior,
+    defaultAction:
+      value['defaultAction'] === 'allow' || value['defaultAction'] === 'deny'
+        ? value['defaultAction']
+        : fallback.defaultAction,
+    steps,
+    rules,
+    ...(typeof value['updatedAt'] === 'string'
+      ? { updatedAt: value['updatedAt'] }
+      : fallback.updatedAt
+        ? { updatedAt: fallback.updatedAt }
+        : {}),
+  };
 }
 
 export interface ApiClientOptions {
@@ -539,8 +664,79 @@ export class ApiClient {
     };
   }
 
+  /** Every item for the list, without its detail fields: see {@link PbiItem.partial}. */
   public async getPbiItems(signal?: AbortSignal): Promise<PbiItem[]> {
-    return (await this.issueRequest<{ items: PbiItem[] }>('/pbi', { signal })).items;
+    const { items } = await this.issueRequest<{
+      items: (Omit<PbiItem, 'description' | 'attachments' | 'partial'> & {
+        descriptionExcerpt: string;
+      })[];
+    }>('/pbi?view=summary', { signal });
+    return items.map(({ descriptionExcerpt, ...item }) => ({
+      ...item,
+      description: descriptionExcerpt,
+      partial: true,
+    }));
+  }
+  /** One item with every field. */
+  public async getPbiItem(id: string, signal?: AbortSignal): Promise<PbiItem> {
+    return (
+      await this.issueRequest<{ item: PbiItem }>(`/pbi/items/${encodeURIComponent(id)}`, {
+        signal,
+      })
+    ).item;
+  }
+  /** Uploads a file to the ADK storage; the server checks its real type and size. */
+  public async uploadAttachment(scope: AttachmentScope, file: File): Promise<Attachment> {
+    const query = new URLSearchParams({ scope, name: file.name || 'file' });
+    const response = await this.fetchWithAuth(`${this.baseUrl}/attachments/files?${query}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file,
+    });
+    if (!response.ok) return this.handleErrorResponse(response);
+    return ((await response.json()) as { attachment: Attachment }).attachment;
+  }
+  /** Removes an upload whose item was not saved; saved files go away with their item. */
+  public async deleteAttachment(id: string): Promise<void> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/attachments/files/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) return this.handleErrorResponse(response);
+  }
+  /**
+   * Loads a file shown in the ADK: files stored by the ADK by their path, and files hosted
+   * by an integration (Azure DevOps, Jira...) through the server, which holds the credentials.
+   */
+  public async getMedia(src: string, signal?: AbortSignal): Promise<Blob> {
+    const path = src.startsWith('/attachments/')
+      ? src
+      : `/attachments/proxy?url=${encodeURIComponent(src)}`;
+    const response = await this.fetchWithAuth(`${this.baseUrl}${path}`, { signal });
+    if (!response.ok) return this.handleErrorResponse(response);
+    return response.blob();
+  }
+  public async getDocumentAttachments(pageId: string): Promise<Attachment[]> {
+    return (
+      await this.issueRequest<{ attachments: Attachment[] }>(
+        `/knowledge/documents/${encodeURIComponent(pageId)}/attachments`,
+      )
+    ).attachments;
+  }
+  public async saveDocumentAttachments(
+    pageId: string,
+    attachments: readonly Attachment[],
+  ): Promise<Attachment[]> {
+    return (
+      await this.issueRequest<{ attachments: Attachment[] }>(
+        `/knowledge/documents/${encodeURIComponent(pageId)}/attachments`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ attachments }),
+        },
+      )
+    ).attachments;
   }
   public async getPbiContext(id: string): Promise<{ item: PbiItem; descendants: PbiItem[] }> {
     return this.issueRequest(`/pbi/items/${encodeURIComponent(id)}/context`);
@@ -771,7 +967,11 @@ export class ApiClient {
   }
 
   public async getInbox(signal?: AbortSignal): Promise<readonly InboxItem[]> {
-    return (await this.issueRequest<{ items: InboxItem[] }>('/inbox', { signal })).items;
+    const { items } = await this.issueRequest<{
+      items: (Omit<InboxItem, 'runs'> & { runs?: InboxItem['runs'] })[];
+    }>('/inbox', { signal });
+    // An API older than the private inbox answers without runs.
+    return items.map((item) => ({ ...item, runs: item.runs ?? [] }));
   }
 
   public async updateInboxItem(
@@ -805,6 +1005,18 @@ export class ApiClient {
     return (
       await this.issueRequest<{ run: AgentRun }>(`/runs/${encodeURIComponent(runId)}/cancel`, {
         method: 'POST',
+      })
+    ).run;
+  }
+  public async continueAgentRun(
+    runId: string,
+    input: { action: 'approve' | 'answer' | 'revise'; answer?: string },
+  ): Promise<AgentRun> {
+    return (
+      await this.issueRequest<{ run: AgentRun }>(`/runs/${encodeURIComponent(runId)}/continue`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
       })
     ).run;
   }
@@ -1268,7 +1480,7 @@ export class ApiClient {
     return this.getJson('/spec/specifications');
   }
   public async saveSpecification(
-    input: Pick<SpecificationDto, 'title' | 'sections'> & {
+    input: Pick<SpecificationDto, 'title' | 'sections' | 'attachments'> & {
       id?: string;
       templateId?: string;
       agentId?: string;
@@ -2315,6 +2527,37 @@ export class ApiClient {
       return (data as { readonly agents: readonly CustomAgentDto[] }).agents;
     }
     return [];
+  }
+
+  public async getAgentWorkflow(signal?: AbortSignal): Promise<AgentWorkflowDto> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/agents/workflow`, { signal });
+    if (!response.ok) return this.handleErrorResponse(response);
+    const payload: unknown = await response.json();
+    return normalizeAgentWorkflow(isRecord(payload) ? payload['workflow'] : undefined);
+  }
+
+  public async saveAgentWorkflow(
+    workflow: AgentWorkflowDto,
+    signal?: AbortSignal,
+  ): Promise<AgentWorkflowDto> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/agents/workflow`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: workflow.enabled,
+        autonomy: workflow.autonomy,
+        finalReview: workflow.finalReview,
+        uncertaintyBehavior: workflow.uncertaintyBehavior,
+        issueCreationBehavior: workflow.issueCreationBehavior,
+        defaultAction: workflow.defaultAction,
+        steps: workflow.steps,
+        rules: workflow.rules,
+      }),
+      signal,
+    });
+    if (!response.ok) return this.handleErrorResponse(response);
+    const payload: unknown = await response.json();
+    return normalizeAgentWorkflow(isRecord(payload) ? payload['workflow'] : undefined, workflow);
   }
 
   public async getAgent(id: string, signal?: AbortSignal): Promise<CustomAgentDto> {

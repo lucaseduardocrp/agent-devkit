@@ -26,8 +26,11 @@ import {
   keepCaseMetadata,
   withCaseIds,
   InMemorySavedTestPlanStore,
+  type SavedTestPlan,
   type SavedTestPlanStore,
 } from '../../modules/testplans/application/saved-test-plans.js';
+import type { E2eArtifactStore } from '../../modules/e2e/application/artifact-store.js';
+import { fileOwner, syncItemFilesSafely } from '../../modules/shared/attachment-files.js';
 import {
   ImportTestCases,
   MAX_IMPORTED_CASES,
@@ -69,6 +72,9 @@ function getRequestContext(_request: Request, response: Response): RequestContex
   return { requestId: typeof value === 'string' ? value : 'unknown' };
 }
 
+/** Files referenced by the cases of a saved test plan (scenarios and attachments). */
+const planFiles = (plan: SavedTestPlan | null | undefined) => plan && plan.plans;
+
 export function createCompatibilityRouter(
   searchPort: KnowledgeSearchPort = search,
   testPlanGenerator: TestPlanGeneratorPort = generator,
@@ -78,8 +84,22 @@ export function createCompatibilityRouter(
   providerFactory?: DynamicProviderFactory,
   fieldMappings: FieldMappingStore = new InMemoryFieldMappingStore(),
   testManagement?: TestManagementResolver,
+  attachmentStore?: E2eArtifactStore,
 ): Router {
   const router = Router();
+  const syncPlanFiles = (
+    workspaceId: string,
+    id: string,
+    previous: SavedTestPlan | null | undefined,
+    next: SavedTestPlan | null | undefined,
+  ) =>
+    syncItemFilesSafely(
+      attachmentStore,
+      workspaceId,
+      fileOwner('testplan', id),
+      planFiles(previous),
+      planFiles(next) ?? null,
+    );
   const suites = new TestSuiteService(testSuites);
   const remoteId = z.string().regex(/^[1-9]\d*$/);
   const providerQuery = z.object({ providerId: z.string().trim().min(1) });
@@ -89,6 +109,10 @@ export function createCompatibilityRouter(
       remoteParentSuiteId: remoteId.optional(),
       remoteSuiteId: remoteId.optional(),
       remoteSuiteName: z.string().trim().min(1).max(255).optional(),
+      // Kind of the suite created; a requirement suite belongs to workItemId.
+      suiteKind: z.enum(['static', 'requirement']).optional(),
+      // Remote work item (PBI, bug, task...) the published cases are linked to.
+      workItemId: remoteId.optional(),
       templateId: z.string().uuid().optional(),
       fieldValues,
     })
@@ -106,6 +130,12 @@ export function createCompatibilityRouter(
     })
     .refine((body) => !body.remoteSuiteName || Boolean(body.remoteParentSuiteId), {
       path: ['remoteParentSuiteId'],
+    })
+    .refine((body) => body.suiteKind !== 'requirement' || Boolean(body.workItemId), {
+      path: ['workItemId'],
+    })
+    .refine((body) => body.suiteKind !== 'requirement' || !body.remoteSuiteId, {
+      path: ['suiteKind'],
     });
 
   router.get('/TestPlan/publish/providers', async (request, response, next) => {
@@ -332,6 +362,8 @@ export function createCompatibilityRouter(
           remoteParentSuiteId: body.remoteParentSuiteId,
           remoteSuiteId: body.remoteSuiteId,
           remoteSuiteName: body.remoteSuiteName,
+          suiteKind: body.suiteKind,
+          workItemId: body.workItemId,
           ...(fieldTemplate
             ? { fieldTemplate: withFieldValues(fieldTemplate, body.fieldValues) }
             : {}),
@@ -388,6 +420,7 @@ export function createCompatibilityRouter(
       const savedPlan = await savedTestPlans.save(
         createSavedTestPlan(workspaceId, { ...input, suiteId }, plans),
       );
+      await syncPlanFiles(workspaceId, savedPlan.id, null, savedPlan);
       const csv = serializeTestPlanCsv(plans, {
         platform: input.platformProvider,
         areaPath: input.areaPath,
@@ -521,6 +554,7 @@ export function createCompatibilityRouter(
         suiteId: body.suiteId ?? existing.suiteId,
         updatedAt: new Date().toISOString(),
       });
+      await syncPlanFiles(workspaceId, existing.id, existing, updated);
       response.json(updated);
     } catch (error) {
       next(error);
@@ -574,10 +608,25 @@ export function createCompatibilityRouter(
   });
   router.delete('/TestPlan/suites/:id', async (request, response, next) => {
     try {
-      await suites.delete(
-        request.params.id,
-        requireOwnerId(await resolveRequestContext(request, response)),
-      );
+      const workspaceId = requireOwnerId(await resolveRequestContext(request, response));
+      // Sub-suites and their test plans go with the suite, and so do the plans' files.
+      const allSuites = await testSuites.list(workspaceId);
+      const suiteIds = new Set([request.params.id]);
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const suite of allSuites)
+          if (suite.parentId && suiteIds.has(suite.parentId) && !suiteIds.has(suite.id)) {
+            suiteIds.add(suite.id);
+            grew = true;
+          }
+      }
+      const plans = attachmentStore
+        ? (
+            await savedTestPlans.list(workspaceId, 0, await savedTestPlans.count(workspaceId))
+          ).filter((plan) => Boolean(plan.suiteId && suiteIds.has(plan.suiteId)))
+        : [];
+      await suites.delete(request.params.id, workspaceId);
+      for (const plan of plans) await syncPlanFiles(workspaceId, plan.id, plan, null);
       response.status(204).send();
     } catch (error) {
       next(error);
@@ -597,6 +646,7 @@ export function createCompatibilityRouter(
       if (!deleted) {
         throw new ApplicationError('TEST_PLAN_NOT_FOUND', 'Test Plan não encontrado.', 404);
       }
+      await syncPlanFiles(workspaceId, existing.id, existing, null);
       response.status(204).send();
     } catch (error) {
       next(error);

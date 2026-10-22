@@ -5,6 +5,30 @@ import { Modal } from '../../components/ui/modal.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { sanitizeRichText, testCaseFields, testCaseOrigin } from './test-case-fields.js';
 import type { TestCase } from './TestPlansView.js';
+import { AttachmentPanel } from '../shared/AttachmentPanel.js';
+import type { Attachment } from '../shared/attachment-types.js';
+import {
+  discardDrafts,
+  editorHtml,
+  saveWithDrafts,
+  useInlineImages,
+  useMediaClient,
+  useRichTextImageInput,
+} from '../shared/media.js';
+
+/** Files of the case; kept in its metadata, which the test plan stores as is. */
+function caseAttachments(metadata: Record<string, unknown> | undefined): Attachment[] {
+  const value = metadata?.['attachments'];
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Attachment =>
+          Boolean(item) &&
+          typeof item === 'object' &&
+          typeof (item as Attachment).id === 'string' &&
+          typeof (item as Attachment).url === 'string',
+      )
+    : [];
+}
 
 export interface TestCaseModalProps {
   readonly testCase: TestCase;
@@ -84,17 +108,53 @@ export function TestCaseModal({
   const fields = origin ? testCaseFields(testCase.metadata, origin.provider) : [];
   const steps = draft.steps ?? [];
   const setSteps = (next: TestCase['steps']) => setDraft({ ...draft, steps: next });
+  const content = useRef<HTMLDivElement>(null);
+  // The editor and the platform fields show images by their stored address.
+  useInlineImages(content, testCase);
+  const scenarioImages = useRichTextImageInput('testcase', editor, (html) =>
+    setDraft((current) => ({ ...current, scenario: sanitizeRichText(html) })),
+  );
+  const attachments = caseAttachments(draft.metadata);
+  const apiClient = useMediaClient();
+  const [committing, setCommitting] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+  // Closing without saving drops what was pasted and attached to the case.
+  const close = () => {
+    discardDrafts(draft);
+    onClose();
+  };
+  /** Pasted and attached files are drafts until the case is saved, which uploads them. */
+  const save = async () => {
+    if (!apiClient) {
+      onSave(draft);
+      return;
+    }
+    setCommitting(true);
+    setFileError(null);
+    try {
+      await saveWithDrafts(
+        apiClient,
+        'testcase',
+        { scenario: draft.scenario, metadata: draft.metadata },
+        (files) => Promise.resolve(onSave({ ...draft, ...files })),
+      );
+    } catch (reason) {
+      setFileError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCommitting(false);
+    }
+  };
 
   const format = (command: string, value?: string) => {
     editor.current?.focus();
     if (value === undefined) document.execCommand(command, false);
     else document.execCommand(command, false, value);
     if (editor.current)
-      setDraft({ ...draft, scenario: sanitizeRichText(editor.current.innerHTML) });
+      setDraft({ ...draft, scenario: sanitizeRichText(editorHtml(editor.current)) });
   };
 
   return (
-    <Modal open onClose={onClose} labelledBy="edit-testcase-title">
+    <Modal open onClose={close} labelledBy="edit-testcase-title">
       <div
         className="flex h-[min(90vh,900px)] w-[min(96vw,1400px)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)]"
         data-testid="test-case-modal"
@@ -112,7 +172,7 @@ export function TestCaseModal({
             variant="ghost"
             size="icon"
             aria-label={t('testplans.closeModal')}
-            onClick={onClose}
+            onClick={close}
           >
             <i className="ti ti-x" aria-hidden="true" />
           </Button>
@@ -138,15 +198,15 @@ export function TestCaseModal({
               {c.automate}
             </Button>
           )}
-          <Button type="button" variant="ghost" onClick={onClose}>
+          <Button type="button" variant="ghost" onClick={close}>
             {readOnly ? c.close : t('common.cancel')}
           </Button>
           {!readOnly && (
             <Button
               type="button"
-              onClick={() => onSave(draft)}
+              onClick={() => void save()}
               disabled={!draft.title.trim()}
-              isLoading={isSaving}
+              isLoading={isSaving || committing}
               data-testid="btn-save-test-case-modal"
             >
               <i className="ti ti-device-floppy" aria-hidden="true" />
@@ -172,7 +232,10 @@ export function TestCaseModal({
           </span>
         </div>
 
-        <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+        <div
+          ref={content}
+          className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)] [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded"
+        >
           <div className="space-y-6 p-6 lg:border-r lg:border-[var(--border)]">
             <section>
               <h3 className="mb-3 border-b border-[var(--border)] pb-3 text-sm font-semibold">
@@ -228,9 +291,11 @@ export function TestCaseModal({
                   onInput={(event) =>
                     setDraft({
                       ...draft,
-                      scenario: sanitizeRichText(event.currentTarget.innerHTML),
+                      scenario: sanitizeRichText(editorHtml(event.currentTarget)),
                     })
                   }
+                  onPaste={readOnly ? undefined : scenarioImages.onPaste}
+                  onDrop={readOnly ? undefined : scenarioImages.onDrop}
                 />
               </div>
             </section>
@@ -295,7 +360,9 @@ export function TestCaseModal({
                           onChange={(event) =>
                             setSteps(
                               steps.map((item, i) =>
-                                i === index ? { ...item, expectedResult: event.target.value } : item,
+                                i === index
+                                  ? { ...item, expectedResult: event.target.value }
+                                  : item,
                               ),
                             )
                           }
@@ -319,6 +386,21 @@ export function TestCaseModal({
                 ))}
               </ol>
             </section>
+
+            <AttachmentPanel
+              scope="testcase"
+              attachments={attachments}
+              disabled={readOnly}
+              onChange={(next) =>
+                setDraft({ ...draft, metadata: { ...(draft.metadata ?? {}), attachments: next } })
+              }
+              onInsertInline={scenarioImages.insertAttachment}
+            />
+            {(fileError ?? scenarioImages.error) && (
+              <p role="alert" className="text-xs text-red-300">
+                {fileError ?? scenarioImages.error}
+              </p>
+            )}
           </div>
 
           <aside className="space-y-5 bg-[var(--surface-1)] p-6">

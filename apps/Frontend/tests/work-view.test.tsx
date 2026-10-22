@@ -24,7 +24,23 @@ const issue: Issue = {
 function client() {
   return {
     getIssues: vi.fn().mockResolvedValue([issue]),
-    getInbox: vi.fn().mockResolvedValue([{ issue, readAt: null, archivedAt: null }]),
+    getInbox: vi.fn().mockResolvedValue([
+      {
+        issue,
+        runs: [
+          {
+            id: 'run-1',
+            agentId: 'agent-a',
+            status: 'succeeded',
+            attempt: 1,
+            createdAt: issue.updatedAt,
+            finishedAt: issue.updatedAt,
+          },
+        ],
+        readAt: null,
+        archivedAt: null,
+      },
+    ]),
     getDashboard: vi.fn().mockResolvedValue({
       agents: [],
       recentIssues: [issue],

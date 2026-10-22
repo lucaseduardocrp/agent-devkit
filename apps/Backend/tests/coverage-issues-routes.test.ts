@@ -29,6 +29,7 @@ let runs: {
   [
     K in
       | 'list'
+      | 'assignedTo'
       | 'get'
       | 'create'
       | 'checkout'
@@ -79,6 +80,7 @@ beforeEach(() => {
   store = new InMemoryIssueStore();
   runs = {
     list: vi.fn().mockResolvedValue([]),
+    assignedTo: vi.fn().mockResolvedValue([]),
     get: vi.fn(async (_ws: string, id: string) => ({ id })),
     create: vi.fn(async (issueId: string, _ctx: unknown, mode = 'server') => ({
       id: 'run',
@@ -380,8 +382,52 @@ describe('issue routes: comments and inbox', () => {
     await request(app).post(`/issues/${assigned.id}/comments`).send({ body: ' ' }).expect(400);
   });
 
+  it('lists only the runs executed while each issue was assigned to the user', async () => {
+    const older = await store.create('ws', 'user-b', { title: 'Older' });
+    const newer = await store.create('ws', 'user-b', { title: 'Newer' });
+    await store.create('ws', 'user-a', { title: 'Created by me, never run for me' });
+    const run = (id: string, issueId: string, createdAt: string) => ({
+      id,
+      issueId,
+      agentId,
+      status: 'succeeded',
+      attempt: 1,
+      prompt: 'secret prompt',
+      output: 'output',
+      createdAt: new Date(createdAt),
+      finishedAt: null,
+    });
+    runs.assignedTo.mockResolvedValueOnce([
+      run('r3', newer.id, '2026-01-03T00:00:00Z'),
+      run('r2', older.id, '2026-01-02T00:00:00Z'),
+      run('r1', older.id, '2026-01-01T00:00:00Z'),
+    ]);
+    const inbox = await request(build()).get('/inbox').expect(200);
+    expect(runs.assignedTo).toHaveBeenCalledWith('ws', 'user-a');
+    expect(
+      inbox.body.items.map((item: { issue: { title: string }; runs: { id: string }[] }) => [
+        item.issue.title,
+        item.runs.map((entry) => entry.id),
+      ]),
+    ).toEqual([
+      ['Newer', ['r3']],
+      ['Older', ['r2', 'r1']],
+    ]);
+    expect(inbox.body.items[0].runs[0]).toEqual({
+      id: 'r3',
+      agentId,
+      status: 'succeeded',
+      attempt: 1,
+      createdAt: '2026-01-03T00:00:00.000Z',
+      finishedAt: null,
+    });
+  });
+
   it('only shows read and archived states newer than the latest activity', async () => {
     const issue = await store.create('ws', 'user-a', { title: 'Inbox' });
+    runs.assignedTo.mockResolvedValueOnce([
+      { id: 'run', issueId: issue.id, createdAt: new Date(), finishedAt: null },
+    ]);
     const app = build();
     const old = new Date(issue.updatedAt.getTime() - 1000);
     await store.setInboxState(issue.id, 'user-a', { readAt: old, archivedAt: old });

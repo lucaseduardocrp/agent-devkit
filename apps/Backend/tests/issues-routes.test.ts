@@ -252,23 +252,14 @@ describe('issues, inbox and dashboard routes', () => {
       .set(as('workspace-a'))
       .send({ read: true, archived: true })
       .expect(200);
-    const ownInbox = await request(app).get('/inbox').set(as('workspace-a')).expect(200);
-    const otherInbox = await request(app)
-      .get('/inbox')
-      .set(as('workspace-a', 'user-b'))
-      .expect(200);
-    expect(ownInbox.body.items[0].readAt).toBeTruthy();
-    expect(ownInbox.body.items[0].archivedAt).toBeTruthy();
-    expect(otherInbox.body.items[0].readAt).toBeNull();
-    await new Promise((resolve) => setTimeout(resolve, 2));
-    await request(app)
-      .post(`/issues/${id}/comments`)
-      .set(as('workspace-a', 'user-b'))
-      .send({ body: 'New activity' })
-      .expect(201);
-    const resurfaced = await request(app).get('/inbox').set(as('workspace-a')).expect(200);
-    expect(resurfaced.body.items[0].readAt).toBeNull();
-    expect(resurfaced.body.items[0].archivedAt).toBeNull();
+    // The inbox is private and lists only runs executed while the issue was assigned to the
+    // user: an issue that never ran for anyone stays out of every inbox.
+    expect((await request(app).get('/inbox').set(as('workspace-a')).expect(200)).body).toEqual({
+      items: [],
+    });
+    expect(
+      (await request(app).get('/inbox').set(as('workspace-a', 'user-b')).expect(200)).body,
+    ).toEqual({ items: [] });
     const dashboard = await request(app).get('/dashboard').set(as('workspace-a')).expect(200);
     expect(dashboard.body).toMatchObject({ totalIssues: 1, inProgress: 1, open: 1 });
     await request(app).delete(`/issues/${id}`).set(as('workspace-a')).expect(204);

@@ -14,6 +14,18 @@ import type { WorkspaceMember } from '../src/features/workspaces/workspace-types
 
 const NOW = new Date().toISOString();
 
+/** A run executed while the inbox issue was assigned to the signed-in user. */
+function inboxRun(createdAt = NOW): InboxItem['runs'][number] {
+  return {
+    id: 'run-1',
+    agentId: 'agent-a',
+    status: 'succeeded',
+    attempt: 1,
+    createdAt,
+    finishedAt: createdAt,
+  };
+}
+
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
     id: 'issue-1',
@@ -328,10 +340,34 @@ describe('WorkView issue list and board', () => {
   });
 });
 
+describe('WorkView issue pagination', () => {
+  it('pages the issue list and returns to the first page when the search changes', async () => {
+    localStorage.clear();
+    const { api } = createApi({
+      issues: Array.from({ length: 30 }, (_, index) =>
+        makeIssue({ id: `p${index + 1}`, number: index + 1, title: `Task ${index + 1}` }),
+      ),
+    });
+    renderView(api);
+    await screen.findByRole('button', { name: '1 Task 1' });
+    expect(screen.getByText(/Exibindo 1–25 de 30/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '26 Task 26' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Próxima página' }));
+    expect(screen.getByRole('button', { name: '26 Task 26' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '1 Task 1' })).toBeNull();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Buscar issues' }), {
+      target: { value: 'Task' },
+    });
+    expect(screen.getByRole('button', { name: '1 Task 1' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Issues por página' })).toBeInTheDocument();
+  });
+});
+
 describe('WorkView inbox', () => {
   const inbox: InboxItem[] = [
     {
       issue: makeIssue({ id: 'a', number: 1, title: 'Alpha task', createdBy: 'user-a' }),
+      runs: [inboxRun()],
       readAt: null,
       archivedAt: null,
     },
@@ -343,6 +379,7 @@ describe('WorkView inbox', () => {
         createdBy: 'user-x',
         assigneeUserId: 'user-a',
       }),
+      runs: [inboxRun()],
       readAt: NOW,
       archivedAt: NOW,
     },
@@ -355,6 +392,7 @@ describe('WorkView inbox', () => {
         status: 'blocked',
         updatedAt: new Date(Date.now() - 30 * DAY).toISOString(),
       }),
+      runs: [inboxRun(new Date(Date.now() - 30 * DAY).toISOString())],
       readAt: null,
       archivedAt: null,
     },
@@ -366,6 +404,7 @@ describe('WorkView inbox', () => {
         createdBy: 'user-x',
         assigneeUserId: 'user-a',
       }),
+      runs: [inboxRun()],
       readAt: NOW,
       archivedAt: null,
     },
@@ -380,7 +419,10 @@ describe('WorkView inbox', () => {
     renderView(api, { tab: 'inbox' });
 
     await screen.findByRole('button', { name: '1 Alpha task' });
-    expect(visible()).toEqual(['1 Alpha task', '4 Delta task']);
+    // The inbox is private: every item ran while assigned to the user, so Mine lists all
+    // that are not archived.
+    expect(visible()).toEqual(['1 Alpha task', '3 Gamma task', '4 Delta task']);
+    expect(screen.getByTestId('inbox-runs-a')).toHaveTextContent('1 execução · Concluída');
     expect(screen.getByText('Alpha task')).toHaveClass('font-semibold');
     expect(screen.getByText('Delta task')).not.toHaveClass('font-semibold');
     const unreadTab = screen.getByRole('tab', { name: /Não lidas/ });
@@ -420,7 +462,7 @@ describe('WorkView inbox', () => {
 
   it('hides the unread badge when everything is read', async () => {
     const { api } = createApi({
-      inbox: [{ issue: makeIssue(), readAt: NOW, archivedAt: null }],
+      inbox: [{ issue: makeIssue(), runs: [inboxRun()], readAt: NOW, archivedAt: null }],
     });
     renderView(api, { tab: 'inbox' });
     await screen.findByRole('button', { name: '1 Prepare release' });
@@ -732,7 +774,7 @@ describe('WorkView issue detail', () => {
 
   it('toggles read and archived state of the inbox item from the detail', async () => {
     const { api, spies } = createApi({
-      inbox: [{ issue: makeIssue(), readAt: null, archivedAt: NOW }],
+      inbox: [{ issue: makeIssue(), runs: [inboxRun()], readAt: null, archivedAt: NOW }],
     });
     renderView(api);
     const dialog = await openDetail();
@@ -758,7 +800,7 @@ describe('WorkView issue detail', () => {
 
   it('archives an already read inbox item without marking it read again', async () => {
     const { api, spies } = createApi({
-      inbox: [{ issue: makeIssue(), readAt: NOW, archivedAt: null }],
+      inbox: [{ issue: makeIssue(), runs: [inboxRun()], readAt: NOW, archivedAt: null }],
     });
     renderView(api);
     const dialog = await openDetail();

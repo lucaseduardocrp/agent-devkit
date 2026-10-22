@@ -439,6 +439,26 @@ export function E2eView({
                               {t('e2e.pullScripts')}
                             </Button>
                           )}
+                          <Button
+                            variant="ghost"
+                            role="menuitem"
+                            className="flex w-full justify-start text-left"
+                            onClick={() => setTmDialog({ kind: 'reporting', creation })}
+                          >
+                            <i className="ti ti-settings" aria-hidden="true" />
+                            {t('e2e.tmTitle')}
+                          </Button>
+                          {canImportCases && !needsPolling(creation) && (
+                            <Button
+                              variant="ghost"
+                              role="menuitem"
+                              className="flex w-full justify-start text-left"
+                              onClick={() => setTmDialog({ kind: 'import', creation })}
+                            >
+                              <i className="ti ti-file-import" aria-hidden="true" />
+                              {t('e2e.tmImport')}
+                            </Button>
+                          )}
                           {canDelete && (
                             <Button
                               variant="ghost"
@@ -461,12 +481,6 @@ export function E2eView({
                         <E2eReportStrip
                           creation={creation}
                           isReadOnly={isReadOnly}
-                          onManage={() => setTmDialog({ kind: 'reporting', creation })}
-                          onImport={
-                            canImportCases
-                              ? () => setTmDialog({ kind: 'import', creation })
-                              : undefined
-                          }
                           onPublish={() => publish(creation)}
                         />
                         {creation.tests.length === 0 ? (

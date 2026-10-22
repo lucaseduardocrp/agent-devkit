@@ -25,6 +25,10 @@ import type {
   UpdateAgentDto,
   AgentRole,
   ExecuteAgentResponse,
+  AgentWorkflowDto,
+  AgentWorkflowRuleDto,
+  AgentWorkflowStepDto,
+  AgentWorkflowToolset,
 } from './agent-types.js';
 import { useActivityRunner } from '../activities/ActivityCenter.js';
 import { useI18n } from '../../lib/i18n/index.js';
@@ -46,6 +50,120 @@ const roleBadgeMap: Record<AgentRole, 'success' | 'default' | 'pro' | 'outline'>
   CUSTOM: 'outline',
 };
 
+const workflowToolNames: Record<AgentWorkflowToolset, readonly string[]> = {
+  all: [],
+  agents: [
+    'agents_create',
+    'agents_delete',
+    'agents_execute',
+    'agents_update',
+    'agents_workflow_update',
+  ],
+  integrations: ['integrations_delete', 'integrations_save', 'integrations_test'],
+  brain: [
+    'brain_add_relation',
+    'brain_create_document',
+    'brain_delete_document',
+    'brain_publish_document',
+    'brain_remove_relation',
+    'brain_sync',
+    'brain_update_document',
+  ],
+  issues: [
+    'issues_cancel_run',
+    'issues_comment',
+    'issues_create',
+    'issues_delete',
+    'issues_delete_rate',
+    'issues_inbox_update',
+    'issues_run_server',
+    'issues_set_budget',
+    'issues_set_rate',
+    'issues_update',
+  ],
+  pbi: [
+    'pbi_create',
+    'pbi_create_issue',
+    'pbi_delete',
+    'pbi_link',
+    'pbi_pull',
+    'pbi_push',
+    'pbi_sync_children',
+    'pbi_unlink',
+    'pbi_update',
+  ],
+  spec: [
+    'spec_chat',
+    'spec_clear_chat',
+    'spec_delete',
+    'spec_delete_template',
+    'spec_generate_from_brain',
+    'spec_publish_to_brain',
+    'spec_save',
+    'spec_save_chat_reply',
+    'spec_save_template',
+    'spec_update_sections',
+  ],
+  testplans: [
+    'testplans_create_suite',
+    'testplans_delete',
+    'testplans_delete_suite',
+    'testplans_generate',
+    'testplans_import_cases',
+    'testplans_push_suite',
+    'testplans_save',
+    'testplans_update',
+    'testplans_update_suite',
+  ],
+  design: [
+    'design_chat',
+    'design_create_project',
+    'design_delete_project',
+    'design_delete_system',
+    'design_generate_system',
+    'design_save_new_project',
+    'design_save_system',
+    'design_update_files',
+  ],
+  e2e: [
+    'e2e_cancel',
+    'e2e_create',
+    'e2e_delete',
+    'e2e_import_cases',
+    'e2e_link_case',
+    'e2e_publish_run',
+    'e2e_pull_scripts',
+    'e2e_run',
+    'e2e_run_test',
+    'e2e_save_plan',
+    'e2e_set_execution',
+    'e2e_set_reporting',
+    'e2e_update',
+    'e2e_update_script',
+  ],
+  releasenotes: [
+    'release_notes_create',
+    'release_notes_delete',
+    'release_notes_generate',
+    'release_notes_update',
+  ],
+  audit: [],
+  workspaces: [
+    'workspaces_add_member',
+    'workspaces_create',
+    'workspaces_delete',
+    'workspaces_delete_group',
+    'workspaces_list',
+    'workspaces_list_groups',
+    'workspaces_list_members',
+    'workspaces_rename',
+    'workspaces_remove_member',
+    'workspaces_save_group',
+    'workspaces_select',
+    'workspaces_update_member',
+  ],
+};
+
 export function AgentsView({
   apiClient = defaultApiClient,
   activeWorkspaceId,
@@ -65,7 +183,9 @@ export function AgentsView({
     return role;
   };
   const { runActivity } = useActivityRunner();
-  const [activeViewTab, setActiveViewTab] = useState<'catalog' | 'playground' | 'map'>('catalog');
+  const [activeViewTab, setActiveViewTab] = useState<'catalog' | 'playground' | 'map' | 'workflow'>(
+    'catalog',
+  );
   const [agents, setAgents] = useState<readonly CustomAgentDto[]>([]);
   const [topologyIssues, setTopologyIssues] = useState<readonly Issue[]>([]);
   const [topologyRuns, setTopologyRuns] = useState<readonly AgentRun[]>([]);
@@ -95,6 +215,23 @@ export function AgentsView({
   const [llmProviders, setLlmProviders] = useState<readonly { id: string; label: string }[]>([]);
   const [availableLlmModels, setAvailableLlmModels] = useState<readonly AgentLlmModelOption[]>([]);
   const [selectedLlmProvider, setSelectedLlmProvider] = useState('');
+  const [workflow, setWorkflow] = useState<AgentWorkflowDto>({
+    enabled: false,
+    autonomy: 'balanced',
+    finalReview: true,
+    uncertaintyBehavior: 'ask',
+    issueCreationBehavior: 'ask',
+    defaultAction: 'allow',
+    steps: [],
+    rules: [],
+  });
+  const [workflowProviderOptions, setWorkflowProviderOptions] = useState<
+    readonly { id: string; name: string }[]
+  >([]);
+  const [isWorkflowLoading, setIsWorkflowLoading] = useState(false);
+  const [isWorkflowSaving, setIsWorkflowSaving] = useState(false);
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
 
   const loadAgents = useCallback(async () => {
     if (activeWorkspaceId === null) {
@@ -152,6 +289,42 @@ export function AgentsView({
   useEffect(() => {
     void loadAgents();
   }, [loadAgents]);
+
+  const loadWorkflow = useCallback(async () => {
+    if (activeWorkspaceId === null) return;
+    setIsWorkflowLoading(true);
+    setWorkflowError(null);
+    try {
+      if (activeWorkspaceId) apiClient.setWorkspaceId(activeWorkspaceId);
+      const [savedWorkflow, pbiProviders, testProviders] = await Promise.all([
+        apiClient.getAgentWorkflow(),
+        apiClient.getPbiProviders().catch(() => []),
+        apiClient.getTestManagementProviders().catch(() => []),
+      ]);
+      setWorkflow(savedWorkflow);
+      setWorkflowProviderOptions(
+        [
+          ...pbiProviders.map((provider) => ({
+            id: provider.providerId,
+            name: provider.providerId,
+          })),
+          ...testProviders
+            .filter((provider) => provider.configured)
+            .map((provider) => ({ id: provider.id, name: provider.id })),
+        ].filter(
+          (provider, index, all) => all.findIndex((item) => item.id === provider.id) === index,
+        ),
+      );
+    } catch (err) {
+      setWorkflowError(err instanceof Error ? err.message : t('agents.workflowLoadFailed'));
+    } finally {
+      setIsWorkflowLoading(false);
+    }
+  }, [activeWorkspaceId, apiClient, t]);
+
+  useEffect(() => {
+    void loadWorkflow();
+  }, [loadWorkflow]);
 
   const loadTopology = useCallback(async () => {
     if (activeWorkspaceId === null) return;
@@ -266,6 +439,90 @@ export function AgentsView({
     }
   };
 
+  const updateWorkflowStep = (stepId: string, update: Partial<AgentWorkflowStepDto>) => {
+    setWorkflow((current) => ({
+      ...current,
+      steps: current.steps.map((step) => (step.id === stepId ? { ...step, ...update } : step)),
+    }));
+    setWorkflowStatus(null);
+  };
+
+  const moveWorkflowStep = (index: number, offset: -1 | 1) => {
+    setWorkflow((current) => {
+      const target = index + offset;
+      if (target < 0 || target >= current.steps.length) return current;
+      const steps = [...current.steps];
+      [steps[index], steps[target]] = [steps[target]!, steps[index]!];
+      return { ...current, steps };
+    });
+    setWorkflowStatus(null);
+  };
+
+  const addWorkflowStep = () => {
+    const step: AgentWorkflowStepDto = {
+      id:
+        globalThis.crypto?.randomUUID?.() ??
+        `step-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      name: '',
+      instructions: '',
+      reviewRequired: false,
+    };
+    setWorkflow((current) => ({ ...current, steps: [...current.steps, step] }));
+    setWorkflowStatus(null);
+  };
+
+  const addWorkflowRule = () => {
+    const rule: AgentWorkflowRuleDto = {
+      id:
+        globalThis.crypto?.randomUUID?.() ??
+        `rule-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      name: `${t('agents.workflowRule')} ${workflow.rules.length + 1}`,
+      toolset: 'pbi',
+      effect: 'allow',
+    };
+    setWorkflow((current) => ({ ...current, rules: [...current.rules, rule] }));
+    setWorkflowStatus(null);
+  };
+
+  const updateWorkflowRule = (id: string, patch: Partial<AgentWorkflowRuleDto>) => {
+    setWorkflow((current) => ({
+      ...current,
+      rules: current.rules.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)),
+    }));
+    setWorkflowStatus(null);
+  };
+
+  const saveWorkflow = async () => {
+    if (workflow.enabled && workflow.steps.length === 0 && workflow.rules.length === 0) {
+      setWorkflowError(t('agents.workflowNoSteps'));
+      return;
+    }
+    if (workflow.steps.some((step) => !step.name.trim() || !step.instructions.trim())) {
+      setWorkflowError(t('agents.workflowStepRequired'));
+      return;
+    }
+    if (
+      workflow.rules.some(
+        (rule) => !rule.name.trim() || (rule.allowedProviders?.length && !rule.toolName),
+      )
+    ) {
+      setWorkflowError(t('agents.workflowRuleInvalid'));
+      return;
+    }
+    setIsWorkflowSaving(true);
+    setWorkflowError(null);
+    setWorkflowStatus(null);
+    try {
+      const saved = await apiClient.saveAgentWorkflow(workflow);
+      setWorkflow(saved);
+      setWorkflowStatus(t('agents.workflowSaved'));
+    } catch (err) {
+      setWorkflowError(err instanceof Error ? err.message : t('agents.workflowSaveFailed'));
+    } finally {
+      setIsWorkflowSaving(false);
+    }
+  };
+
   const handleSelectAndTestAgent = (agentId: string) => {
     setSelectedAgentId(agentId);
     setExecutionResult(null);
@@ -375,6 +632,21 @@ export function AgentsView({
         >
           <span>{t('agents.map')}</span>
         </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => setActiveViewTab('workflow')}
+          className={cn(
+            'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
+            visibleTab === 'workflow'
+              ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
+              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+          )}
+          data-testid="tab-workflow"
+          leftIcon={<i className="ti ti-route text-base" aria-hidden="true" />}
+        >
+          <span>{t('agents.workflow')}</span>
+        </Button>
       </div>
 
       {error && (
@@ -402,6 +674,495 @@ export function AgentsView({
           onRefresh={() => void loadTopology()}
           canCreateAgents={!isReadOnly}
         />
+      )}
+
+      {visibleTab === 'workflow' && (
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-5" data-testid="workflow-panel">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <i className="ti ti-route text-[var(--fill-accent)]" aria-hidden="true" />
+                    {t('agents.workflow')}
+                  </CardTitle>
+                </div>
+                <Button
+                  type="button"
+                  variant={workflow.enabled ? 'default' : 'outline'}
+                  aria-pressed={workflow.enabled}
+                  disabled={isReadOnly || isWorkflowLoading}
+                  onClick={() => {
+                    setWorkflow((current) => ({ ...current, enabled: !current.enabled }));
+                    setWorkflowStatus(null);
+                  }}
+                  data-testid="workflow-enabled-toggle"
+                >
+                  <i
+                    className={cn(
+                      'ti mr-2 text-base',
+                      workflow.enabled ? 'ti-toggle-right' : 'ti-toggle-left',
+                    )}
+                    aria-hidden="true"
+                  />
+                  {t('agents.workflowEnabled')}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <Card className="border-[var(--border)] bg-[var(--surface-1)]">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">{t('agents.workflowControls')}</CardTitle>
+                </CardHeader>
+                <CardContent className="grid items-start gap-4 md:grid-cols-2">
+                  <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                    {t('agents.workflowAutonomy')}
+                    <Select
+                      value={workflow.autonomy}
+                      disabled={isReadOnly || isWorkflowLoading}
+                      onChange={(event) =>
+                        setWorkflow((current) => ({
+                          ...current,
+                          autonomy: event.target.value as AgentWorkflowDto['autonomy'],
+                        }))
+                      }
+                    >
+                      <option value="supervised">{t('agents.workflowAutonomySupervised')}</option>
+                      <option value="balanced">{t('agents.workflowAutonomyBalanced')}</option>
+                      <option value="autonomous">{t('agents.workflowAutonomyAutonomous')}</option>
+                    </Select>
+                  </label>
+                  <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                    {t('agents.workflowUncertainty')}
+                    <Select
+                      value={workflow.uncertaintyBehavior}
+                      disabled={isReadOnly || isWorkflowLoading}
+                      onChange={(event) =>
+                        setWorkflow((current) => ({
+                          ...current,
+                          uncertaintyBehavior: event.target
+                            .value as AgentWorkflowDto['uncertaintyBehavior'],
+                        }))
+                      }
+                    >
+                      <option value="ask">{t('agents.workflowUncertaintyAsk')}</option>
+                      <option value="assume">{t('agents.workflowUncertaintyAssume')}</option>
+                    </Select>
+                  </label>
+                  <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                    {t('agents.workflowIssueCreation')}
+                    <Select
+                      value={workflow.issueCreationBehavior}
+                      disabled={isReadOnly || isWorkflowLoading}
+                      onChange={(event) =>
+                        setWorkflow((current) => ({
+                          ...current,
+                          issueCreationBehavior: event.target
+                            .value as AgentWorkflowDto['issueCreationBehavior'],
+                        }))
+                      }
+                    >
+                      <option value="ask">{t('agents.workflowIssueCreationAsk')}</option>
+                      <option value="allow">{t('agents.workflowIssueCreationAllow')}</option>
+                    </Select>
+                  </label>
+                  <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                    {t('agents.workflowDefaultAction')}
+                    <Select
+                      value={workflow.defaultAction}
+                      disabled={isReadOnly || isWorkflowLoading}
+                      onChange={(event) =>
+                        setWorkflow((current) => ({
+                          ...current,
+                          defaultAction: event.target.value as AgentWorkflowDto['defaultAction'],
+                        }))
+                      }
+                    >
+                      <option value="allow">{t('agents.workflowDefaultAllow')}</option>
+                      <option value="deny">{t('agents.workflowDefaultDeny')}</option>
+                    </Select>
+                  </label>
+                  <div className="flex flex-col items-start gap-2 text-sm text-[var(--text-secondary)]">
+                    {t('agents.workflowFinalReview')}
+                    <Button
+                      type="button"
+                      variant={workflow.finalReview ? 'default' : 'outline'}
+                      aria-pressed={workflow.finalReview}
+                      disabled={isReadOnly || isWorkflowLoading}
+                      onClick={() =>
+                        setWorkflow((current) => ({
+                          ...current,
+                          finalReview: !current.finalReview,
+                        }))
+                      }
+                    >
+                      <i
+                        className={cn(
+                          'ti mr-2',
+                          workflow.finalReview ? 'ti-shield-check' : 'ti-shield-off',
+                        )}
+                        aria-hidden="true"
+                      />
+                      {workflow.finalReview
+                        ? t('agents.workflowReviewRequired')
+                        : t('agents.workflowReviewOptional')}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+              {isReadOnly && (
+                <p className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300">
+                  {t('agents.workflowPermissionRequired')}
+                </p>
+              )}
+              {workflowError && (
+                <div
+                  role="alert"
+                  className="flex items-center justify-between gap-3 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300"
+                >
+                  <span>{workflowError}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void loadWorkflow()}
+                  >
+                    {t('common.retry')}
+                  </Button>
+                </div>
+              )}
+              {workflowStatus && (
+                <p
+                  role="status"
+                  className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300"
+                >
+                  {workflowStatus}
+                </p>
+              )}
+              {isWorkflowLoading ? (
+                <div className="h-20 animate-pulse rounded-lg bg-[var(--surface-2)]" />
+              ) : (
+                workflow.steps.map((step, index) => (
+                  <Card key={step.id} className="border-[var(--border)] bg-[var(--surface-1)]">
+                    <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 pb-3">
+                      <CardTitle className="text-base">
+                        {t('agents.workflowStep', { number: index + 1 })}
+                      </CardTitle>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label={t('agents.moveWorkflowStepUp', { number: index + 1 })}
+                          disabled={isReadOnly || index === 0}
+                          onClick={() => moveWorkflowStep(index, -1)}
+                        >
+                          <i className="ti ti-arrow-up" aria-hidden="true" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label={t('agents.moveWorkflowStepDown', { number: index + 1 })}
+                          disabled={isReadOnly || index === workflow.steps.length - 1}
+                          onClick={() => moveWorkflowStep(index, 1)}
+                        >
+                          <i className="ti ti-arrow-down" aria-hidden="true" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-400"
+                          aria-label={t('agents.removeWorkflowStep', { number: index + 1 })}
+                          disabled={isReadOnly}
+                          onClick={() => {
+                            setWorkflow((current) => ({
+                              ...current,
+                              steps: current.steps.filter((item) => item.id !== step.id),
+                            }));
+                            setWorkflowStatus(null);
+                          }}
+                        >
+                          <i className="ti ti-trash" aria-hidden="true" />
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="grid gap-4 md:grid-cols-2">
+                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                        {t('agents.workflowStepName')}
+                        <Input
+                          value={step.name}
+                          placeholder={t('agents.workflowStepNamePlaceholder')}
+                          disabled={isReadOnly}
+                          onChange={(event) =>
+                            updateWorkflowStep(step.id, { name: event.target.value })
+                          }
+                        />
+                      </label>
+                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                        {t('agents.workflowAgent')}
+                        <Select
+                          value={step.agentId ?? ''}
+                          disabled={isReadOnly}
+                          onChange={(event) =>
+                            updateWorkflowStep(step.id, {
+                              agentId: event.target.value || undefined,
+                            })
+                          }
+                        >
+                          <option value="">{t('agents.workflowRequestedAgent')}</option>
+                          {agents.map((agent) => (
+                            <option key={agent.id} value={agent.id}>
+                              {agent.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)] md:col-span-2">
+                        {t('agents.workflowInstructions')}
+                        <Textarea
+                          value={step.instructions}
+                          rows={4}
+                          placeholder={t('agents.workflowInstructionsPlaceholder')}
+                          disabled={isReadOnly}
+                          onChange={(event) =>
+                            updateWorkflowStep(step.id, { instructions: event.target.value })
+                          }
+                        />
+                      </label>
+                      <div className="md:col-span-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={step.reviewRequired ? 'default' : 'outline'}
+                          aria-pressed={step.reviewRequired ?? false}
+                          disabled={isReadOnly}
+                          onClick={() =>
+                            updateWorkflowStep(step.id, {
+                              reviewRequired: !step.reviewRequired,
+                            })
+                          }
+                        >
+                          <i
+                            className={cn(
+                              'ti mr-2',
+                              step.reviewRequired ? 'ti-user-check' : 'ti-user-question',
+                            )}
+                            aria-hidden="true"
+                          />
+                          {t('agents.workflowStepReview')}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              )}
+              <Card className="border-[var(--border)] bg-[var(--surface-1)]">
+                <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+                  <CardTitle className="text-base">{t('agents.workflowRules')}</CardTitle>
+                  {!isReadOnly && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addWorkflowRule}
+                      disabled={workflow.rules.length >= 100}
+                    >
+                      <i className="ti ti-plus mr-2" aria-hidden="true" />
+                      {t('agents.workflowAddRule')}
+                    </Button>
+                  )}
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {workflow.rules.map((rule) => (
+                    <div
+                      key={rule.id}
+                      className="grid items-start gap-3 rounded-lg border border-[var(--border)] p-3 md:grid-cols-2"
+                    >
+                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                        {t('agents.workflowRuleName')}
+                        <Input
+                          value={rule.name}
+                          disabled={isReadOnly}
+                          onChange={(event) =>
+                            updateWorkflowRule(rule.id, { name: event.target.value })
+                          }
+                        />
+                      </label>
+                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                        {t('agents.workflowRuleModule')}
+                        <Select
+                          value={rule.toolset}
+                          disabled={isReadOnly}
+                          onChange={(event) =>
+                            updateWorkflowRule(rule.id, {
+                              toolset: event.target.value as AgentWorkflowToolset,
+                            })
+                          }
+                        >
+                          <option value="all">{t('agents.workflowModuleAll')}</option>
+                          <option value="agents">{t('agents.workflowModuleAgents')}</option>
+                          <option value="integrations">
+                            {t('agents.workflowModuleIntegrations')}
+                          </option>
+                          <option value="brain">{t('agents.workflowModuleBrain')}</option>
+                          <option value="issues">{t('agents.workflowModuleIssues')}</option>
+                          <option value="pbi">{t('agents.workflowModulePbi')}</option>
+                          <option value="spec">{t('agents.workflowModuleSpec')}</option>
+                          <option value="testplans">{t('agents.workflowModuleTestPlans')}</option>
+                          <option value="design">{t('agents.workflowModuleDesign')}</option>
+                          <option value="e2e">{t('agents.workflowModuleE2e')}</option>
+                          <option value="releasenotes">
+                            {t('agents.workflowModuleReleaseNotes')}
+                          </option>
+                          <option value="audit">{t('agents.workflowModuleAudit')}</option>
+                          <option value="workspaces">{t('agents.workflowModuleWorkspaces')}</option>
+                        </Select>
+                      </label>
+                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                        {t('agents.workflowRuleAction')}
+                        <Input
+                          value={rule.toolName ?? ''}
+                          list={`workflow-actions-${rule.id}`}
+                          placeholder={t('agents.workflowAllActions')}
+                          disabled={isReadOnly}
+                          onChange={(event) =>
+                            updateWorkflowRule(rule.id, {
+                              toolName: event.target.value.trim() || undefined,
+                            })
+                          }
+                        />
+                        <datalist id={`workflow-actions-${rule.id}`}>
+                          {workflowToolNames[rule.toolset].map((toolName) => (
+                            <option key={toolName} value={toolName} />
+                          ))}
+                        </datalist>
+                      </label>
+                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                        {t('agents.workflowAllowedProviders')}
+                        <Input
+                          value={(rule.allowedProviders ?? []).join(', ')}
+                          list={`workflow-providers-${rule.id}`}
+                          placeholder={t('agents.workflowAllProviders')}
+                          disabled={isReadOnly || !rule.toolName}
+                          onChange={(event) => {
+                            const providers = event.target.value
+                              .split(',')
+                              .map((provider) => provider.trim())
+                              .filter(Boolean);
+                            updateWorkflowRule(rule.id, {
+                              allowedProviders: providers.length
+                                ? [...new Set(providers)]
+                                : undefined,
+                            });
+                          }}
+                        />
+                        <datalist id={`workflow-providers-${rule.id}`}>
+                          {workflowProviderOptions.map((provider) => (
+                            <option key={provider.id} value={provider.id}>
+                              {provider.name}
+                            </option>
+                          ))}
+                        </datalist>
+                      </label>
+                      <div className="flex flex-wrap gap-2 md:col-span-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={rule.requireApproval ? 'default' : 'outline'}
+                          aria-pressed={rule.requireApproval ?? false}
+                          disabled={isReadOnly}
+                          onClick={() =>
+                            updateWorkflowRule(rule.id, {
+                              requireApproval: !rule.requireApproval,
+                            })
+                          }
+                        >
+                          {t('agents.workflowRequireApproval')}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={rule.effect === 'deny' ? 'destructive' : 'default'}
+                          aria-pressed={rule.effect === 'deny'}
+                          disabled={isReadOnly}
+                          onClick={() =>
+                            updateWorkflowRule(rule.id, {
+                              effect: rule.effect === 'deny' ? 'allow' : 'deny',
+                            })
+                          }
+                        >
+                          {rule.effect === 'deny'
+                            ? t('agents.workflowActionBlocked')
+                            : t('agents.workflowActionAllowed')}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={rule.createIssueForAction ? 'default' : 'outline'}
+                          aria-pressed={rule.createIssueForAction ?? false}
+                          disabled={isReadOnly}
+                          onClick={() =>
+                            updateWorkflowRule(rule.id, {
+                              createIssueForAction: !rule.createIssueForAction,
+                            })
+                          }
+                        >
+                          {t('agents.workflowCreateIssuePerAction')}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 text-red-400"
+                          aria-label={t('agents.workflowRemoveRule', { name: rule.name })}
+                          disabled={isReadOnly}
+                          onClick={() =>
+                            setWorkflow((current) => ({
+                              ...current,
+                              rules: current.rules.filter((item) => item.id !== rule.id),
+                            }))
+                          }
+                        >
+                          <i className="ti ti-trash" aria-hidden="true" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+              {!isWorkflowLoading && workflow.steps.length === 0 && (
+                <p className="rounded-lg border border-dashed border-[var(--border)] p-5 text-center text-sm text-[var(--text-muted)]">
+                  {t('agents.workflowNoSteps')}
+                </p>
+              )}
+              {!isReadOnly && !isWorkflowLoading && (
+                <div className="flex flex-wrap justify-between gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={addWorkflowStep}
+                    disabled={workflow.steps.length >= 20}
+                  >
+                    <i className="ti ti-plus mr-2" aria-hidden="true" />
+                    {t('agents.addWorkflowStep')}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void saveWorkflow()}
+                    isLoading={isWorkflowSaving}
+                  >
+                    <i className="ti ti-device-floppy mr-2" aria-hidden="true" />
+                    {isWorkflowSaving ? t('agents.savingWorkflow') : t('agents.saveWorkflow')}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {/* View Mode 1: Catalog */}

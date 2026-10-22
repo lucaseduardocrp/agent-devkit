@@ -7,6 +7,7 @@ import type { ToolRegistry } from '../core/registry.js';
 import { toCallToolResult, toErrorResult } from '../core/result.js';
 import type { Session } from '../core/session.js';
 import type { McpTool, ToolContext } from '../core/tool.js';
+import { executeWithWorkflowPolicy } from '../core/workflow-policy.js';
 import { UNTRUSTED_CONTENT_RULE } from '../modules/shared.js';
 import { packageRoot, type SkillFile } from './skills.js';
 
@@ -62,7 +63,7 @@ export function createToolContext(deps: ServerDependencies, requestToken?: strin
 
 export async function runTool(tool: McpTool, input: unknown, context: ToolContext) {
   try {
-    return toCallToolResult(await tool.execute(input, context));
+    return toCallToolResult(await executeWithWorkflowPolicy(tool, input, context));
   } catch (error) {
     return toErrorResult(error);
   }
@@ -134,7 +135,27 @@ export function createMcpServer(deps: ServerDependencies): McpServer {
         },
       },
       async (input, extra) => {
-        const context = createToolContext(deps, extra.authInfo?.token);
+        const context: ToolContext = {
+          ...createToolContext(deps, extra.authInfo?.token),
+          requestApproval: async (message) => {
+            const response = await server.server.elicitInput({
+              mode: 'form',
+              message,
+              requestedSchema: {
+                type: 'object',
+                properties: {
+                  approved: {
+                    type: 'boolean',
+                    title: 'Approve this action',
+                    default: false,
+                  },
+                },
+                required: ['approved'],
+              },
+            });
+            return response.action === 'accept' && response.content?.['approved'] === true;
+          },
+        };
         const result = await runTool(tool, input, context);
         // Fire and forget: the tool result is returned without waiting for usage accounting.
         void recordToolUsage(tool, input, result, context, server.server.getClientVersion()?.name);

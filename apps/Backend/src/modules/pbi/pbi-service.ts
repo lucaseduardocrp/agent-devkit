@@ -15,7 +15,11 @@ import {
   type PbiLinkType,
   type PbiRelationStore,
 } from './pbi-relations.js';
+import type { Cache } from '../../shared/cache.js';
+import type { E2eArtifactStore } from '../e2e/application/artifact-store.js';
+import { fileOwner, syncItemFilesSafely } from '../shared/attachment-files.js';
 import type { PbiChanges, PbiFields, PbiItem, PbiSearchOptions, PbiStore } from './pbi-store.js';
+import { pbiCacheScope } from './pbi-store.js';
 import {
   InMemoryFieldMappingStore,
   mergeImportedFields,
@@ -67,6 +71,9 @@ const created = (item: PbiItem): EntityChange => ({
 });
 const updated = (before: PbiItem, after: PbiItem): EntityChange | null =>
   diffChange('pbi', after.id, pbiSnapshot(before), pbiSnapshot(after));
+/** What of a PBI or card can reference stored files. */
+const itemFiles = (item: PbiItem | null) =>
+  item && { description: item.description, attachments: item.attachments };
 export interface PushOptions {
   providerId: BoardProviderId;
   boardId?: string;
@@ -130,7 +137,19 @@ export class PbiService {
     private readonly audit?: EntityAuditLog,
     private readonly relationStore: PbiRelationStore = new InMemoryPbiRelationStore(),
     private readonly fieldMappings: FieldMappingStore = new InMemoryFieldMappingStore(),
+    private readonly cache?: Cache,
+    private readonly files?: E2eArtifactStore,
   ) {}
+  /** Keeps exactly the stored files the saved item references; `after` is null on delete. */
+  private syncFiles(workspaceId: string, before: PbiItem | null, after: PbiItem | null) {
+    return syncItemFilesSafely(
+      this.files,
+      workspaceId,
+      fileOwner('pbi', (after ?? before)!.id),
+      itemFiles(before),
+      itemFiles(after),
+    );
+  }
   private async record(workspaceId: string, changes: (EntityChange | null)[]): Promise<void> {
     const present = changes.filter((change): change is EntityChange => change !== null);
     if (this.audit && present.length) await this.audit.record(workspaceId, present);
@@ -139,13 +158,28 @@ export class PbiService {
   list(workspaceId: string) {
     return this.store.list(workspaceId);
   }
+  /** The list of every item as JSON, from the cache while no item changed. */
+  summariesJson(workspaceId: string): Promise<string> {
+    const load = async () => JSON.stringify({ items: await this.store.summaries(workspaceId) });
+    return this.cache
+      ? this.cache.text(pbiCacheScope(workspaceId), 'summaries', 60 * 60, load)
+      : load();
+  }
   search(workspaceId: string, options: PbiSearchOptions) {
     return this.store.search(workspaceId, options);
   }
   async currentIteration(workspaceId: string): Promise<string | null> {
-    const providers = await this.availableProviders(workspaceId);
-    if (!providers.some((entry) => entry.providerId === 'azure_devops')) return null;
-    return (await (await this.provider(workspaceId, 'azure_devops')).currentIteration?.()) ?? null;
+    const load = async () => {
+      const providers = await this.availableProviders(workspaceId);
+      if (!providers.some((entry) => entry.providerId === 'azure_devops')) return null;
+      return (
+        (await (await this.provider(workspaceId, 'azure_devops')).currentIteration?.()) ?? null
+      );
+    };
+    // A call to the provider on every page load; sprints change every few weeks.
+    return this.cache
+      ? this.cache.json(`pbi-iteration:${workspaceId}`, 'current', 10 * 60, load)
+      : load();
   }
   async get(workspaceId: string, id: string): Promise<PbiItem> {
     const external = /^(azure_devops|trello|github_projects|jira):(.+)$/.exec(id);
@@ -167,6 +201,7 @@ export class PbiService {
   async create(workspaceId: string, fields: PbiFields): Promise<PbiItem> {
     await this.validateParent(workspaceId, fields.kind, fields.parentId ?? null);
     const item = await this.store.create(workspaceId, fields);
+    await this.syncFiles(workspaceId, null, item);
     await this.record(workspaceId, [created(item)]);
     return item;
   }
@@ -187,13 +222,15 @@ export class PbiService {
       ...fields,
       ...(fields.sourceData ? { sourceData: { ...current.sourceData, ...fields.sourceData } } : {}),
     }))!;
+    await this.syncFiles(workspaceId, current, item);
     await this.record(workspaceId, [updated(current, item)]);
     return item;
   }
   async remove(workspaceId: string, id: string): Promise<void> {
     const item = await this.get(workspaceId, id);
+    // Children are removed with their parent, and so are their files.
     const removed = [item];
-    if (this.audit) {
+    if (this.audit || this.files) {
       const children = new Map<string, PbiItem[]>();
       for (const entry of await this.store.list(workspaceId))
         if (entry.parentId)
@@ -202,6 +239,7 @@ export class PbiService {
         removed.push(...(children.get(removed[index]!.id) ?? []));
     }
     await this.store.remove(workspaceId, item.id);
+    for (const entry of removed) await this.syncFiles(workspaceId, entry, null);
     await this.record(
       workspaceId,
       removed.map((entry) => ({
@@ -287,6 +325,11 @@ export class PbiService {
     changes: (EntityChange | null)[],
   ): Promise<PbiItem> {
     const kind = parentId ? 'card' : remote.kind;
+    // Provider files are replaced on every import; files added in the ADK are kept.
+    const attachments = remote.attachments && [
+      ...(existing?.attachments ?? []).filter((file) => !file.id.startsWith('provider:')),
+      ...remote.attachments,
+    ];
     const item = existing
       ? (await this.store.update(workspaceId, existing.id, {
           title: remote.title,
@@ -295,6 +338,7 @@ export class PbiService {
           status: remote.status,
           parentId,
           position: remote.position,
+          ...(attachments ? { attachments } : {}),
           sourceData: mergeImportedFields(
             existing.sourceData,
             {
@@ -313,6 +357,7 @@ export class PbiService {
           status: remote.status,
           parentId,
           position: remote.position,
+          ...(attachments ? { attachments } : {}),
           sourceData: remote.sourceData,
         });
     const linked = await this.store.link(workspaceId, item.id, {
@@ -321,6 +366,8 @@ export class PbiService {
       externalUrl: remote.externalUrl,
       boardId: remote.boardId,
     });
+    // The imported description replaces the one edited in the ADK, with its images.
+    await this.syncFiles(workspaceId, existing, linked);
     changes.push(existing ? updated(existing, linked) : created(linked));
     return linked;
   }
@@ -391,10 +438,31 @@ export class PbiService {
   pull(
     workspaceId: string,
     includeItems: false,
+    providerId?: BoardProviderId,
   ): Promise<{ results: { providerId: string; imported: number; error?: string }[] }>;
-  async pull(workspaceId: string, includeItems = true) {
+  pull(
+    workspaceId: string,
+    includeItems: true,
+    providerId?: BoardProviderId,
+  ): Promise<{
+    results: { providerId: string; imported: number; error?: string }[];
+    items: PbiItem[];
+  }>;
+  async pull(workspaceId: string, includeItems = true, providerId?: BoardProviderId) {
     const configured = await this.availableProviders(workspaceId);
-    const unique = [...new Set(configured.map((item) => item.providerId))] as BoardProviderId[];
+    const unique = [
+      ...new Set(
+        configured
+          .map((item) => item.providerId)
+          .filter((configuredId) => !providerId || configuredId === providerId),
+      ),
+    ] as BoardProviderId[];
+    if (providerId && !unique.includes(providerId))
+      throw new ApplicationError(
+        'PBI_PROVIDER_CONFIG',
+        `Configure ${providerId} in Integrations first.`,
+        400,
+      );
     const results = [] as { providerId: string; imported: number; error?: string }[];
     for (const providerId of unique) {
       try {

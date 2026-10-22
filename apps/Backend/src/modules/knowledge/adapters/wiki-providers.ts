@@ -17,6 +17,44 @@ interface AzureWiki {
   readonly id: string;
   readonly name?: string;
   readonly remoteUrl?: string;
+  readonly repositoryId?: string;
+}
+
+const WIKI_ATTACHMENT_REF =
+  /(\]\(\s*|\bsrc\s*=\s*["']?)(\/\.attachments\/[^)\s"'>]+)(?:\s+=\d*x\d*)?/g;
+const ABSOLUTE_WIKI_ATTACHMENT =
+  /https:\/\/[^\s)"'>]+\/_apis\/git\/repositories\/[^/\s)"'>]+\/items\?path=(%2F\.attachments%2F[^&\s)"'>]+)&download=true&api-version=7\.0/g;
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Azure wikis reference uploaded images as `/.attachments/...`, a path only the wiki
+ * itself resolves. The Brain keeps them as the wiki repository's file URL, which the
+ * ADK shows through the integration, and turns them back when the page is pushed.
+ */
+export function absoluteWikiAttachments(
+  content: string,
+  projectBase: string,
+  repositoryId: string | undefined,
+): string {
+  if (!repositoryId) return content;
+  return content.replace(
+    WIKI_ATTACHMENT_REF,
+    (_match, prefix: string, path: string) =>
+      `${prefix}${projectBase}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/items?path=${encodeURIComponent(safeDecode(path))}&download=true&api-version=7.0`,
+  );
+}
+
+export function relativeWikiAttachments(content: string): string {
+  return content.replace(ABSOLUTE_WIKI_ATTACHMENT, (_match, path: string) =>
+    safeDecode(path).replace(/ /g, '%20'),
+  );
 }
 
 interface AzureWikiPage {
@@ -214,7 +252,11 @@ export class AzureDevOpsWikiProvider extends HttpWikiProvider {
     return {
       id: String(result.id),
       source: source.toString(),
-      content: result.content,
+      content: absoluteWikiAttachments(
+        result.content,
+        this.baseUrl.toString().replace(/\/+$/, ''),
+        wiki.repositoryId,
+      ),
       updatedAt: new Date().toISOString(),
     };
   }
@@ -229,16 +271,17 @@ export class AzureDevOpsWikiProvider extends HttpWikiProvider {
     const wiki = this.selectWiki(wikis);
 
     const path = page.path ?? `/adk-${page.id}`;
+    const content = relativeWikiAttachments(page.content);
     const pageUrl = new URL(`${base}/_apis/wiki/wikis/${encodeURIComponent(wiki.id)}/pages`);
     pageUrl.searchParams.set('path', path);
     pageUrl.searchParams.set('api-version', '7.1');
     const create = await this.fetcher(pageUrl, {
       method: 'PUT',
       headers: { ...this.authHeaders(), 'content-type': 'application/json' },
-      body: JSON.stringify({ content: page.content }),
+      body: JSON.stringify({ content }),
     });
     if (create.ok) {
-      return this.verifyPage(pageUrl, wiki, { path, content: page.content });
+      return this.verifyPage(pageUrl, wiki, { path, content });
     }
     if (create.status === 401 || create.status === 403) {
       throw wikiRequestError('create-page', create.status);
@@ -268,9 +311,9 @@ export class AzureDevOpsWikiProvider extends HttpWikiProvider {
     if (
       existingPage.path === path &&
       typeof existingPage.content === 'string' &&
-      normalizeContent(existingPage.content) === normalizeContent(page.content)
+      normalizeContent(existingPage.content) === normalizeContent(content)
     ) {
-      return this.verifyPage(pageUrl, wiki, { path, content: page.content });
+      return this.verifyPage(pageUrl, wiki, { path, content });
     }
     const etag = existing.headers.get('etag');
     if (!etag) {
@@ -287,7 +330,7 @@ export class AzureDevOpsWikiProvider extends HttpWikiProvider {
         'content-type': 'application/json',
         'If-Match': etag,
       },
-      body: JSON.stringify({ content: page.content }),
+      body: JSON.stringify({ content }),
     });
     if (!response.ok) {
       if (response.status === 409 || response.status === 412) {
@@ -300,7 +343,7 @@ export class AzureDevOpsWikiProvider extends HttpWikiProvider {
       }
       throw wikiRequestError('update-page', response.status);
     }
-    return this.verifyPage(pageUrl, wiki, { path, content: page.content });
+    return this.verifyPage(pageUrl, wiki, { path, content });
   }
 
   protected override authHeaders(): Record<string, string> {
@@ -339,7 +382,7 @@ export class AzureDevOpsWikiProvider extends HttpWikiProvider {
       throw new Error(`${this.name} returned HTTP ${wikisRes.status}.`);
     }
 
-    const wikisData = (await wikisRes.json()) as { value?: Array<{ id: string; name?: string }> };
+    const wikisData = (await wikisRes.json()) as { value?: AzureWiki[] };
     const availableWikis = Array.isArray(wikisData?.value) ? wikisData.value : [];
     if (availableWikis.length === 0) {
       return [];
@@ -392,7 +435,7 @@ export class AzureDevOpsWikiProvider extends HttpWikiProvider {
           return {
             id: String(pageData.id ?? pagePath),
             source: sourceUrl.toString(),
-            content: pageData.content,
+            content: absoluteWikiAttachments(pageData.content, baseStr, wiki.repositoryId),
             updatedAt: new Date().toISOString(),
           } satisfies KnowledgePage;
         }

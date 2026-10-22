@@ -8,6 +8,7 @@ import type {
   ApiClient,
   PublishedTestSuiteDto,
   PublishTestSuiteInput,
+  RemoteSuiteKind,
   RemoteTestPlanDto,
   RemoteTestSuiteDto,
   TestSuiteDto,
@@ -60,6 +61,8 @@ export function PublishTestSuiteModal({
   const [parentSuiteId, setParentSuiteId] = useState('');
   const [destinationMode, setDestinationMode] = useState<'direct' | 'child'>('direct');
   const [newSuiteName, setNewSuiteName] = useState(suite.name);
+  const [suiteKind, setSuiteKind] = useState<RemoteSuiteKind>('static');
+  const [workItemId, setWorkItemId] = useState('');
   const [loadingProviders, setLoadingProviders] = useState(true);
   const [loadingPlans, setLoadingPlans] = useState(false);
   const [loadingSuites, setLoadingSuites] = useState(false);
@@ -209,6 +212,13 @@ export function PublishTestSuiteModal({
   const configured = providers.some(
     (provider) => provider.id === providerId && provider.configured,
   );
+  // Suite kinds and work item links are Azure DevOps concepts.
+  const azure = providerId === 'azure_devops';
+  // The kind only matters when publishing creates the suite (not when adding to one).
+  const createsSuite = mode === 'new' || (Boolean(parentSuiteId) && destinationMode === 'child');
+  const requirementSuite = azure && createsSuite && suiteKind === 'requirement';
+  const workItem = workItemId.trim();
+  const workItemValid = !workItem || /^[1-9]\d*$/.test(workItem);
   const ready =
     configured &&
     !loadingProviders &&
@@ -217,12 +227,14 @@ export function PublishTestSuiteModal({
     !loadError &&
     !previewError &&
     !previewLoading &&
+    workItemValid &&
+    (!requirementSuite || Boolean(workItem)) &&
     (mode === 'new' ||
       Boolean(
         planId &&
         parentSuiteId &&
         (destinationMode === 'direct' ||
-          (newSuiteName.trim() &&
+          ((requirementSuite || newSuiteName.trim()) &&
             suites.find((item) => item.id === parentSuiteId)?.suiteType.toLowerCase() ===
               'statictestsuite')),
       ));
@@ -236,13 +248,16 @@ export function PublishTestSuiteModal({
         providerId,
         ...(templateId ? { templateId } : {}),
         ...(templateId && Object.keys(fieldValues).length ? { fieldValues } : {}),
+        ...(azure && createsSuite ? { suiteKind } : {}),
+        ...(azure && workItem ? { workItemId: workItem } : {}),
         ...(mode === 'existing'
           ? destinationMode === 'direct'
             ? { remotePlanId: planId, remoteSuiteId: parentSuiteId }
             : {
                 remotePlanId: planId,
                 remoteParentSuiteId: parentSuiteId,
-                remoteSuiteName: newSuiteName.trim(),
+                // Azure names a requirement suite after its work item.
+                ...(requirementSuite ? {} : { remoteSuiteName: newSuiteName.trim() }),
               }
           : {}),
       });
@@ -433,7 +448,7 @@ export function PublishTestSuiteModal({
                     </Select>
                   </div>
                 )}
-                {parentSuiteId && destinationMode === 'child' && (
+                {parentSuiteId && destinationMode === 'child' && !requirementSuite && (
                   <div className="space-y-1.5">
                     <label htmlFor="publish-suite-name" className="text-sm font-medium">
                       {t('testplans.publishNewSuiteName')}
@@ -457,6 +472,60 @@ export function PublishTestSuiteModal({
               </div>
             )}
           </>
+        )}
+
+        {configured && azure && (mode === 'new' || parentSuiteId) && (
+          <div className="space-y-4">
+            {createsSuite && (
+              <div className="space-y-1.5">
+                <label htmlFor="publish-suite-kind" className="text-sm font-medium">
+                  {t('testplans.publishSuiteKind')}
+                </label>
+                <Select
+                  id="publish-suite-kind"
+                  value={suiteKind}
+                  disabled={publishing}
+                  onChange={(event) => setSuiteKind(event.target.value as RemoteSuiteKind)}
+                >
+                  <option value="static">{t('testplans.publishStaticSuite')}</option>
+                  <option value="requirement">{t('testplans.publishRequirementSuite')}</option>
+                </Select>
+                <p className="text-xs text-muted">
+                  {t(
+                    requirementSuite
+                      ? 'testplans.publishRequirementSuiteHint'
+                      : 'testplans.publishStaticSuiteHint',
+                  )}
+                </p>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <label htmlFor="publish-suite-work-item" className="text-sm font-medium">
+                {t(
+                  requirementSuite
+                    ? 'testplans.publishWorkItem'
+                    : 'testplans.publishWorkItemOptional',
+                )}
+              </label>
+              <Input
+                id="publish-suite-work-item"
+                value={workItemId}
+                inputMode="numeric"
+                maxLength={12}
+                required={requirementSuite}
+                placeholder={t('testplans.publishWorkItemPlaceholder')}
+                disabled={publishing}
+                aria-invalid={!workItemValid}
+                aria-describedby={workItemValid ? undefined : 'publish-suite-work-item-error'}
+                onChange={(event) => setWorkItemId(event.target.value)}
+              />
+              {!workItemValid && (
+                <p id="publish-suite-work-item-error" className="text-xs text-red-400">
+                  {t('testplans.publishWorkItemInvalid')}
+                </p>
+              )}
+            </div>
+          </div>
         )}
 
         {/* The field template comes last: it fills the cases once the destination is chosen. */}

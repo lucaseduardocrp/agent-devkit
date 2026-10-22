@@ -1,4 +1,5 @@
 import type { CustomAgentDto } from '../agents/agent-types.js';
+import type { ImageAttachment } from '../shared/image-attachment-types.js';
 
 export type IssueStatus =
   'backlog' | 'todo' | 'in_progress' | 'in_review' | 'blocked' | 'done' | 'cancelled';
@@ -10,6 +11,7 @@ export interface Issue {
   readonly number: number;
   readonly title: string;
   readonly description: string;
+  readonly attachments?: readonly ImageAttachment[];
   readonly status: IssueStatus;
   readonly priority: IssuePriority;
   readonly assigneeAgentId: string | null;
@@ -28,8 +30,21 @@ export interface IssueComment {
   readonly createdAt: string;
 }
 
+/** A run executed while its issue was assigned to the signed-in user. */
+export interface InboxRun {
+  readonly id: string;
+  readonly agentId: string;
+  readonly status: AgentRun['status'];
+  readonly attempt: number;
+  readonly createdAt: string;
+  readonly finishedAt: string | null;
+}
+
+/** Private inbox entry: an issue with the runs executed while it was assigned to the user. */
 export interface InboxItem {
   readonly issue: Issue;
+  /** Newest first; never empty. */
+  readonly runs: readonly InboxRun[];
   readonly readAt: string | null;
   readonly archivedAt: string | null;
 }
@@ -63,11 +78,34 @@ export interface AgentRun {
   readonly id: string;
   readonly issueId: string;
   readonly agentId: string;
-  readonly status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  readonly status:
+    | 'queued'
+    | 'running'
+    | 'waiting_review'
+    | 'waiting_input'
+    | 'succeeded'
+    | 'failed'
+    | 'cancelled';
   readonly mode: 'server' | 'host';
   readonly attempt: number;
   readonly output: string | null;
   readonly error: string | null;
+  readonly workflowState?: {
+    readonly autonomy: 'supervised' | 'balanced' | 'autonomous';
+    readonly steps: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly reviewRequired?: boolean;
+    }[];
+    readonly currentStepIndex: number;
+    readonly results: readonly {
+      readonly stepId: string;
+      readonly name: string;
+      readonly output: string;
+      readonly kind?: 'result' | 'question' | 'answer';
+    }[];
+    readonly question?: string;
+  } | null;
   readonly provider: string | null;
   readonly model: string | null;
   readonly inputTokens: number | null;
@@ -130,6 +168,12 @@ export interface McpUsageSummary {
 export type IssueChanges = Partial<
   Pick<
     Issue,
-    'title' | 'description' | 'status' | 'priority' | 'assigneeAgentId' | 'assigneeUserId'
+    | 'title'
+    | 'description'
+    | 'attachments'
+    | 'status'
+    | 'priority'
+    | 'assigneeAgentId'
+    | 'assigneeUserId'
   >
 >;

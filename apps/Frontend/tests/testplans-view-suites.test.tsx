@@ -193,7 +193,10 @@ describe('TestPlansView suite management', () => {
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Publicar suite' }));
     await waitFor(() =>
-      expect(push).toHaveBeenCalledWith('suite-1', { providerId: 'azure_devops' }),
+      expect(push).toHaveBeenCalledWith('suite-1', {
+        providerId: 'azure_devops',
+        suiteKind: 'static',
+      }),
     );
     expect(await ui.findByRole('link', { name: 'Abrir no Test Plans' })).toHaveAttribute(
       'href',
@@ -298,6 +301,7 @@ describe('TestPlansView suite management', () => {
         remotePlanId: '7',
         remoteParentSuiteId: '8',
         remoteSuiteName: 'Sprint 181',
+        suiteKind: 'static',
       }),
     );
   });

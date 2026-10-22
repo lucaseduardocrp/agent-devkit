@@ -57,7 +57,8 @@ export const ptBR = {
   INVALID_DOCUMENT_TITLE: 'O título do documento é obrigatório.',
   INVALID_EXTERNAL_URL: 'A URL externa é inválida.',
   ENCRYPTION_ERROR: 'Não foi possível processar a credencial protegida.',
-  ENCRYPTION_NOT_CONFIGURED: 'O armazenamento seguro de credenciais não está configurado neste servidor.',
+  ENCRYPTION_NOT_CONFIGURED:
+    'O armazenamento seguro de credenciais não está configurado neste servidor.',
   IDENTITY_EXISTS: 'Já existe uma conta com este e-mail.',
   MEMBER_NOT_FOUND: 'Membro não encontrado neste workspace.',
   OWNER_CONTEXT_REQUIRED: 'O contexto do proprietário é obrigatório.',
@@ -78,6 +79,12 @@ export const ptBR = {
   TEST_SUITE_PUBLISH_FAILED: 'Falha ao publicar a suíte no provedor de testes.',
   INVALID_REMOTE_PLAN_ID: 'O identificador do Test Plan deve ser um número positivo.',
   INVALID_REMOTE_SUITE_ID: 'Selecione uma suite válida no Test Plan de destino.',
+  WORK_ITEM_REQUIRED: 'Informe o work item que a Requirement Based Suite vai cobrir.',
+  WORK_ITEM_NOT_FOUND: 'O work item #{id} não existe neste projeto do Azure DevOps.',
+  REQUIREMENT_SUITE_REJECTED:
+    'O item #{id} é um {type}: o Azure DevOps só cria Requirement Based Suites para itens de requisito (como PBI, User Story ou Bug). Use uma Static Suite, que também vincula os test cases ao item.',
+  REQUIREMENT_SUITE_NEEDS_NEW_SUITE:
+    'A Requirement Based Suite é criada na publicação: escolha um novo Test Plan ou uma nova suite dentro da selecionada.',
   AGENT_LOAD_FAILED: 'Não foi possível carregar o agente selecionado.',
   AGENT_NOT_AVAILABLE: 'O agente selecionado não está disponível para este gerador.',
   NOT_FOUND: 'Recurso não encontrado.',

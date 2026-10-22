@@ -439,5 +439,8 @@ describe('App', () => {
 
     expect(client.getLocale()).toBe('en-US');
     expect(document.documentElement.lang).toBe('en-US');
+    // The interface itself switches and keeps the chosen language.
+    expect(await view.findByText('Regional Preferences')).toBeTruthy();
+    expect((view.getByTestId('settings-locale-select') as HTMLSelectElement).value).toBe('en-US');
   });
 });

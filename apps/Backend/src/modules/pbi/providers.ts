@@ -8,6 +8,7 @@ import {
   type StateCategory,
 } from './push-contract.js';
 import type { PbiLinkType } from './pbi-relations.js';
+import { attachmentKindFromName, type Attachment } from '../shared/attachment.js';
 import type { FieldDefinition, FieldValue } from '../field-mapping/field-mapping.js';
 
 export interface RemotePbiItem {
@@ -21,6 +22,8 @@ export interface RemotePbiItem {
   externalUrl: string | null;
   boardId: string | null;
   sourceData: Record<string, unknown>;
+  /** Files attached on the provider; they stay hosted there. */
+  attachments?: Attachment[];
 }
 export interface PbiComment {
   id: string;
@@ -110,6 +113,29 @@ async function request<T>(fetcher: typeof fetch, url: string, init: RequestInit 
   const response = await fetcher(url, init);
   if (!response.ok) throw providerError(errorDetail(response.status, await response.text()));
   return response.json() as Promise<T>;
+}
+interface AzureRelation {
+  rel: string;
+  url: string;
+  attributes?: { name?: string };
+}
+/** Files attached to an Azure DevOps work item, kept as links to Azure. */
+function azureAttachments(relations: readonly AzureRelation[] | undefined): Attachment[] {
+  return (relations ?? [])
+    .filter((relation) => relation.rel === 'AttachedFile' && relation.url.startsWith('https://'))
+    .map((relation) => {
+      const name = relation.attributes?.name?.trim() || relation.url.split('/').pop() || 'file';
+      const url = new URL(relation.url);
+      url.searchParams.set('fileName', name);
+      return {
+        id: `provider:${relation.url}`,
+        name,
+        kind: attachmentKindFromName(name),
+        scope: 'pbi',
+        source: 'url',
+        url: url.toString(),
+      } satisfies Attachment;
+    });
 }
 function basic(token: string): string {
   return `Basic ${Buffer.from(`:${token}`).toString('base64')}`;
@@ -482,7 +508,7 @@ export function createPbiProvider(
               value: {
                 id: number;
                 fields: Record<string, unknown>;
-                relations?: { rel: string; url: string }[];
+                relations?: AzureRelation[];
                 url: string;
               }[];
             }>(fetcher, `${base}/_apis/wit/workitemsbatch?api-version=7.1`, {
@@ -533,6 +559,7 @@ export function createPbiProvider(
                 position: results.length,
                 externalUrl: `${base}/_workitems/edit/${row.id}`,
                 boardId: project,
+                attachments: azureAttachments(row.relations),
                 sourceData: {
                   customFields: { azure_devops: azureFieldValues(fields) },
                   type,
@@ -640,7 +667,7 @@ export function createPbiProvider(
             value: {
               id: number;
               fields: Record<string, unknown>;
-              relations?: { rel: string; url: string }[];
+              relations?: AzureRelation[];
             }[];
           }>(fetcher, `${base}/_apis/wit/workitemsbatch?api-version=7.1`, {
             method: 'POST',
@@ -671,6 +698,7 @@ export function createPbiProvider(
               position: results.length,
               externalUrl: `${base}/_workitems/edit/${row.id}`,
               boardId: project,
+              attachments: azureAttachments(row.relations),
               sourceData: {
                 customFields: { azure_devops: azureFieldValues(fields) },
                 type,

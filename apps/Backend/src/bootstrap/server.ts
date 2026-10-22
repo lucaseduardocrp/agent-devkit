@@ -26,11 +26,14 @@ import {
 } from '../modules/workspaces/adapters/prisma-workspace-repository.js';
 import { InMemoryWorkspaceRepository } from '../modules/workspaces/adapters/in-memory-workspace-repository.js';
 import { WorkspaceService } from '../modules/workspaces/application/workspace-service.js';
+import { sweepPendingFiles } from '../modules/shared/attachment-files.js';
 import { InMemoryKnowledgeChunkRepository } from '../modules/knowledge/application/knowledge-provider.js';
 import { DynamicProviderFactory } from '../modules/integrations/application/dynamic-provider-factory.js';
 import { PrismaAgentRepository } from '../modules/agents/adapters/prisma-agent-repository.js';
 import { InMemoryAgentRepository } from '../modules/agents/adapters/in-memory-agent-repository.js';
 import { AgentService } from '../modules/agents/application/agent-service.js';
+import { PrismaAgentWorkflowRepository } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
+import type { PrismaAgentWorkflowClient } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import { PrismaIssueStore } from '../modules/issues/issue-store.js';
 import { PrismaPbiStore } from '../modules/pbi/pbi-store.js';
 import { PrismaPbiRelationStore } from '../modules/pbi/pbi-relations.js';
@@ -39,6 +42,9 @@ import { PrismaReleaseNoteStore } from '../modules/release-notes/release-note-st
 import { PrismaRunStore } from '../modules/issues/run-store.js';
 import { PrismaUsageStore } from '../modules/issues/usage-store.js';
 import { loadRuntimeConfig } from '../shared/config.js';
+import { createCache } from '../shared/cache.js';
+import { cachedWorkspaceRepository } from '../modules/workspaces/application/cached-workspace-repository.js';
+import { cachedKnowledgeSearch } from '../modules/knowledge/application/knowledge-cache.js';
 import { resolveEncryptionKey } from '../shared/encryption.js';
 import { InMemorySavedTestPlanStore } from '../modules/testplans/application/saved-test-plans.js';
 import { PrismaSavedTestPlanStore } from '../modules/testplans/adapters/prisma-saved-test-plans.js';
@@ -73,12 +79,21 @@ const database =
       })
     : undefined;
 
-const knowledge = database
+// Redis when REDIS_URL is set (shared by every API instance), else this process's memory.
+const cache = createCache(process.env);
+console.log(`[Cache] Using ${cache.store.kind === 'redis' ? 'Redis' : 'in-process memory'}.`);
+
+const knowledgeAdapters = database
   ? createPrismaKnowledgeAdapters(database.client)
   : {
       search: new InMemoryKnowledgeSearch(),
       repository: new InMemoryKnowledgeChunkRepository(),
     };
+// The repository gets its cache inside createApp, around the audited writes.
+const knowledge = {
+  ...knowledgeAdapters,
+  search: cachedKnowledgeSearch(knowledgeAdapters.search, cache),
+};
 
 const authRepo = database
   ? new PrismaAuthRepository(database.client as unknown as PrismaAuthClient)
@@ -129,9 +144,13 @@ if (apiPublicUrl && process.env['GITHUB_CLIENT_ID'] && process.env['GITHUB_CLIEN
   );
 }
 
-const workspaceRepo = database
-  ? new PrismaWorkspaceRepository(database.client as unknown as PrismaWorkspacesClient)
-  : new InMemoryWorkspaceRepository();
+// Every request reads its membership, workspace and groups: served from the cache.
+const workspaceRepo = cachedWorkspaceRepository(
+  database
+    ? new PrismaWorkspaceRepository(database.client as unknown as PrismaWorkspacesClient)
+    : new InMemoryWorkspaceRepository(),
+  cache,
+);
 const workspaceService = new WorkspaceService(workspaceRepo, authRepo);
 
 const integrationsStore = database
@@ -143,8 +162,12 @@ const dynamicProviderFactory = new DynamicProviderFactory(integrationsService);
 const agentRepo = database
   ? new PrismaAgentRepository(database.client)
   : new InMemoryAgentRepository();
+const agentWorkflowRepo = database
+  ? new PrismaAgentWorkflowRepository(database.client as unknown as PrismaAgentWorkflowClient)
+  : undefined;
 const agentService = new AgentService({
   agentRepository: agentRepo,
+  workflowRepository: agentWorkflowRepo,
   dynamicProviderFactory,
   knowledgeSearch: knowledge.search,
 });
@@ -176,6 +199,7 @@ if (!ffmpegPath)
   );
 
 const app = createApp({
+  cache,
   auditPersistence: database ? new PrismaAuditPersistence(database.client) : undefined,
   knowledgeSearch: knowledge.search,
   knowledgeRepository: knowledge.repository,
@@ -222,8 +246,21 @@ const server = app.listen(config.port, () => {
   console.log(`Backend listening on port ${config.port}`);
 });
 
+// Files uploaded for an item that was never saved (the save failed or the tab closed
+// mid-save) are pending; once they are an hour old nothing can claim them anymore.
+const sweepUploads = () =>
+  sweepPendingFiles(e2eArtifacts.store).then(
+    (removed) => {
+      if (removed) console.log(`[Attachments] Removed ${removed} unsaved upload(s).`);
+    },
+    (error: unknown) => console.error('[Attachments] Could not remove unsaved uploads:', error),
+  );
+setTimeout(() => void sweepUploads(), 60_000).unref();
+setInterval(() => void sweepUploads(), 30 * 60_000).unref();
+
 async function shutdown(): Promise<void> {
   server.close();
+  await cache.close();
   await database?.close();
 }
 

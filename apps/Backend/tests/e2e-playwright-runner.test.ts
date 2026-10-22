@@ -14,7 +14,7 @@ import {
   FfmpegVideoTranscoder,
   resolveFfmpegPath,
 } from '../src/modules/e2e/adapters/ffmpeg-transcoder.js';
-import { createLocalGateway } from '../../Mcp/src/modules/e2e/cloudflare-tunnel.js';
+import { createLocalGateway } from '../../Cli/src/e2e/cloudflare-tunnel.js';
 
 const browsersPath = process.env['PLAYWRIGHT_BROWSERS_PATH'] || defaultBrowsersPath();
 const browserInstalled =
@@ -29,6 +29,40 @@ const page = `<!doctype html><html><head><title>Evento de teste</title></head><b
 <ul id="list"></ul>
 <a href="/about">Sobre</a>
 </body></html>`;
+
+/** Counts the pure blue, pure green and evidence-red pixels of a screenshot. */
+async function countColors(png: Uint8Array): Promise<{ blue: number; green: number; red: number }> {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    return await page.evaluate(
+      async (source) => {
+        const image = new Image();
+        image.src = source;
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext('2d')!;
+        context.drawImage(image, 0, 0);
+        const data = context.getImageData(0, 0, image.width, image.height).data;
+        const counts = { blue: 0, green: 0, red: 0 };
+        for (let index = 0; index < data.length; index += 4) {
+          const [r, g, b] = [data[index]!, data[index + 1]!, data[index + 2]!];
+          if (r < 10 && g < 10 && b > 245) counts.blue += 1;
+          else if (r < 10 && g > 245 && b < 10) counts.green += 1;
+          else if (Math.abs(r - 225) < 12 && Math.abs(g - 29) < 12 && Math.abs(b - 72) < 12)
+            counts.red += 1;
+        }
+        return counts;
+      },
+      `data:image/png;base64,${Buffer.from(png).toString('base64')}`,
+    );
+  } finally {
+    await browser.close();
+  }
+}
 
 describe.skipIf(!browserInstalled)('Playwright E2E runner (real browser)', () => {
   let server: http.Server;
@@ -156,6 +190,20 @@ describe.skipIf(!browserInstalled)('Playwright E2E runner (real browser)', () =>
         response.end(
           `<title>Protected</title><h1>Protected app</h1><img src="${externalUrl}/pixel.png">`,
         );
+        return;
+      }
+      if (request.url === '/report') {
+        // The data loads behind a spinner; the Status column sits beyond a horizontal scroll.
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end(`<title>Report</title><body style="margin:0">
+<h1>Report</h1>
+<div class="loading" style="position:fixed;inset:0;background:#0000ff"></div>
+<div style="width:1000px;overflow-x:auto"><table id="report"></table></div>
+<script>setTimeout(() => {
+  document.getElementById('report').innerHTML = '<tr>' + '<td style="min-width:600px">Name</td>'.repeat(4) +
+    '<td><span class="status" style="display:inline-block;width:80px;height:40px;background:#00ff00">Ok</span></td></tr>';
+  document.querySelector('.loading').remove();
+}, 1500);</script></body>`);
         return;
       }
       if (request.url === '/openapi.json') {
@@ -406,6 +454,36 @@ test('TC001 - Enviar pergunta', async ({ page }) => {
     expect(result.steps[2]?.error).toContain(`Browser origin at failure: ${baseUrl}`);
     for (const step of result.steps)
       expect(Buffer.from(step.screenshot!).subarray(1, 4).toString()).toBe('PNG');
+  }, 120_000);
+
+  it('waits for loading to finish, then scrolls to and boxes the elements a step read', async () => {
+    const result = await runner.run({
+      mode: 'frontend',
+      baseUrl,
+      locale: 'en-US',
+      credentials: { username: null, password: null },
+      script: `import { test, expect } from '@playwright/test';
+test('TC001 - Report status', async ({ page }) => {
+  await test.step('Step 1 - Open the report', async () => {
+    await page.goto('/report');
+    await expect(page.getByRole('heading', { name: 'Report' })).toBeVisible();
+  });
+  await test.step('Step 2 - Check the status column', async () => {
+    await expect(page.locator('#report td').first()).toBeAttached();
+    const statuses = await page.locator('.status').evaluateAll((nodes) => nodes.map((node) => node.textContent));
+    expect(statuses).toEqual(['Ok']);
+  });
+});`,
+    });
+    expect(result.status).toBe('passed');
+    const [opened, checked] = await Promise.all(
+      result.steps.map((step) => countColors(step.screenshot!)),
+    );
+    // Step 1 ended while the data was loading: its evidence shows the loaded page.
+    expect(opened?.blue).toBe(0);
+    // Step 2 only read the status through evaluateAll: it is scrolled into view and boxed.
+    expect(checked?.green).toBeGreaterThan(1000);
+    expect(checked?.red).toBeGreaterThan(100);
   }, 120_000);
 
   it('reports unsuccessful document responses by origin without exposing query parameters', async () => {

@@ -159,7 +159,7 @@ describe('Permission groups in settings', () => {
     expect(await view.findByText('Nenhum grupo de permissão neste workspace.')).toBeInTheDocument();
   });
 
-  it('edits workspace permissions and groups of a member and invites into groups', async () => {
+  it('edits the workspace permissions of a member and adds members only as Member or Administrator', async () => {
     const { client, view } = setup(adminMembership);
     const update = vi
       .spyOn(client, 'updateWorkspaceMember')
@@ -178,18 +178,17 @@ describe('Permission groups in settings', () => {
       within(view.getByTestId('member-row-m-admin')).queryByRole('button', { name: /Permissões/ }),
     ).not.toBeInTheDocument();
 
+    // Groups are managed in Permission groups: the member editor only has workspace permissions.
     fireEvent.click(within(row).getByRole('button', { name: 'Permissões User 1' }));
     const editor = view.getByTestId('member-access-m-1');
+    expect(within(editor).queryByLabelText('Editores')).not.toBeInTheDocument();
     fireEvent.click(within(editor).getByLabelText('Gerenciar grupos de permissão'));
-    fireEvent.click(within(editor).getByLabelText('Editores'));
-    fireEvent.click(within(editor).getByLabelText('Leitores'));
     fireEvent.click(within(editor).getByRole('button', { name: 'Salvar' }));
     expect(await view.findByText('Não foi possível salvar.')).toBeInTheDocument();
     fireEvent.click(within(editor).getByRole('button', { name: 'Salvar' }));
     expect(await view.findByText('Permissões atualizadas.')).toBeInTheDocument();
     expect(update).toHaveBeenLastCalledWith('ws', 'm-1', {
       permissions: { manageGroups: true },
-      groupIds: ['g-readers'],
     });
 
     fireEvent.click(within(row).getByRole('button', { name: 'Permissões User 1' }));
@@ -198,21 +197,40 @@ describe('Permission groups in settings', () => {
     );
     expect(view.queryByTestId('member-access-m-1')).not.toBeInTheDocument();
 
+    const invite = view.getByPlaceholderText('email@exemplo.com').closest('form')!;
+    expect(within(invite).queryByLabelText('Editores')).not.toBeInTheDocument();
+    expect(
+      within(within(invite).getByLabelText('Função'))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Membro', 'Administrador']);
     fireEvent.change(view.getByPlaceholderText('email@exemplo.com'), {
       target: { value: 'new@corp.com' },
     });
-    const invite = view.getByPlaceholderText('email@exemplo.com').closest('form')!;
-    fireEvent.click(within(invite).getByLabelText('Leitores'));
-    fireEvent.click(within(invite).getByLabelText('Editores'));
-    fireEvent.click(within(invite).getByLabelText('Editores'));
     fireEvent.click(within(invite).getByRole('button', { name: /adicionar/i }));
     await waitFor(() =>
-      expect(add).toHaveBeenCalledWith('ws', {
-        email: 'new@corp.com',
-        role: 'MEMBER',
-        groupIds: ['g-readers'],
-      }),
+      expect(add).toHaveBeenCalledWith('ws', { email: 'new@corp.com', role: 'MEMBER' }),
     );
+
+    fireEvent.click(within(invite).getByRole('button', { name: 'Ir para Grupos de permissão' }));
+    expect(await view.findByRole('button', { name: /Novo grupo/ })).toBeInTheDocument();
+  });
+
+  it('offers only Member and Administrator and keeps showing a role from before groups', async () => {
+    const { view } = setup(adminMembership);
+    fireEvent.click(view.getByTestId('settings-section-members'));
+    const row = await view.findByTestId('member-row-m-2');
+    const role = within(row).getByLabelText<HTMLSelectElement>('Função User 2');
+    expect(role.value).toBe('VIEWER');
+    expect(
+      within(role)
+        .getAllByRole('option')
+        .map((option) => [option.textContent, (option as HTMLOptionElement).disabled]),
+    ).toEqual([
+      ['Membro', false],
+      ['Administrador', false],
+      ['Visualizador', true],
+    ]);
   });
 
   it('renames the workspace when allowed and reports failures', async () => {
@@ -288,7 +306,7 @@ describe('Permission groups in settings', () => {
     );
   });
 
-  it('only manages groups when roles cannot be changed, and hides groups that failed to load', async () => {
+  it('offers no member editor without managing roles, and hides groups that failed to load', async () => {
     const groupsOnly: UserWorkspaceMembership = {
       workspace,
       member: member('1', 'MEMBER'),
@@ -297,20 +315,12 @@ describe('Permission groups in settings', () => {
         workspace: { ...FULL_ACCESS.workspace, manageRoles: false },
       },
     };
-    const { client, view } = setup(groupsOnly, [], [member('2', 'VIEWER')]);
+    const { client, view } = setup(groupsOnly, [], [member('2', 'VIEWER', ['g-editors'])]);
     vi.mocked(client.getPermissionGroups).mockRejectedValue(new Error('down'));
-    vi.spyOn(client, 'updateWorkspaceMember').mockResolvedValue(member('2', 'VIEWER'));
     fireEvent.click(view.getByTestId('settings-section-members'));
     const row = await view.findByTestId('member-row-m-2');
-    fireEvent.click(within(row).getByRole('button', { name: 'Permissões User 2' }));
-    const editor = view.getByTestId('member-access-m-2');
-    expect(within(editor).queryByText('Permissões do workspace')).not.toBeInTheDocument();
-    expect(
-      within(editor).getByText('Nenhum grupo de permissão neste workspace.'),
-    ).toBeInTheDocument();
-    fireEvent.click(within(editor).getByRole('button', { name: 'Salvar' }));
-    await waitFor(() =>
-      expect(client.updateWorkspaceMember).toHaveBeenCalledWith('ws', 'm-2', { groupIds: [] }),
-    );
+    expect(within(row).queryByRole('button', { name: 'Permissões User 2' })).toBeNull();
+    // Without the group list, the member's group is shown by its id.
+    expect(within(row).getByText('g-editors')).toBeInTheDocument();
   });
 });
