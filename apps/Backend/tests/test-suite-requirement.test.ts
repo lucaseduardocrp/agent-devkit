@@ -21,7 +21,7 @@ interface Call {
   readonly body: unknown;
 }
 
-/** A fake Azure DevOps: work item 50 is a PBI, 60 a Task, and test cases get ids from 100. */
+/** A fake Azure DevOps: 50 is a PBI, 51 a Bug, 60 a Task, and test cases get ids from 100. */
 function azure(overrides: { failSuiteCreation?: number; caseRelations?: unknown[] } = {}) {
   const calls: Call[] = [];
   let nextCase = 100;
@@ -37,6 +37,8 @@ function azure(overrides: { failSuiteCreation?: number; caseRelations?: unknown[
       return reply({
         fields: { 'System.WorkItemType': 'Product Backlog Item', 'System.Title': 'Cores' },
       });
+    if (url.includes('/wit/workitems/51?'))
+      return reply({ fields: { 'System.WorkItemType': 'Bug', 'System.Title': 'Erro no login' } });
     if (url.includes('/wit/workitems/60?'))
       return reply({ fields: { 'System.WorkItemType': 'Task', 'System.Title': 'Ajustar API' } });
     if (url.includes('/wit/workitems/404?')) return reply({}, 404);
@@ -79,7 +81,7 @@ const relationsOf = (call: Call | undefined) =>
 describe('Azure requirement-based suites', () => {
   it('creates a requirement suite for the work item with every case of the tree', async () => {
     const { calls, publisher } = azure();
-    const result = await publisher.publish(tree, { suiteKind: 'requirement', workItemId: '50' });
+    const result = await publisher.publish(tree, { suiteKind: 'requirement', workItemIds: ['50'] });
     const suiteCreation = calls.find(
       (call) => call.method === 'POST' && call.url.includes('/testplan/Plans/10/suites?'),
     );
@@ -98,14 +100,55 @@ describe('Azure requirement-based suites', () => {
       suitesCount: 1,
       casesCount: 2,
       suiteKind: 'requirement',
-      workItem: { id: '50', type: 'Product Backlog Item', title: 'Cores' },
+      workItems: [{ id: '50', type: 'Product Backlog Item', title: 'Cores' }],
     });
+  });
+
+  it('creates one suite per requirement without duplicating the cases', async () => {
+    const { calls, publisher } = azure();
+    const result = await publisher.publish(tree, {
+      suiteKind: 'requirement',
+      workItemIds: ['50', '51', '50'],
+    });
+    const suites = calls.filter(
+      (call) => call.method === 'POST' && call.url.includes('/testplan/Plans/10/suites?'),
+    );
+    expect(suites.map((call) => (call.body as { requirementId: number }).requirementId)).toEqual([
+      50, 51,
+    ]);
+    // The two cases are created once and the same ids go into both suites.
+    expect(calls.filter((call) => call.url.includes('/wit/workitems/$Test%20Case'))).toHaveLength(
+      2,
+    );
+    const added = (suiteId: number) =>
+      calls
+        .filter((call) => call.url.includes(`/suites/${suiteId}/testcases/`))
+        .map((call) => /testcases\/(\d+)/.exec(call.url)?.[1]);
+    expect(added(20)).toEqual(['100', '101']);
+    expect(added(21)).toEqual(['100', '101']);
+    expect(result).toMatchObject({
+      remoteSuiteId: '20',
+      suitesCount: 2,
+      casesCount: 2,
+      workItems: [
+        { id: '50', type: 'Product Backlog Item' },
+        { id: '51', type: 'Bug' },
+      ],
+    });
+  });
+
+  it('refuses a task among the requirements before creating anything', async () => {
+    const { calls, publisher } = azure();
+    await expect(
+      publisher.publish(tree, { suiteKind: 'requirement', workItemIds: ['50', '60'] }),
+    ).rejects.toMatchObject({ code: 'REQUIREMENT_SUITE_REJECTED' });
+    expect(calls.some((call) => call.method === 'POST')).toBe(false);
   });
 
   it('refuses a task as requirement before creating anything', async () => {
     const { calls, publisher } = azure();
     await expect(
-      publisher.publish(tree, { suiteKind: 'requirement', workItemId: '60' }),
+      publisher.publish(tree, { suiteKind: 'requirement', workItemIds: ['60'] }),
     ).rejects.toMatchObject({
       code: 'REQUIREMENT_SUITE_REJECTED',
       messageParams: { id: 60, type: 'Task' },
@@ -116,11 +159,11 @@ describe('Azure requirement-based suites', () => {
   it('explains when Azure rejects the requirement (bugs off the backlog)', async () => {
     const { publisher } = azure({ failSuiteCreation: 400 });
     await expect(
-      publisher.publish(tree, { suiteKind: 'requirement', workItemId: '50' }),
+      publisher.publish(tree, { suiteKind: 'requirement', workItemIds: ['50'] }),
     ).rejects.toMatchObject({ code: 'REQUIREMENT_SUITE_REJECTED' });
     const other = azure({ failSuiteCreation: 500 });
     await expect(
-      other.publisher.publish(tree, { suiteKind: 'requirement', workItemId: '50' }),
+      other.publisher.publish(tree, { suiteKind: 'requirement', workItemIds: ['50'] }),
     ).rejects.toMatchObject({ code: 'TEST_SUITE_PUBLISH_FAILED' });
   });
 
@@ -132,12 +175,12 @@ describe('Azure requirement-based suites', () => {
     await expect(
       publisher.publish(tree, {
         suiteKind: 'requirement',
-        workItemId: '50',
+        workItemIds: ['50'],
         remotePlanId: '10',
         remoteSuiteId: '30',
       }),
     ).rejects.toMatchObject({ code: 'REQUIREMENT_SUITE_NEEDS_NEW_SUITE' });
-    await expect(publisher.publish(tree, { workItemId: '404' })).rejects.toMatchObject({
+    await expect(publisher.publish(tree, { workItemIds: ['404'] })).rejects.toMatchObject({
       code: 'WORK_ITEM_NOT_FOUND',
       messageParams: { id: 404 },
     });
@@ -147,7 +190,7 @@ describe('Azure requirement-based suites', () => {
 describe('Azure static suites linked to a work item', () => {
   it('links every new case to the item with a Tests link, whatever its type', async () => {
     const { calls, publisher } = azure();
-    const result = await publisher.publish(tree, { suiteKind: 'static', workItemId: '60' });
+    const result = await publisher.publish(tree, { suiteKind: 'static', workItemIds: ['60'] });
     const cases = calls.filter((call) => call.url.includes('/wit/workitems/$Test%20Case'));
     expect(cases).toHaveLength(2);
     for (const call of cases)
@@ -164,8 +207,18 @@ describe('Azure static suites linked to a work item', () => {
     expect(result).toMatchObject({
       suitesCount: 2,
       suiteKind: 'static',
-      workItem: { id: '60', type: 'Task' },
+      workItems: [{ id: '60', type: 'Task' }],
     });
+  });
+
+  it('links each case to every work item', async () => {
+    const { calls, publisher } = azure();
+    await publisher.publish(tree, { workItemIds: ['50', '60'] });
+    const cases = calls.filter((call) => call.url.includes('/wit/workitems/$Test%20Case'));
+    for (const call of cases)
+      expect(
+        relationsOf(call).map((change) => (change.value as { url: string }).url.split('/').pop()),
+      ).toEqual(['50', '60']);
   });
 
   it('links a republished case only when it is not linked yet', async () => {
@@ -175,7 +228,7 @@ describe('Azure static suites linked to a work item', () => {
       children: [],
     };
     const unlinked = azure();
-    await unlinked.publisher.publish(republished, { workItemId: '50' });
+    await unlinked.publisher.publish(republished, { workItemIds: ['50'] });
     const update = unlinked.calls.find((call) => call.method === 'PATCH');
     expect(relationsOf(update)).toHaveLength(1);
 
@@ -187,7 +240,7 @@ describe('Azure static suites linked to a work item', () => {
         },
       ],
     });
-    await linked.publisher.publish(republished, { workItemId: '50' });
+    await linked.publisher.publish(republished, { workItemIds: ['50'] });
     expect(relationsOf(linked.calls.find((call) => call.method === 'PATCH'))).toEqual([]);
   });
 
@@ -196,12 +249,12 @@ describe('Azure static suites linked to a work item', () => {
     const result = await publisher.publish(tree, {
       remotePlanId: '10',
       remoteSuiteId: '30',
-      workItemId: '50',
+      workItemIds: ['50'],
     });
     expect(calls.filter((call) => call.url.includes('/suites/30/testcases/'))).toHaveLength(2);
     const cases = calls.filter((call) => call.url.includes('/wit/workitems/$Test%20Case'));
     expect(cases.flatMap(relationsOf)).toEqual([]);
-    expect(result).toMatchObject({ workItem: { id: '50' } });
+    expect(result).toMatchObject({ workItems: [{ id: '50' }] });
     expect(result).not.toHaveProperty('suiteKind');
   });
 });

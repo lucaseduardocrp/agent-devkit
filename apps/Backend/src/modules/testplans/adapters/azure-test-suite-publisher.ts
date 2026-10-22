@@ -306,7 +306,8 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
     options: PublishTestSuiteOptions,
   ): Promise<PublishedTestSuite> {
     const requirementSuite = options.suiteKind === 'requirement';
-    if (requirementSuite && !options.workItemId)
+    const workItemIds = [...new Set((options.workItemIds ?? []).map((id) => this.parseId(id)))];
+    if (requirementSuite && !workItemIds.length)
       throw new ApplicationError(
         'WORK_ITEM_REQUIRED',
         'Informe o work item que a Requirement Based Suite vai cobrir.',
@@ -319,15 +320,21 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
         400,
       );
     // Checked before anything is created, so a wrong item leaves no empty plan or suite behind.
-    const workItemId = options.workItemId ? this.parseId(options.workItemId) : null;
-    const workItem = workItemId ? { id: workItemId, ...(await this.workItem(workItemId)) } : null;
-    if (workItem && requirementSuite && !(await this.requirementTypes()).has(workItem.type))
+    const workItems: { id: number; type: string; title: string }[] = [];
+    for (const id of workItemIds) workItems.push({ id, ...(await this.workItem(id)) });
+    const notRequirement =
+      requirementSuite && workItems.length
+        ? await this.requirementTypes().then((types) =>
+            workItems.find((item) => !types.has(item.type)),
+          )
+        : undefined;
+    if (notRequirement)
       throw new ApplicationError(
         'REQUIREMENT_SUITE_REJECTED',
-        `O Azure DevOps só cria Requirement Based Suites para itens de requisito (como PBI, User Story ou Bug). O item #${workItem.id} é um ${workItem.type}: use uma Static Suite, que também vincula os test cases a ele.`,
+        `O Azure DevOps só cria Requirement Based Suites para itens de requisito (como PBI, User Story ou Bug). O item #${notRequirement.id} é um ${notRequirement.type}: use uma Static Suite, que também vincula os test cases a ele.`,
         400,
         [],
-        { id: workItem.id, type: workItem.type },
+        { id: notRequirement.id, type: notRequirement.type },
       );
     if (
       options.fieldTemplate &&
@@ -412,13 +419,10 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
     let casesCount = 0;
     const caseLinks: Record<string, string> = {};
     const caseLocations: Record<string, { planId: string; suiteId: string }> = {};
-    const testsLink = workItem && {
-      rel: TESTS_RELATION,
-      url: `${this.baseUrl}/_apis/wit/workItems/${workItem.id}`,
-    };
-    /** Links the case to the work item ("Tests"), unless an earlier publish already did. */
+    /** Links the case to each work item ("Tests"), skipping links an earlier publish added. */
     const linkChanges = async (existingId: string | null) => {
-      if (!testsLink) return [];
+      if (!workItems.length) return [];
+      let relations: { rel?: string; url?: string }[] = [];
       if (existingId) {
         const current = await this.requestPage<{ relations?: { rel?: string; url?: string }[] }>(
           `wit/workitems/${existingId}`,
@@ -427,15 +431,25 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
           false,
           { $expand: 'relations' },
         );
-        const linked = (current.data.relations ?? []).some(
-          (relation) =>
-            relation.rel === TESTS_RELATION &&
-            relation.url?.toLowerCase().endsWith(`/workitems/${workItem.id}`),
-        );
-        if (linked) return [];
+        relations = current.data.relations ?? [];
       }
-      return [{ op: 'add', path: '/relations/-', value: testsLink }];
+      return workItems
+        .filter(
+          (item) =>
+            !relations.some(
+              (relation) =>
+                relation.rel === TESTS_RELATION &&
+                relation.url?.toLowerCase().endsWith(`/workitems/${item.id}`),
+            ),
+        )
+        .map((item) => ({
+          op: 'add',
+          path: '/relations/-',
+          value: { rel: TESTS_RELATION, url: `${this.baseUrl}/_apis/wit/workItems/${item.id}` },
+        }));
     };
+    /** Remote ids of the cases published in this run, in tree order. */
+    const publishedCaseIds: number[] = [];
     const publishCases = async (
       node: PublishableTestSuite,
       suiteId: number,
@@ -467,6 +481,7 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
           ),
           existingId ? 'update-case' : 'create-case',
         );
+        publishedCaseIds.push(caseId);
         const originalLocation = (
           testCase.metadata?.['remoteCaseLocations'] as
             Record<string, { planId?: string; suiteId?: string }> | undefined
@@ -488,8 +503,14 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
         casesCount++;
       }
     };
-    const linked = workItem
-      ? { workItem: { id: String(workItem.id), type: workItem.type, title: workItem.title } }
+    const linked = workItems.length
+      ? {
+          workItems: workItems.map((item) => ({
+            id: String(item.id),
+            type: item.type,
+            title: item.title,
+          })),
+        }
       : {};
     /** Every case of the tree, into one suite (which cannot hold child suites). */
     const publishAllCases = async (
@@ -514,30 +535,43 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
         ...linked,
       };
     }
-    if (requirementSuite && workItem) {
-      // Azure names the suite after its requirement ("<id> : <title>").
-      let created: AzureReference;
-      try {
-        created = await this.request(`testplan/Plans/${remotePlanId}/suites`, 'POST', {
-          suiteType: 'requirementTestSuite',
-          requirementId: workItem.id,
-          parentSuite: { id: parentId },
-        });
-      } catch (error) {
-        // Bugs only count as requirements when the team tracks them on the backlog.
-        if (error instanceof ApplicationError && error.details?.[0]?.['status'] === 400)
-          throw new ApplicationError(
-            'REQUIREMENT_SUITE_REJECTED',
-            `O Azure DevOps não aceitou o ${workItem.type} #${workItem.id} como requisito.`,
-            400,
-            [],
-            { id: workItem.id, type: workItem.type },
-          );
-        throw error;
+    if (requirementSuite) {
+      // One suite per requirement, as Azure itself does when several are chosen. Each suite
+      // holds every case of the tree: they are created in the first one and added to the rest.
+      const requirementSuiteIds: number[] = [];
+      for (const workItem of workItems) {
+        // Azure names the suite after its requirement ("<id> : <title>").
+        let created: AzureReference;
+        try {
+          created = await this.request(`testplan/Plans/${remotePlanId}/suites`, 'POST', {
+            suiteType: 'requirementTestSuite',
+            requirementId: workItem.id,
+            parentSuite: { id: parentId },
+          });
+        } catch (error) {
+          // Bugs only count as requirements when the team tracks them on the backlog.
+          if (error instanceof ApplicationError && error.details?.[0]?.['status'] === 400)
+            throw new ApplicationError(
+              'REQUIREMENT_SUITE_REJECTED',
+              `O Azure DevOps não aceitou o ${workItem.type} #${workItem.id} como requisito.`,
+              400,
+              [],
+              { id: workItem.id, type: workItem.type },
+            );
+          throw error;
+        }
+        const requirementSuiteId = this.requireId(created, 'create-suite');
+        suitesCount++;
+        if (requirementSuiteIds.length)
+          for (const caseId of publishedCaseIds)
+            await this.request(
+              `test/Plans/${remotePlanId}/suites/${requirementSuiteId}/testcases/${caseId}`,
+              'POST',
+            );
+        else await publishAllCases(suite, requirementSuiteId, true);
+        requirementSuiteIds.push(requirementSuiteId);
       }
-      const requirementSuiteId = this.requireId(created, 'create-suite');
-      suitesCount++;
-      await publishAllCases(suite, requirementSuiteId, true);
+      const requirementSuiteId = requirementSuiteIds[0]!;
       return {
         provider: 'azure_devops',
         remotePlanId: String(remotePlanId),

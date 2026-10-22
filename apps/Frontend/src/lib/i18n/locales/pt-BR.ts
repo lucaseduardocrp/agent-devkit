@@ -94,6 +94,8 @@ export const ptBR: I18nDictionary = {
     code: 'Código',
     scenarioFlow: 'Fluxo do Cenário:',
     resizeSidebar: 'Redimensionar barra lateral',
+    moreInfo: 'Mais informações',
+    removeItem: 'Remover {name}',
   },
   nav: {
     dashboard: 'Dashboard',
@@ -1048,14 +1050,20 @@ export const ptBR: I18nDictionary = {
     publishStaticSuite: 'Static Suite',
     publishRequirementSuite: 'Requirement Based Suite',
     publishStaticSuiteHint:
-      'Mantém a hierarquia de suites. Com um work item informado, cada test case recebe um vínculo "Tests" com ele (PBI, Bug, Task...).',
+      'Mantém a hierarquia de suites. Com work items selecionados, cada test case recebe um vínculo "Tests" com cada um deles (PBI, Bug, Task...).',
     publishRequirementSuiteHint:
-      'O Azure nomeia a suite pelo work item (ID : título) e vincula os test cases a ele. Todos os casos desta suite e das filhas entram nela. Aceita itens de requisito, como PBI, User Story ou Bug do backlog.',
-    publishWorkItem: 'Work item vinculado',
-    publishWorkItemOptional: 'Work item vinculado (opcional)',
-    publishWorkItemPlaceholder: 'ID do PBI, Bug, Task...',
-    publishWorkItemInvalid: 'Informe apenas o número do work item.',
+      'O Azure cria uma suite por work item, com o nome dele (ID : título), e vincula os test cases a ele. Todos os casos desta suite e das filhas entram em cada suite. Aceita itens de requisito, como PBI, User Story ou Bug do backlog.',
+    publishWorkItem: 'Work items vinculados',
+    publishWorkItemOptional: 'Work items vinculados (opcional)',
+    publishWorkItemPlaceholder: 'Busque por ID ou título',
+    publishWorkItemHint:
+      'Itens do board da tela de PBIs vinculados ao {provider}. Faça o pull do board lá para ver itens novos.',
+    publishWorkItemsEmpty:
+      'Ainda não há itens do {provider} em PBIs. Faça o pull do board na tela de PBIs.',
+    publishWorkItemsNoMatch: 'Nenhum item corresponde à busca.',
+    publishWorkItemsLoadFailed: 'Não foi possível carregar os itens do board.',
     suitePushedLinked: 'Suite de testes publicada e vinculada ao {type} #{id}.',
+    suitePushedLinkedMany: 'Suite de testes publicada e vinculada a {count} work items.',
     publishLoadFailed: 'Não foi possível carregar os destinos.',
     publishRetry: 'Tentar novamente',
     publishIdentifier: '(ID: {id})',

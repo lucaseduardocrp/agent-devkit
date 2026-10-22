@@ -20,8 +20,12 @@ export interface PublishedTestSuite {
   readonly casesCount: number;
   readonly caseLinks?: Readonly<Record<string, string>>;
   readonly caseLocations?: Readonly<Record<string, { planId: string; suiteId: string }>>;
-  /** The work item the cases were linked to, when one was given. */
-  readonly workItem?: { readonly id: string; readonly type: string; readonly title: string };
+  /** The work items the cases were linked to, when any were given. */
+  readonly workItems?: readonly {
+    readonly id: string;
+    readonly type: string;
+    readonly title: string;
+  }[];
   /** Kind of the suite created; absent when the cases went into an existing suite. */
   readonly suiteKind?: RemoteSuiteKind;
 }
@@ -56,10 +60,10 @@ export interface PublishTestSuiteOptions {
   /** Kind of the suite created for the published tree; static when absent. */
   readonly suiteKind?: RemoteSuiteKind;
   /**
-   * Remote work item (PBI, bug, task...) the published cases test: the requirement of a
-   * requirement suite, or the item each case links to otherwise.
+   * Remote work items (PBI, bug, task...) the published cases test: the requirements of the
+   * requirement suites (one suite each), or the items each case links to otherwise.
    */
-  readonly workItemId?: string;
+  readonly workItemIds?: readonly string[];
 }
 
 /** Destination-neutral port. A provider owns remote plan, suite and case creation. */

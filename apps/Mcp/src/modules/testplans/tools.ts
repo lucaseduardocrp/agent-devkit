@@ -349,7 +349,7 @@ export const testPlansModule: McpModule = {
       name: 'testplans_push_suite',
       title: 'Push test suite',
       description:
-        'Publishes a saved suite and its test cases to the chosen provider. Provide remotePlanId and remoteSuiteId to add all test cases directly to an existing suite; use remoteParentSuiteId to create a child suite under a static suite; omit remote IDs to create a new Test Plan. On Azure DevOps, suiteKind "requirement" creates a Requirement Based Suite for workItemId (a PBI, User Story or backlog Bug) holding every case of the tree; with suiteKind "static" (default), workItemId of any type (task, bug, PBI...) links each published case to it with a Tests link.',
+        'Publishes a saved suite and its test cases to the chosen provider. Provide remotePlanId and remoteSuiteId to add all test cases directly to an existing suite; use remoteParentSuiteId to create a child suite under a static suite; omit remote IDs to create a new Test Plan. On Azure DevOps, suiteKind "requirement" creates one Requirement Based Suite per item of workItemIds (PBI, User Story or backlog Bug), each holding every case of the tree; with suiteKind "static" (default), workItemIds of any type (task, bug, PBI...) link each published case to every item with a Tests link. Get the IDs from pbi_list (links with the same providerId).',
       toolset: 'testplans',
       access: 'write',
       routes: ['POST /TestPlan/suites/:id/push'],
@@ -379,13 +379,20 @@ export const testPlansModule: McpModule = {
           .enum(['static', 'requirement'])
           .optional()
           .describe(
-            'Kind of the suite created (Azure DevOps). requirement needs workItemId and a new plan or remoteParentSuiteId.',
+            'Kind of the suite created (Azure DevOps). requirement needs workItemIds and a new plan or remoteParentSuiteId.',
+          ),
+        workItemIds: z
+          .array(z.string().regex(/^[1-9]\d*$/))
+          .max(50)
+          .optional()
+          .describe(
+            'Azure DevOps work item IDs the published test cases test (PBI, bug, task...).',
           ),
         workItemId: z
           .string()
           .regex(/^[1-9]\d*$/)
           .optional()
-          .describe('Azure DevOps work item ID the published test cases test (PBI, bug, task...).'),
+          .describe('A single work item ID; same as workItemIds with one item.'),
       },
       run: async ({ suiteId: target, ...body }, { api }) =>
         json(

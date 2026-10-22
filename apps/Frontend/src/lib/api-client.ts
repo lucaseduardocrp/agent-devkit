@@ -278,8 +278,12 @@ export interface PublishedTestSuiteDto {
   readonly remoteUrl: string;
   readonly suitesCount: number;
   readonly casesCount: number;
-  /** The work item the cases were linked to, when one was given. */
-  readonly workItem?: { readonly id: string; readonly type: string; readonly title: string };
+  /** The work items the cases were linked to, when any were given. */
+  readonly workItems?: readonly {
+    readonly id: string;
+    readonly type: string;
+    readonly title: string;
+  }[];
   /** Kind of the suite created; absent when the cases went into an existing suite. */
   readonly suiteKind?: RemoteSuiteKind;
 }
@@ -311,10 +315,10 @@ export interface PublishTestSuiteInput {
   readonly remoteParentSuiteId?: string;
   readonly remoteSuiteId?: string;
   readonly remoteSuiteName?: string;
-  /** Kind of the suite created (Azure DevOps); a requirement suite needs workItemId. */
+  /** Kind of the suite created (Azure DevOps); requirement suites need workItemIds. */
   readonly suiteKind?: RemoteSuiteKind;
-  /** Remote work item the published cases test (PBI, bug, task...). */
-  readonly workItemId?: string;
+  /** Remote work items the published cases test (PBI, bug, task...). */
+  readonly workItemIds?: readonly string[];
   readonly templateId?: string;
   /** Values filled in for template fields, keyed by destination field. */
   readonly fieldValues?: Readonly<Record<string, FieldValue>>;

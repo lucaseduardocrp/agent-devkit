@@ -109,10 +109,12 @@ export function createCompatibilityRouter(
       remoteParentSuiteId: remoteId.optional(),
       remoteSuiteId: remoteId.optional(),
       remoteSuiteName: z.string().trim().min(1).max(255).optional(),
-      // Kind of the suite created; a requirement suite belongs to workItemId.
+      // Kind of the suite created; a requirement suite belongs to each work item.
       suiteKind: z.enum(['static', 'requirement']).optional(),
-      // Remote work item (PBI, bug, task...) the published cases are linked to.
+      // Remote work items (PBI, bug, task...) the published cases are linked to. `workItemId`
+      // is the single-item form clients used before `workItemIds`.
       workItemId: remoteId.optional(),
+      workItemIds: z.array(remoteId).max(50).optional(),
       templateId: z.string().uuid().optional(),
       fieldValues,
     })
@@ -131,9 +133,13 @@ export function createCompatibilityRouter(
     .refine((body) => !body.remoteSuiteName || Boolean(body.remoteParentSuiteId), {
       path: ['remoteParentSuiteId'],
     })
-    .refine((body) => body.suiteKind !== 'requirement' || Boolean(body.workItemId), {
-      path: ['workItemId'],
-    })
+    .refine(
+      (body) =>
+        body.suiteKind !== 'requirement' ||
+        Boolean(body.workItemId) ||
+        Boolean(body.workItemIds?.length),
+      { path: ['workItemIds'] },
+    )
     .refine((body) => body.suiteKind !== 'requirement' || !body.remoteSuiteId, {
       path: ['suiteKind'],
     });
@@ -363,7 +369,15 @@ export function createCompatibilityRouter(
           remoteSuiteId: body.remoteSuiteId,
           remoteSuiteName: body.remoteSuiteName,
           suiteKind: body.suiteKind,
-          workItemId: body.workItemId,
+          workItemIds:
+            body.workItemId || body.workItemIds?.length
+              ? [
+                  ...new Set([
+                    ...(body.workItemId ? [body.workItemId] : []),
+                    ...(body.workItemIds ?? []),
+                  ]),
+                ]
+              : undefined,
           ...(fieldTemplate
             ? { fieldTemplate: withFieldValues(fieldTemplate, body.fieldValues) }
             : {}),

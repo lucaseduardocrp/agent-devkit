@@ -1643,12 +1643,14 @@ export function TestPlansView({
           onPublished={(result) => {
             setSuiteToPublish(null);
             showTemporarySuccess(
-              result.workItem
+              result.workItems?.length === 1
                 ? t('testplans.suitePushedLinked', {
-                    type: result.workItem.type,
-                    id: result.workItem.id,
+                    type: result.workItems[0]!.type,
+                    id: result.workItems[0]!.id,
                   })
-                : t('testplans.suitePushed'),
+                : result.workItems?.length
+                  ? t('testplans.suitePushedLinkedMany', { count: result.workItems.length })
+                  : t('testplans.suitePushed'),
               result.remoteUrl,
             );
           }}

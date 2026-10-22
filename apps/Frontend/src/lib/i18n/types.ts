@@ -206,6 +206,8 @@ export interface I18nDictionary {
     readonly code: string;
     readonly scenarioFlow: string;
     readonly resizeSidebar: string;
+    readonly moreInfo: string;
+    readonly removeItem: string;
   };
   readonly nav: {
     readonly dashboard: string;
@@ -1090,8 +1092,12 @@ export interface I18nDictionary {
     readonly publishWorkItem: string;
     readonly publishWorkItemOptional: string;
     readonly publishWorkItemPlaceholder: string;
-    readonly publishWorkItemInvalid: string;
+    readonly publishWorkItemHint: string;
+    readonly publishWorkItemsEmpty: string;
+    readonly publishWorkItemsNoMatch: string;
+    readonly publishWorkItemsLoadFailed: string;
     readonly suitePushedLinked: string;
+    readonly suitePushedLinkedMany: string;
     readonly publishLoadFailed: string;
     readonly publishRetry: string;
     readonly publishIdentifier: string;

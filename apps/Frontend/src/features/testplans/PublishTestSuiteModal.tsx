@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../../components/ui/button.js';
+import { FieldLabel } from '../../components/ui/help-tooltip.js';
 import { Input } from '../../components/ui/input.js';
 import { Modal } from '../../components/ui/modal.js';
+import { MultiSelect, type MultiSelectOption } from '../../components/ui/multi-select.js';
 import { Select } from '../../components/ui/select.js';
 import { SkeletonText } from '../../components/ui/skeleton.js';
 import type {
@@ -20,6 +22,7 @@ import {
   type MappingSourceOption,
 } from '../field-mapping/FieldMappingEditor.js';
 import type { FieldValue } from '../field-mapping/types.js';
+import type { PbiItem } from '../pbi/pbi-types.js';
 
 interface PublishTestSuiteModalProps {
   readonly apiClient: ApiClient;
@@ -27,6 +30,22 @@ interface PublishTestSuiteModalProps {
   readonly onClose: () => void;
   readonly onPublish: (input: PublishTestSuiteInput) => Promise<PublishedTestSuiteDto>;
   readonly onPublished: (result: PublishedTestSuiteDto) => void;
+}
+
+/** Board items linked to the provider, as options keyed by the remote work item id. */
+function workItemOptions(items: readonly PbiItem[], providerId: string): MultiSelectOption[] {
+  const options = new Map<string, MultiSelectOption>();
+  for (const item of items)
+    for (const link of item.links)
+      if (link.providerId === providerId && !options.has(link.externalId)) {
+        const type = typeof item.sourceData['type'] === 'string' ? item.sourceData['type'] : '';
+        options.set(link.externalId, {
+          value: link.externalId,
+          label: `#${link.externalId} · ${item.title}`,
+          description: [type, item.status].filter(Boolean).join(' · '),
+        });
+      }
+  return [...options.values()];
 }
 
 function suiteLabel(suite: RemoteTestSuiteDto, all: readonly RemoteTestSuiteDto[]): string {
@@ -62,7 +81,9 @@ export function PublishTestSuiteModal({
   const [destinationMode, setDestinationMode] = useState<'direct' | 'child'>('direct');
   const [newSuiteName, setNewSuiteName] = useState(suite.name);
   const [suiteKind, setSuiteKind] = useState<RemoteSuiteKind>('static');
-  const [workItemId, setWorkItemId] = useState('');
+  const [workItemIds, setWorkItemIds] = useState<string[]>([]);
+  const [boardItems, setBoardItems] = useState<readonly PbiItem[] | null>(null);
+  const [boardError, setBoardError] = useState<string | null>(null);
   const [loadingProviders, setLoadingProviders] = useState(true);
   const [loadingPlans, setLoadingPlans] = useState(false);
   const [loadingSuites, setLoadingSuites] = useState(false);
@@ -214,11 +235,37 @@ export function PublishTestSuiteModal({
   );
   // Suite kinds and work item links are Azure DevOps concepts.
   const azure = providerId === 'azure_devops';
+  const providerName = providers.find((provider) => provider.id === providerId)?.name ?? '';
   // The kind only matters when publishing creates the suite (not when adding to one).
   const createsSuite = mode === 'new' || (Boolean(parentSuiteId) && destinationMode === 'child');
   const requirementSuite = azure && createsSuite && suiteKind === 'requirement';
-  const workItem = workItemId.trim();
-  const workItemValid = !workItem || /^[1-9]\d*$/.test(workItem);
+  const workItemChoices = useMemo(
+    () => workItemOptions(boardItems ?? [], providerId),
+    [boardItems, providerId],
+  );
+
+  // The work items come from the board the team already pulled into ADK.
+  const needsBoardItems = configured && azure && boardItems === null;
+  useEffect(() => {
+    if (!needsBoardItems) return;
+    let active = true;
+    setBoardError(null);
+    void apiClient.getPbiItems().then(
+      (items) => {
+        if (active) setBoardItems(items);
+      },
+      (error: unknown) => {
+        if (!active) return;
+        setBoardItems([]);
+        setBoardError(
+          error instanceof Error ? error.message : t('testplans.publishWorkItemsLoadFailed'),
+        );
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [apiClient, needsBoardItems, retry, t]);
   const ready =
     configured &&
     !loadingProviders &&
@@ -227,8 +274,7 @@ export function PublishTestSuiteModal({
     !loadError &&
     !previewError &&
     !previewLoading &&
-    workItemValid &&
-    (!requirementSuite || Boolean(workItem)) &&
+    (!requirementSuite || workItemIds.length > 0) &&
     (mode === 'new' ||
       Boolean(
         planId &&
@@ -249,7 +295,7 @@ export function PublishTestSuiteModal({
         ...(templateId ? { templateId } : {}),
         ...(templateId && Object.keys(fieldValues).length ? { fieldValues } : {}),
         ...(azure && createsSuite ? { suiteKind } : {}),
-        ...(azure && workItem ? { workItemId: workItem } : {}),
+        ...(azure && workItemIds.length ? { workItemIds } : {}),
         ...(mode === 'existing'
           ? destinationMode === 'direct'
             ? { remotePlanId: planId, remoteSuiteId: parentSuiteId }
@@ -307,6 +353,8 @@ export function PublishTestSuiteModal({
                 setPublishError(null);
                 setTemplateId('');
                 setFieldValues({});
+                // Work items belong to one provider's board.
+                setWorkItemIds([]);
               }}
             >
               <option value="">{t('testplans.publishSelectProvider')}</option>
@@ -423,9 +471,16 @@ export function PublishTestSuiteModal({
                 </div>
                 {parentSuiteId && (
                   <div className="space-y-1.5">
-                    <label htmlFor="publish-suite-placement" className="text-sm font-medium">
+                    <FieldLabel
+                      htmlFor="publish-suite-placement"
+                      hint={t(
+                        destinationMode === 'child'
+                          ? 'testplans.publishNewSuiteHint'
+                          : 'testplans.publishExistingSuiteHint',
+                      )}
+                    >
                       {t('testplans.publishPlacement')}
-                    </label>
+                    </FieldLabel>
                     <Select
                       id="publish-suite-placement"
                       value={destinationMode}
@@ -462,13 +517,6 @@ export function PublishTestSuiteModal({
                     />
                   </div>
                 )}
-                <p className="text-xs text-muted">
-                  {t(
-                    destinationMode === 'child'
-                      ? 'testplans.publishNewSuiteHint'
-                      : 'testplans.publishExistingSuiteHint',
-                  )}
-                </p>
               </div>
             )}
           </>
@@ -478,9 +526,16 @@ export function PublishTestSuiteModal({
           <div className="space-y-4">
             {createsSuite && (
               <div className="space-y-1.5">
-                <label htmlFor="publish-suite-kind" className="text-sm font-medium">
+                <FieldLabel
+                  htmlFor="publish-suite-kind"
+                  hint={t(
+                    requirementSuite
+                      ? 'testplans.publishRequirementSuiteHint'
+                      : 'testplans.publishStaticSuiteHint',
+                  )}
+                >
                   {t('testplans.publishSuiteKind')}
-                </label>
+                </FieldLabel>
                 <Select
                   id="publish-suite-kind"
                   value={suiteKind}
@@ -490,39 +545,53 @@ export function PublishTestSuiteModal({
                   <option value="static">{t('testplans.publishStaticSuite')}</option>
                   <option value="requirement">{t('testplans.publishRequirementSuite')}</option>
                 </Select>
-                <p className="text-xs text-muted">
-                  {t(
-                    requirementSuite
-                      ? 'testplans.publishRequirementSuiteHint'
-                      : 'testplans.publishStaticSuiteHint',
-                  )}
-                </p>
               </div>
             )}
             <div className="space-y-1.5">
-              <label htmlFor="publish-suite-work-item" className="text-sm font-medium">
+              <FieldLabel
+                htmlFor="publish-suite-work-item"
+                hint={t('testplans.publishWorkItemHint', { provider: providerName })}
+              >
                 {t(
                   requirementSuite
                     ? 'testplans.publishWorkItem'
                     : 'testplans.publishWorkItemOptional',
                 )}
-              </label>
-              <Input
-                id="publish-suite-work-item"
-                value={workItemId}
-                inputMode="numeric"
-                maxLength={12}
-                required={requirementSuite}
-                placeholder={t('testplans.publishWorkItemPlaceholder')}
-                disabled={publishing}
-                aria-invalid={!workItemValid}
-                aria-describedby={workItemValid ? undefined : 'publish-suite-work-item-error'}
-                onChange={(event) => setWorkItemId(event.target.value)}
-              />
-              {!workItemValid && (
-                <p id="publish-suite-work-item-error" className="text-xs text-red-400">
-                  {t('testplans.publishWorkItemInvalid')}
+              </FieldLabel>
+              {boardItems === null ? (
+                <SkeletonText lines={1} />
+              ) : (
+                <MultiSelect
+                  id="publish-suite-work-item"
+                  label={t(
+                    requirementSuite
+                      ? 'testplans.publishWorkItem'
+                      : 'testplans.publishWorkItemOptional',
+                  )}
+                  options={workItemChoices}
+                  values={workItemIds}
+                  onChange={setWorkItemIds}
+                  placeholder={t('testplans.publishWorkItemPlaceholder')}
+                  emptyMessage={t(
+                    workItemChoices.length
+                      ? 'testplans.publishWorkItemsNoMatch'
+                      : 'testplans.publishWorkItemsEmpty',
+                    { provider: providerName },
+                  )}
+                  disabled={publishing || Boolean(boardError)}
+                />
+              )}
+              {boardError ? (
+                <p role="alert" className="text-xs text-red-400">
+                  {boardError}
                 </p>
+              ) : (
+                boardItems !== null &&
+                !workItemChoices.length && (
+                  <p className="text-xs text-muted">
+                    {t('testplans.publishWorkItemsEmpty', { provider: providerName })}
+                  </p>
+                )
               )}
             </div>
           </div>

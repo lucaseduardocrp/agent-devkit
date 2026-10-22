@@ -334,7 +334,7 @@ describe('POST /TestPlan/suites/:id/push suite kind', () => {
       suitesCount: 1,
       casesCount: 1,
       suiteKind: 'requirement' as const,
-      workItem: { id: '50', type: 'Product Backlog Item', title: 'Cores' },
+      workItems: [{ id: '50', type: 'Product Backlog Item', title: 'Cores' }],
     }));
     const app = build({
       suites,
@@ -348,22 +348,30 @@ describe('POST /TestPlan/suites/:id/push suite kind', () => {
 
     const ok = await push({ suiteKind: 'requirement', workItemId: '50' });
     expect(ok.status).toBe(200);
-    expect(ok.body.workItem).toEqual({ id: '50', type: 'Product Backlog Item', title: 'Cores' });
+    expect(ok.body.workItems).toEqual([{ id: '50', type: 'Product Backlog Item', title: 'Cores' }]);
     expect(publish).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ suiteKind: 'requirement', workItemId: '50' }),
+      expect.objectContaining({ suiteKind: 'requirement', workItemIds: ['50'] }),
+    );
+    // The single-item form and the list are merged without repeats.
+    await push({ workItemId: '50', workItemIds: ['50', '51'] });
+    expect(publish).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ workItemIds: ['50', '51'] }),
     );
     for (const body of [
       { suiteKind: 'requirement' },
       { suiteKind: 'requirement', workItemId: '50', remotePlanId: '1', remoteSuiteId: '2' },
       { suiteKind: 'dynamic', workItemId: '50' },
       { workItemId: 'abc' },
+      { workItemIds: ['abc'] },
+      { suiteKind: 'requirement', workItemIds: [] },
     ]) {
       const rejected = await push(body);
       expect(rejected.status).toBe(400);
       expect(rejected.body.code).toBe('VALIDATION_ERROR');
     }
-    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledTimes(2);
   });
 });
 

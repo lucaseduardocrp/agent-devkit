@@ -7,6 +7,7 @@ import type {
   FieldMappingTemplateInput,
 } from '../src/features/field-mapping/types.js';
 import type { ApiClient, TestSuiteDto } from '../src/lib/api-client.js';
+import type { PbiItem, PbiLink } from '../src/features/pbi/pbi-types.js';
 import { I18nProvider } from '../src/lib/i18n/index.js';
 
 const suite = { id: 'suite-1', name: 'Regression' } as TestSuiteDto;
@@ -43,6 +44,44 @@ const catalog: FieldDefinition[] = [
   { id: 'Custom.Kind', name: 'Tipo', type: 'single_select', options: [{ id: 'UI', name: 'UI' }] },
 ];
 
+/** The board: two Azure DevOps items, one from Trello and one only in ADK. */
+const boardItems: PbiItem[] = [
+  boardItem('p1', 'Cores', 'Product Backlog Item', [['azure_devops', '50059']]),
+  boardItem('p2', 'Ajustar API', 'Task', [['azure_devops', '60']]),
+  boardItem('p3', 'Cartão do Trello', '', [['trello', 'abc']]),
+  boardItem('p4', 'Só no ADK', '', []),
+];
+
+function boardItem(
+  id: string,
+  title: string,
+  type: string,
+  links: [PbiLink['providerId'], string][],
+): PbiItem {
+  return {
+    id,
+    workspaceId: 'ws',
+    parentId: null,
+    kind: 'pbi',
+    title,
+    description: '',
+    status: 'New',
+    position: 0,
+    sourceData: type ? { type } : {},
+    links: links.map(([providerId, externalId]) => ({
+      id: id + '-' + providerId,
+      providerId,
+      externalId,
+      externalUrl: null,
+      boardId: null,
+      syncedAt: '',
+    })),
+    createdAt: '',
+    updatedAt: '',
+    partial: true,
+  };
+}
+
 function client(templates: FieldMappingTemplate[] = [template]) {
   return {
     getTestSuiteFieldSources: vi.fn().mockResolvedValue([]),
@@ -54,6 +93,7 @@ function client(templates: FieldMappingTemplate[] = [template]) {
     getFieldMappingTemplates: vi.fn().mockResolvedValue(templates),
     getTestCaseFieldCatalog: vi.fn().mockResolvedValue(catalog),
     previewTestSuiteFields: vi.fn().mockResolvedValue({ count: 1, previews: [] }),
+    getPbiItems: vi.fn().mockResolvedValue(boardItems),
     saveFieldMappingTemplate: vi.fn(async (input: FieldMappingTemplateInput, id?: string) => ({
       ...template,
       ...input,
@@ -241,7 +281,40 @@ describe('PublishTestSuiteModal field values', () => {
 });
 
 describe('PublishTestSuiteModal suite kind', () => {
-  it('creates a Requirement Based Suite for a work item, which then names the suite', async () => {
+  const choose = async (dialog: HTMLElement, label: string, option: string) => {
+    fireEvent.focus(await within(dialog).findByRole('combobox', { name: label }));
+    fireEvent.click(within(dialog).getByRole('option', { name: new RegExp(option) }));
+  };
+
+  it('explains each field in a tooltip next to its label', async () => {
+    const dialog = open(client());
+    fireEvent.change(await within(dialog).findByLabelText('Provedor'), {
+      target: { value: 'azure_devops' },
+    });
+    const hint = within(dialog).getByText(/cada test case recebe um vínculo "Tests"/);
+    // The text is the icon's description, shown only on hover or focus.
+    expect(hint).toHaveAttribute('role', 'tooltip');
+    expect(hint.className).toContain('sr-only');
+    const icon = within(hint.parentElement!).getByRole('button', { name: 'Mais informações' });
+    expect(icon).toHaveAttribute('aria-describedby', hint.id);
+    fireEvent.mouseEnter(hint.parentElement!);
+    expect(hint.className).not.toContain('sr-only');
+    fireEvent.mouseLeave(hint.parentElement!);
+    fireEvent.focus(icon);
+    expect(hint.className).not.toContain('sr-only');
+    fireEvent.keyDown(icon, { key: 'Escape' });
+    expect(hint.className).toContain('sr-only');
+
+    fireEvent.change(within(dialog).getByLabelText('Tipo da suite'), {
+      target: { value: 'requirement' },
+    });
+    expect(within(dialog).getByText(/O Azure cria uma suite por work item/)).toHaveAttribute(
+      'role',
+      'tooltip',
+    );
+  });
+
+  it('creates Requirement Based Suites for the board items chosen', async () => {
     const api = client();
     api.getRemoteTestSuites.mockResolvedValue([
       { id: '11', name: 'Root', suiteType: 'staticTestSuite' },
@@ -252,21 +325,28 @@ describe('PublishTestSuiteModal suite kind', () => {
       target: { value: 'azure_devops' },
     });
     const publish = within(dialog).getByRole('button', { name: 'Publicar suite' });
-    // A new Test Plan creates a suite: the kind and the linked item can be chosen.
-    const kind = within(dialog).getByLabelText('Tipo da suite');
+    fireEvent.change(within(dialog).getByLabelText('Tipo da suite'), {
+      target: { value: 'requirement' },
+    });
+    expect(publish).toHaveProperty('disabled', true);
+
+    // Only the items of the chosen provider's board are offered.
+    fireEvent.focus(await within(dialog).findByRole('combobox', { name: 'Work items vinculados' }));
     expect(
-      within(dialog).getByText(/cada test case recebe um vínculo "Tests"/),
-    ).toBeInTheDocument();
-    fireEvent.change(kind, { target: { value: 'requirement' } });
-    expect(within(dialog).getByText(/O Azure nomeia a suite pelo work item/)).toBeInTheDocument();
-    const workItem = within(dialog).getByLabelText('Work item vinculado');
-    expect(workItem).toHaveProperty('required', true);
-    expect(publish).toHaveProperty('disabled', true);
-    fireEvent.change(workItem, { target: { value: 'PBI-50' } });
-    expect(within(dialog).getByText('Informe apenas o número do work item.')).toBeInTheDocument();
-    expect(publish).toHaveProperty('disabled', true);
-    fireEvent.change(workItem, { target: { value: '50059' } });
+      within(within(dialog).getByRole('listbox'))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['#50059 · CoresProduct Backlog Item · New', '#60 · Ajustar APITask · New']);
+    fireEvent.click(within(dialog).getByRole('option', { name: /#50059/ }));
+    fireEvent.click(within(dialog).getByRole('option', { name: /#60/ }));
+    expect(within(dialog).getByRole('option', { name: /#60/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(publish).toHaveProperty('disabled', false);
+    // A chosen item can be removed from its chip.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remover #60 · Ajustar API' }));
+    expect(within(dialog).queryByRole('button', { name: /Remover #60/ })).toBeNull();
 
     // Inside an existing static suite, the requirement suite takes the item's name.
     fireEvent.change(within(dialog).getByLabelText('Destino'), { target: { value: 'existing' } });
@@ -285,14 +365,15 @@ describe('PublishTestSuiteModal suite kind', () => {
       expect(onPublish).toHaveBeenCalledWith({
         providerId: 'azure_devops',
         suiteKind: 'requirement',
-        workItemId: '50059',
+        workItemIds: ['50059'],
         remotePlanId: '7',
         remoteParentSuiteId: '11',
       }),
     );
+    expect(api.getPbiItems).toHaveBeenCalledOnce();
   });
 
-  it('links cases added straight into a suite to an optional work item', async () => {
+  it('links cases added straight into a suite to optional work items', async () => {
     const api = client();
     api.getRemoteTestSuites.mockResolvedValue([
       { id: '11', name: 'Root', suiteType: 'staticTestSuite' },
@@ -311,17 +392,36 @@ describe('PublishTestSuiteModal suite kind', () => {
     });
     // Adding to an existing suite creates none: there is no kind to choose.
     expect(within(dialog).queryByLabelText('Tipo da suite')).toBeNull();
-    fireEvent.change(within(dialog).getByLabelText('Work item vinculado (opcional)'), {
-      target: { value: '60' },
+    // The search finds an item by its title, and Enter picks it.
+    const search = await within(dialog).findByRole('combobox', {
+      name: 'Work items vinculados (opcional)',
     });
+    fireEvent.focus(search);
+    fireEvent.change(search, { target: { value: 'api' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await choose(dialog, 'Work items vinculados (opcional)', '#50059');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Publicar suite' }));
     await waitFor(() =>
       expect(onPublish).toHaveBeenCalledWith({
         providerId: 'azure_devops',
-        workItemId: '60',
+        workItemIds: ['60', '50059'],
         remotePlanId: '7',
         remoteSuiteId: '11',
       }),
     );
+  });
+
+  it('tells when the board has no items of the provider', async () => {
+    const api = client();
+    api.getPbiItems.mockResolvedValue(boardItems.slice(2));
+    const dialog = open(api);
+    fireEvent.change(await within(dialog).findByLabelText('Provedor'), {
+      target: { value: 'azure_devops' },
+    });
+    expect(
+      await within(dialog).findByText(
+        'Ainda não há itens do Azure DevOps em PBIs. Faça o pull do board na tela de PBIs.',
+      ),
+    ).toBeInTheDocument();
   });
 });
