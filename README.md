@@ -103,6 +103,9 @@ tools) in [apps/Mcp/README.md](apps/Mcp/README.md).
 - **E2E Automation**: Playwright runs on ADK workers or on your own computer, with videos,
   screenshots and test-management reporting.
 - **Release notes**, **audit history**, **workspaces**, **permission groups** and **integrations**.
+- **ADK Hub** — community and official skills and plugins for your assistant, installed with
+  `devkit skills install <name>` and `devkit plugins install <name>`. The catalog lives in its own
+  repository, [agent-devkit-hub](https://github.com/lucaseduardocrp/agent-devkit-hub).
 
 ## Repository layout
 
@@ -164,7 +167,9 @@ server embedded, to npm.
 ## Contributing
 
 ADK is developed by its author only and does not accept pull requests. Bug reports are welcome
-as issues; see [CONTRIBUTING.md](CONTRIBUTING.md).
+as issues; see [CONTRIBUTING.md](CONTRIBUTING.md). Skills and plugins for the
+[ADK Hub](https://github.com/lucaseduardocrp/agent-devkit-hub) go to its own repository, which
+welcomes pull requests.
 
 ## License
 

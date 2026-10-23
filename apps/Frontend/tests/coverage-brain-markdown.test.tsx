@@ -63,6 +63,23 @@ describe('markdown parser edge cases', () => {
       { type: 'paragraph', text: 'After' },
     ]);
   });
+
+  it('joins indented continuation lines to the list item above', () => {
+    expect(
+      parseMarkdownBlocks('1. First\n2. Second wraps\n   onto a new line.\n3. Third\n   - nested'),
+    ).toEqual([
+      {
+        type: 'list',
+        ordered: true,
+        items: [
+          { text: 'First', indent: 0, checked: undefined },
+          { text: 'Second wraps onto a new line.', indent: 0, checked: undefined },
+          { text: 'Third', indent: 0, checked: undefined },
+        ],
+      },
+      { type: 'list', ordered: false, items: [{ text: 'nested', indent: 3, checked: undefined }] },
+    ]);
+  });
 });
 
 describe('RenderedCode language normalization', () => {

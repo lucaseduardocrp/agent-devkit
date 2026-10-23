@@ -1,0 +1,61 @@
+name: Hub skills
+
+# The built-in skills (apps/Mcp/skills) are also listed in the ADK Hub, which lives in its own
+# repository (lucaseduardocrp/agent-devkit-hub) and pins them to the last ADK commit that changed
+# them.
+#
+#   validate   checks them with the hub's own tools, so a change that would break the hub index
+#              fails here first (also catches a name already taken by a hub skill)
+#   notify     on main, asks the hub to rebuild its index now instead of at its daily run; needs
+#              the HUB_DISPATCH_TOKEN secret (fine-grained token, Contents: read and write on the
+#              hub repository) and is skipped without it
+on:
+  pull_request:
+    paths:
+      - 'apps/Mcp/skills/**'
+      - 'apps/Mcp/package.json'
+      - '.github/workflows/hub-skills.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/Mcp/skills/**'
+      - 'apps/Mcp/package.json'
+      - '.github/workflows/hub-skills.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: apps/Mcp
+          persist-credentials: false
+      - name: Check out the ADK Hub tools
+        uses: actions/checkout@v4
+        with:
+          repository: lucaseduardocrp/agent-devkit-hub
+          path: .hub
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node .hub/tools/cli.mjs validate --adk "$GITHUB_WORKSPACE"
+
+  notify:
+    needs: validate
+    # The hub reads the public repository; mirrors and forks never notify it.
+    if: github.event_name == 'push' && github.repository == 'lucaseduardocrp/agent-devkit'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the hub to rebuild its index
+        env:
+          GH_TOKEN: ${{ secrets.HUB_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "HUB_DISPATCH_TOKEN is not set; the hub picks the change up at its daily run."
+            exit 0
+          fi
+          gh api repos/lucaseduardocrp/agent-devkit-hub/dispatches -f event_type=adk-skills

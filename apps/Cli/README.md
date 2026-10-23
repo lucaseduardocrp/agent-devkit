@@ -51,6 +51,36 @@ devkit tools                            # list the enabled tools
 `devkit mcp http` starts the Streamable HTTP server. The configuration for each client, the remote
 team mode and the tool catalog are documented in [apps/Mcp](../Mcp/README.md).
 
+## Skills and plugins from the ADK Hub
+
+The [ADK Hub](https://github.com/lucaseduardocrp/agent-devkit-hub) lists community and official
+skills, and plugins that bundle skills, subagents and MCP servers. `devkit` installs them into the
+same folders as `install-skills` (`--client claude|codex|agents`, `--scope user|project`,
+`--dir PATH`):
+
+```bash
+devkit skills                                   # browse (✓ marks what is installed)
+devkit skills search flaky --category e2e-automation
+devkit skills info playwright-flaky-test-triage
+devkit skills install playwright-flaky-test-triage api-contract-checks
+devkit plugins install <name>                   # needs git
+devkit skills installed                         # also: devkit plugins installed
+devkit skills update                            # reinstall what changed in the hub
+devkit skills remove api-contract-checks
+```
+
+- Skill files are downloaded from the commit the hub index pins them to and must match the
+  sha256 listed for them; on any mismatch nothing is installed.
+- Plugins are fetched with git at the exact commit listed in the hub. Only the skills and
+  subagents they declare are copied (subagents go to `.claude/agents` for Claude Code). Their MCP
+  servers are not registered for you: `devkit` prints the `claude mcp add-json` or
+  `codex mcp add` commands and the environment variables to set.
+- `~/.adk/hub-lock.json` records what was installed and where, so `update` and `remove` only touch
+  those folders. An existing folder that `devkit` did not install is never replaced without
+  `--force`. Items removed from the hub for security reasons cannot be installed.
+- `--json` prints search, info and installed results as JSON. `--hub-url` (or `ADK_HUB_URL`)
+  reads another index, from a URL or a local file.
+
 ## Run E2E tests on your computer (local runner)
 
 Set a run's **Where the tests run** to **My computer** (`executionTarget: "local"` in MCP, or
@@ -164,6 +194,7 @@ worker capacity and the local application's capacity determine how many tests ca
 | `ADK_CLOUDFLARED_PATH` | Optional path to the local `cloudflared` binary for `devkit tunnel` |
 | `ADK_E2E_USERNAME`     | Replaces the saved test account user name on this computer          |
 | `ADK_E2E_PASSWORD`     | Replaces the saved test account password on this computer           |
+| `ADK_HUB_URL`          | Another ADK Hub index (URL or local file) for `devkit skills/plugins` |
 
 The MCP settings (`ADK_MCP_*`) are listed in [apps/Mcp](../Mcp/README.md#configuration).
 
@@ -177,6 +208,10 @@ src/
     local-runner/           devkit runner and devkit e2e: claim tasks, run Playwright, upload results
     cloudflare-tunnel.ts    devkit tunnel: cloudflared plus the authenticated local gateway
     local-bridge.ts         devkit bridge: lets the ADK web app control the tunnel
+  hub/
+    catalog.ts              downloads and validates the ADK Hub index, search
+    install.ts              verified skill downloads, pinned plugin checkouts, hub-lock.json
+    command.ts, format.ts   devkit skills / devkit plugins and their output
   vendor/e2e/               copy of the backend's Playwright runner (scripts/sync-e2e-runner.mjs)
 ```
 

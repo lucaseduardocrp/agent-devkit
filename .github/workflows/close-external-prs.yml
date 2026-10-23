@@ -22,4 +22,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          gh pr close "$PR_URL" --comment "Thanks for your interest. This project does not accept pull requests: it is developed by its author only. You are free to fork it under the terms of the license, and bug reports are welcome as issues. See CONTRIBUTING.md."
+          gh pr close "$PR_URL" --comment "Thanks for your interest. This project does not accept pull requests: it is developed by its author only. You are free to fork it under the terms of the license, and bug reports are welcome as issues. See CONTRIBUTING.md.
+
+          Skills and plugins for the ADK Hub are welcome as pull requests in https://github.com/lucaseduardocrp/agent-devkit-hub."

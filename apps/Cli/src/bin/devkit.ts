@@ -35,9 +35,11 @@ import {
   runnerHome,
 } from '../e2e/local-runner/playwright-setup.js';
 import { runLocally } from '../e2e/local-runner/run-command.js';
+import { runHubCommand } from '../hub/command.js';
+import { HubInstaller } from '../hub/install.js';
 import { packageVersion } from '../version.js';
 
-const HELP = `devkit — ADK command line: sign-in, local E2E runner, tunnels and the MCP server
+const HELP = `devkit — ADK command line: sign-in, local E2E runner, tunnels, the ADK Hub and the MCP server
 
 Usage:
   devkit [mcp] [stdio]             Start the local MCP stdio server (default)
@@ -64,6 +66,20 @@ Usage:
                                    ADK_E2E_USERNAME / ADK_E2E_PASSWORD override the account.
   devkit install-skills --client claude|codex|agents [--scope user|project] [--dir PATH]
                                    Copy the ADK skills into a client's skills folder
+
+ADK Hub (community skills and plugins):
+  devkit skills [search] [QUERY] [--category C]
+                                   Browse the hub skills (✓ marks the installed ones)
+  devkit skills info NAME          Show a skill's details and source
+  devkit skills install NAME... [--client claude|codex|agents] [--scope user|project]
+                                   [--dir PATH] [--force]
+                                   Download, verify and install skills from the hub
+  devkit skills installed | update [NAME...] | remove NAME...
+                                   List, update or remove what devkit installed
+  devkit plugins search|info|install|installed|update|remove ...
+                                   The same for plugins (skills, subagents and MCP servers
+                                   from a repository pinned to a reviewed commit; needs git)
+  Hub options: --hub-url URL (env ADK_HUB_URL) and --json for machine-readable output.
 
 Common options:
   --api-url URL        ADK API base URL (env ADK_API_URL, default http://localhost:3000)
@@ -111,6 +127,10 @@ async function main(): Promise<void> {
       scripts: { type: 'string' },
       'set-local': { type: 'boolean' },
       config: { type: 'string' },
+      'hub-url': { type: 'string' },
+      category: { type: 'string' },
+      force: { type: 'boolean' },
+      json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -238,6 +258,26 @@ async function main(): Promise<void> {
       const result = await installSkills(values.dir ?? skillTargetDirectory(client, scope));
       return say(`Installed ${result.installed.join(', ')} into ${result.destination}.`);
     }
+    case 'skills':
+    case 'plugins':
+      return runHubCommand(
+        command === 'skills' ? 'skill' : 'plugin',
+        positionals.slice(1),
+        {
+          hubUrl: values['hub-url'] ?? process.env['ADK_HUB_URL'],
+          client: values.client,
+          scope: values.scope,
+          dir: values.dir,
+          category: values.category,
+          force: values.force,
+          json: values.json,
+        },
+        {
+          say,
+          print: (message) => process.stdout.write(`${message}\n`),
+          installer: new HubInstaller({ devkitVersion: packageVersion() }),
+        },
+      );
     default:
       say(HELP);
       process.exitCode = 1;

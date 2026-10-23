@@ -435,7 +435,21 @@ export function parseMarkdownBlocks(content: string): readonly MarkdownBlock[] {
 
         const curLine = lines[i]!;
         const curMatch = itemRegex.exec(curLine);
-        if (!curMatch) break;
+        if (!curMatch) {
+          // An indented line that starts no other block continues the previous item.
+          const previous = items.at(-1);
+          if (
+            previous &&
+            /^\s+\S/.test(curLine) &&
+            !/^\s*(?:[-*+]|\d+\.)\s+/.test(curLine) &&
+            !/^\s*(?:```|~~~)/.test(curLine)
+          ) {
+            previous.text = `${previous.text} ${curLine.trim()}`;
+            i++;
+            continue;
+          }
+          break;
+        }
 
         const indent = curMatch[1]!.length;
         let itemText = curMatch[2]!;
