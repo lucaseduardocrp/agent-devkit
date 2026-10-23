@@ -2,6 +2,32 @@ import { ApplicationError } from '../../../shared/errors.js';
 
 export type AgentRole = 'QA' | 'DOCUMENTATION' | 'REFACTOR' | 'CUSTOM';
 
+/** Where an installed agent came from, so it can be updated from the ADK Hub later. */
+export interface AgentSource {
+  /** `hub-agent`: agents/<name>/AGENT.md of the hub. `hub-plugin`: a plugin's subagent. */
+  readonly kind: 'hub-agent' | 'hub-plugin';
+  /** The hub agent name, or the subagent name inside the plugin. */
+  readonly name: string;
+  readonly plugin?: string;
+  readonly version: string;
+  /** sha256 of AGENT.md for hub agents; the plugin's pinned commit for subagents. */
+  readonly revision: string;
+}
+
+/** Reads a stored source back; anything malformed is treated as a hand-made agent. */
+export function parseAgentSource(value: unknown): AgentSource | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  const text = (key: string) => (typeof source[key] === 'string' ? source[key] : undefined);
+  const kind = text('kind');
+  const name = text('name');
+  const revision = text('revision');
+  if ((kind !== 'hub-agent' && kind !== 'hub-plugin') || !name || !revision) return null;
+  const plugin = text('plugin');
+  if (kind === 'hub-plugin' && !plugin) return null;
+  return { kind, name, ...(plugin ? { plugin } : {}), version: text('version') ?? '', revision };
+}
+
 export interface AgentProps {
   readonly id: string;
   readonly workspaceId: string;
@@ -14,6 +40,7 @@ export interface AgentProps {
   readonly model?: string | null;
   readonly temperature?: number | null;
   readonly isDefault?: boolean;
+  readonly source?: AgentSource | null;
   readonly createdAt?: Date;
   readonly updatedAt?: Date;
 }
@@ -42,6 +69,7 @@ export class CustomAgent {
   public readonly model?: string;
   public readonly temperature: number;
   public readonly isDefault: boolean;
+  public readonly source: AgentSource | null;
   public readonly createdAt: Date;
   public readonly updatedAt: Date;
 
@@ -75,6 +103,7 @@ export class CustomAgent {
     this.model = props.model?.trim() || undefined;
     this.temperature = temp;
     this.isDefault = Boolean(props.isDefault);
+    this.source = props.source ?? null;
     this.createdAt = props.createdAt ?? new Date();
     this.updatedAt = props.updatedAt ?? new Date();
   }
@@ -92,6 +121,7 @@ export class CustomAgent {
       model: this.model,
       temperature: this.temperature,
       isDefault: this.isDefault,
+      source: this.source,
       createdAt: this.createdAt.toISOString(),
       updatedAt: this.updatedAt.toISOString(),
     };

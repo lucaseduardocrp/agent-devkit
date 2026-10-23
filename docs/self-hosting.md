@@ -57,6 +57,8 @@ do, restart with `adk` / `./adk.sh` afterwards.
 | `E2E_WORKER_URL`                | `http://worker:3001`     | Set when the E2E worker runs; the API sends test runs to it    |
 | `E2E_WORKER_CONCURRENCY`        | `2`                      | Parallel test runs (about 0.5 CPU and 500 MB each)             |
 | `E2E_R2_URL`, `E2E_R2_ACCESS_KEY_ID`, `E2E_R2_SECRET_ACCESS_KEY`, `E2E_R2_PREFIX` | *(empty)* | Store test videos in Cloudflare R2 instead of PostgreSQL |
+| `ADK_HUB_URL`                   | public ADK Hub           | Another hub index for the Hub tab of the Agents page (e.g. a mirror) |
+| `ADK_HUB_GITHUB_TOKEN`          | *(empty)*                | Read-only GitHub token; lifts the limit of 60 anonymous calls an hour |
 | `LOG_LEVEL`                     | `info`                   | `debug`, `info`, `warn` or `error`                             |
 
 LLM providers, Azure DevOps, GitHub repositories and other integrations are not configured here:

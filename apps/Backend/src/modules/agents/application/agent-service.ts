@@ -12,7 +12,7 @@ import {
   type AgentWorkflowStep,
 } from '../domain/agent-workflow.js';
 import { InMemoryAgentWorkflowRepository } from '../adapters/in-memory-agent-workflow-repository.js';
-import { CustomAgent, type AgentRole, slugify } from '../domain/agent-entity.js';
+import { CustomAgent, type AgentRole, type AgentSource, slugify } from '../domain/agent-entity.js';
 import { PromptInjectionGuard } from './prompt-injection-guard.js';
 
 export interface CreateAgentInput {
@@ -25,6 +25,8 @@ export interface CreateAgentInput {
   readonly model?: string;
   readonly temperature?: number;
   readonly isDefault?: boolean;
+  /** Set only by the ADK Hub install; the HTTP schemas never accept it. */
+  readonly source?: AgentSource | null;
 }
 
 export interface UpdateAgentInput {
@@ -37,6 +39,7 @@ export interface UpdateAgentInput {
   readonly model?: string;
   readonly temperature?: number;
   readonly isDefault?: boolean;
+  readonly source?: AgentSource | null;
 }
 
 export interface ExecuteAgentInput {
@@ -212,6 +215,7 @@ export class AgentService {
       model: input.model?.trim() || null,
       temperature: input.temperature ?? 0.2,
       isDefault: Boolean(input.isDefault),
+      source: input.source ?? null,
     });
 
     return this.agentRepository.save(agent);
@@ -290,6 +294,7 @@ export class AgentService {
       model: input.model !== undefined ? input.model.trim() || null : existing.model,
       temperature: input.temperature !== undefined ? input.temperature : existing.temperature,
       isDefault: input.isDefault !== undefined ? Boolean(input.isDefault) : existing.isDefault,
+      source: input.source !== undefined ? input.source : existing.source,
       createdAt: existing.createdAt,
       updatedAt: new Date(),
     });

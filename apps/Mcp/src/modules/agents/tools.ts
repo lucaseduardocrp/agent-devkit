@@ -3,6 +3,7 @@ import { segment, type AdkApi } from '../../api/http-client.js';
 import type { McpModule } from '../../core/registry.js';
 import { defineTool, json } from '../../core/tool.js';
 import { searchKnowledge } from '../brain/tools.js';
+import { installHubAgent, listHubAgents, updateHubAgent } from './hub.js';
 import { id, knowledgeBlock, UNTRUSTED_CONTENT_RULE } from '../shared.js';
 
 export interface AgentDto {
@@ -16,6 +17,14 @@ export interface AgentDto {
   readonly model?: string | null;
   readonly temperature: number;
   readonly isDefault: boolean;
+  /** Set for agents installed from the ADK Hub. */
+  readonly source?: {
+    readonly kind: 'hub-agent' | 'hub-plugin';
+    readonly name: string;
+    readonly plugin?: string;
+    readonly version: string;
+    readonly revision: string;
+  } | null;
 }
 
 export interface AgentWorkflowDto {
@@ -116,6 +125,11 @@ export async function getAgent(api: AdkApi, agentId: string): Promise<AgentDto> 
 }
 
 const agentId = id('Agent id (from agents_list).');
+const hubName = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  .max(64);
 const role = z.enum(['QA', 'DOCUMENTATION', 'REFACTOR', 'CUSTOM']);
 const agentFields = {
   parentAgentId: z
@@ -284,6 +298,44 @@ export const agentsModule: McpModule = {
       input: { agentId },
       run: async (input, { api }) =>
         json(await api.request({ method: 'DELETE', path: `/agents/${segment(input.agentId)}` })),
+    }),
+    defineTool({
+      name: 'agents_hub_list',
+      title: 'List ADK Hub agents',
+      description:
+        'Lists the agents of the ADK Hub and the subagents of hub plugins that can be installed in the active workspace, with what is already installed and what has an update.',
+      toolset: 'agents',
+      access: 'read',
+      routes: ['GET /agents/hub'],
+      input: {},
+      run: async (_, { api }) => json(await listHubAgents(api)),
+    }),
+    defineTool({
+      name: 'agents_hub_install',
+      title: 'Install ADK Hub agent',
+      description:
+        'Installs an ADK Hub agent (name), one plugin subagent (plugin and name) or every subagent of a plugin (plugin only) as workspace agents. Confirm with the user before installing.',
+      toolset: 'agents',
+      access: 'write',
+      routes: ['POST /agents/hub/install'],
+      input: {
+        name: hubName
+          .optional()
+          .describe('Hub agent name, or the subagent name within the plugin.'),
+        plugin: hubName.optional().describe('Hub plugin whose subagents to install.'),
+      },
+      run: async (input, { api }) => json({ agents: await installHubAgent(api, input) }),
+    }),
+    defineTool({
+      name: 'agents_hub_update',
+      title: 'Update ADK Hub agent',
+      description:
+        "Updates an agent installed from the ADK Hub to the hub's current version: its name, description and instructions are replaced; model, temperature, role and parent are kept. Confirm first.",
+      toolset: 'agents',
+      access: 'write',
+      routes: ['POST /agents/:id/hub-update'],
+      input: { agentId },
+      run: async (input, { api }) => json({ agent: await updateHubAgent(api, input.agentId) }),
     }),
     defineTool({
       name: 'agents_execute',

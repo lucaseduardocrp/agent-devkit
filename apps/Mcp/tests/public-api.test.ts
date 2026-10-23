@@ -13,7 +13,9 @@ describe('public API', () => {
       'SERVER_NAME',
       'SERVER_OPTIONS',
       'Session',
+      'installHubAgent',
       'isServerCommand',
+      'listHubAgents',
       'loadConfig',
       'loadSkills',
       'localOrigin',
@@ -25,6 +27,7 @@ describe('public API', () => {
       'signInForClient',
       'skillsDirectory',
       'storedApiUrl',
+      'updateHubAgent',
       'whoIs',
     ]);
   });

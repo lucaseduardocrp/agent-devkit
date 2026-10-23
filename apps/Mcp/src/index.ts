@@ -35,3 +35,13 @@ export {
 } from './bootstrap/serve.js';
 export { loadSkills, skillsDirectory, type SkillFile } from './bootstrap/skills.js';
 export { localOrigin, quickTunnelCommand } from './modules/e2e/tunnel-command.js';
+export {
+  installHubAgent,
+  listHubAgents,
+  updateHubAgent,
+  type HubAgentCatalogDto,
+  type HubAgentDto,
+  type HubAgentRef,
+  type HubPluginDto,
+} from './modules/agents/hub.js';
+export type { AgentDto } from './modules/agents/tools.js';

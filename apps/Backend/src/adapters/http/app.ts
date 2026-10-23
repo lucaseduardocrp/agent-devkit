@@ -41,6 +41,9 @@ import { AgentService } from '../../modules/agents/application/agent-service.js'
 import { InMemoryAgentRepository } from '../../modules/agents/adapters/in-memory-agent-repository.js';
 import type { AgentRepository } from '../../modules/agents/application/agent-repository.js';
 import { createAgentsRouter } from './agents-routes.js';
+import type { HubCatalog } from '../../modules/hub/application/hub-catalog.js';
+import { HubAgentService } from '../../modules/hub/application/hub-agent-service.js';
+import { HttpHubCatalog } from '../../modules/hub/adapters/http-hub-catalog.js';
 import { createIssuesRouter } from './issues-routes.js';
 import { createAttachmentsRouter } from './attachments-routes.js';
 import { createPbiRouter } from './pbi-routes.js';
@@ -154,6 +157,8 @@ export interface AppOptions {
   readonly dynamicProviderFactory?: DynamicProviderFactory;
   readonly agentRepository?: AgentRepository;
   readonly agentService?: AgentService;
+  /** Where workspace agents are installed from (the ADK Hub on GitHub by default). */
+  readonly hubCatalog?: HubCatalog;
   readonly issueStore?: IssueStore;
   readonly pbiStore?: PbiStore;
   readonly pbiRelationStore?: PbiRelationStore;
@@ -332,7 +337,8 @@ export function createApp(options: AppOptions = {}) {
       e2eArtifacts,
     ),
   );
-  app.use(createAgentsRouter(agentService, contextResolver));
+  const hubAgents = new HubAgentService(options.hubCatalog ?? new HttpHubCatalog(), agentService);
+  app.use(createAgentsRouter(agentService, contextResolver, hubAgents));
   const entityAudit = new EntityAuditLog(audit);
   const issueStore = auditedIssueStore(options.issueStore ?? new InMemoryIssueStore(), entityAudit);
   const pbiStore = withPbiChangeHook(options.pbiStore ?? new InMemoryPbiStore(), (workspaceId) =>

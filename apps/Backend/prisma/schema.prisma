@@ -559,6 +559,8 @@ model AgentRecord {
   model         String?
   temperature   Float?    @default(0.2)
   isDefault     Boolean   @default(false) @map("is_default")
+  /// Where an agent installed from the ADK Hub came from (AgentSource); null for agents made here.
+  source        Json?
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 

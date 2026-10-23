@@ -32,6 +32,7 @@ import { DynamicProviderFactory } from '../modules/integrations/application/dyna
 import { PrismaAgentRepository } from '../modules/agents/adapters/prisma-agent-repository.js';
 import { InMemoryAgentRepository } from '../modules/agents/adapters/in-memory-agent-repository.js';
 import { AgentService } from '../modules/agents/application/agent-service.js';
+import { HttpHubCatalog } from '../modules/hub/adapters/http-hub-catalog.js';
 import { PrismaAgentWorkflowRepository } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import type { PrismaAgentWorkflowClient } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import { PrismaIssueStore } from '../modules/issues/issue-store.js';
@@ -217,6 +218,10 @@ const app = createApp({
   dynamicProviderFactory,
   agentRepository: agentRepo,
   agentService,
+  hubCatalog: new HttpHubCatalog({
+    indexUrl: process.env['ADK_HUB_URL']?.trim() || undefined,
+    githubToken: process.env['ADK_HUB_GITHUB_TOKEN']?.trim() || undefined,
+  }),
   issueStore: database ? new PrismaIssueStore(database.client) : undefined,
   pbiStore: database ? new PrismaPbiStore(database.client) : undefined,
   pbiRelationStore: database ? new PrismaPbiRelationStore(database.client) : undefined,

@@ -56,6 +56,17 @@ with a rate for provider `mcp` and the MCP client name as the model.
 - ADK rejects instructions that look like prompt injection; rephrase them instead of working around
   the check.
 
+## Install agents from the ADK Hub
+
+- `agents_hub_list` shows the hub agents and the subagents of hub plugins, each `available`,
+  `installed` or `update-available` for this workspace. Prefer an existing hub agent over writing
+  a new one when it fits the request.
+- `agents_hub_install { name }` installs a hub agent; `{ plugin, name }` one subagent of a plugin;
+  `{ plugin }` every subagent of it. Confirm with the user first.
+- `agents_hub_update { agentId }` replaces the name, description and instructions with the hub
+  version and keeps the workspace's model, temperature and role. Confirm first: local edits to the
+  instructions are lost. Remove an installed agent with `agents_delete`.
+
 ## Writing good instructions
 
 State the mission, scope, rules, output format and what to do when information is missing. Keep

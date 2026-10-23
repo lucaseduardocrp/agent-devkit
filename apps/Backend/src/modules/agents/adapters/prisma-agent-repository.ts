@@ -1,5 +1,13 @@
 import type { AgentRepository } from '../application/agent-repository.js';
-import { CustomAgent, type AgentProps, type AgentRole } from '../domain/agent-entity.js';
+import {
+  CustomAgent,
+  parseAgentSource,
+  type AgentProps,
+  type AgentRole,
+} from '../domain/agent-entity.js';
+
+/** AgentSource as Prisma stores it: a JSON object of strings. */
+type JsonSource = { readonly [key: string]: string | undefined };
 
 interface RawAgentRecord {
   id: string;
@@ -13,6 +21,7 @@ interface RawAgentRecord {
   model: string | null;
   temperature: number | null;
   isDefault: boolean;
+  source?: unknown;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,6 +41,7 @@ interface AgentDelegate {
       model?: string | null;
       temperature?: number | null;
       isDefault?: boolean;
+      source?: JsonSource;
     };
     update: {
       name: string;
@@ -43,6 +53,7 @@ interface AgentDelegate {
       model?: string | null;
       temperature?: number | null;
       isDefault?: boolean;
+      source?: JsonSource;
       updatedAt?: Date;
     };
   }): Promise<RawAgentRecord>;
@@ -79,6 +90,7 @@ export class PrismaAgentRepository implements AgentRepository {
       model: record.model,
       temperature: record.temperature,
       isDefault: record.isDefault,
+      source: parseAgentSource(record.source),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
@@ -100,6 +112,7 @@ export class PrismaAgentRepository implements AgentRepository {
         model: agent.model ?? null,
         temperature: agent.temperature,
         isDefault: agent.isDefault,
+        ...(agent.source ? { source: { ...agent.source } } : {}),
       },
       update: {
         name: agent.name,
@@ -111,6 +124,7 @@ export class PrismaAgentRepository implements AgentRepository {
         model: agent.model ?? null,
         temperature: agent.temperature,
         isDefault: agent.isDefault,
+        ...(agent.source ? { source: { ...agent.source } } : {}),
         updatedAt: new Date(),
       },
     });

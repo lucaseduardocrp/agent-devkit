@@ -35,6 +35,7 @@ import {
   runnerHome,
 } from '../e2e/local-runner/playwright-setup.js';
 import { runLocally } from '../e2e/local-runner/run-command.js';
+import { runAgentsCommand } from '../hub/agents-command.js';
 import { runHubCommand } from '../hub/command.js';
 import { HubInstaller } from '../hub/install.js';
 import { packageVersion } from '../version.js';
@@ -80,6 +81,11 @@ ADK Hub (community skills and plugins):
                                    The same for plugins (skills, subagents and MCP servers
                                    from a repository pinned to a reviewed commit; needs git)
   Hub options: --hub-url URL (env ADK_HUB_URL) and --json for machine-readable output.
+  devkit agents [search] [QUERY]   Browse the hub agents for your ADK workspace (✓ installed)
+  devkit agents install NAME... | --plugin PLUGIN [NAME...]
+                                   Install hub agents or plugin subagents in the active
+                                   workspace (signed in with devkit login)
+  devkit agents update [NAME...]   Update workspace agents installed from the hub
 
 Common options:
   --api-url URL        ADK API base URL (env ADK_API_URL, default http://localhost:3000)
@@ -131,6 +137,7 @@ async function main(): Promise<void> {
       category: { type: 'string' },
       force: { type: 'boolean' },
       json: { type: 'boolean' },
+      plugin: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -258,6 +265,16 @@ async function main(): Promise<void> {
       const result = await installSkills(values.dir ?? skillTargetDirectory(client, scope));
       return say(`Installed ${result.installed.join(', ')} into ${result.destination}.`);
     }
+    case 'agents':
+      return runAgentsCommand(
+        positionals.slice(1),
+        { plugin: values.plugin, json: values.json },
+        {
+          say,
+          print: (message) => process.stdout.write(`${message}\n`),
+          api: async () => (await signedInApi(config, `devkit/${packageVersion()}`)).api,
+        },
+      );
     case 'skills':
     case 'plugins':
       return runHubCommand(

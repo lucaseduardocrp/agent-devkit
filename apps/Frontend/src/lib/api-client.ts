@@ -15,6 +15,7 @@ import type {
   ExecuteAgentDto,
   ExecuteAgentResponse,
   AgentWorkflowDto,
+  HubAgentCatalogDto,
 } from '../features/agents/agent-types.js';
 import type { SupportedLocale } from './i18n/types.js';
 import type {
@@ -2605,6 +2606,38 @@ export class ApiClient {
     }
     const res = (await response.json()) as CustomAgentDto | { agent?: CustomAgentDto };
     return 'agent' in res && res.agent ? res.agent : (res as CustomAgentDto);
+  }
+
+  /** ADK Hub agents and plugin subagents, with what this workspace has installed. */
+  public async listHubAgents(signal?: AbortSignal): Promise<HubAgentCatalogDto> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/agents/hub`, { signal });
+    if (!response.ok) return this.handleErrorResponse(response);
+    return (await response.json()) as HubAgentCatalogDto;
+  }
+
+  /** Installs a hub agent (name), a plugin subagent (plugin + name) or all of a plugin's. */
+  public async installHubAgent(
+    ref: { readonly name?: string; readonly plugin?: string },
+    signal?: AbortSignal,
+  ): Promise<readonly CustomAgentDto[]> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/agents/hub/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(ref),
+      signal,
+    });
+    if (!response.ok) return this.handleErrorResponse(response);
+    return ((await response.json()) as { agents: readonly CustomAgentDto[] }).agents;
+  }
+
+  /** Replaces an installed agent's name, description and instructions with the hub version. */
+  public async updateHubAgent(id: string, signal?: AbortSignal): Promise<CustomAgentDto> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/agents/${encodeURIComponent(id)}/hub-update`,
+      { method: 'POST', signal },
+    );
+    if (!response.ok) return this.handleErrorResponse(response);
+    return ((await response.json()) as { agent: CustomAgentDto }).agent;
   }
 
   public async deleteAgent(id: string, signal?: AbortSignal): Promise<{ success: boolean }> {

@@ -64,6 +64,8 @@ export interface CustomAgentDto {
   readonly model?: string;
   readonly temperature: number;
   readonly isSystem: boolean;
+  /** Set for agents installed from the ADK Hub. */
+  readonly source?: AgentSourceDto | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -105,4 +107,60 @@ export interface ExecuteAgentResponse {
   };
   readonly chunksUsed: number;
   readonly provider?: string;
+}
+
+/** Where an agent installed from the ADK Hub came from (hub agent or a plugin's subagent). */
+export interface AgentSourceDto {
+  readonly kind: 'hub-agent' | 'hub-plugin';
+  readonly name: string;
+  readonly plugin?: string;
+  readonly version: string;
+  readonly revision: string;
+}
+
+export type HubInstallStatus = 'available' | 'installed' | 'update-available';
+export type HubTier = 'official' | 'verified' | 'community';
+
+export interface HubInstallState {
+  readonly status: HubInstallStatus;
+  readonly installed?: {
+    readonly agentId: string;
+    readonly name: string;
+    readonly version: string;
+  };
+}
+
+export interface HubAgentDto extends HubInstallState {
+  readonly name: string;
+  readonly description: string;
+  readonly overview: string;
+  readonly category: string;
+  readonly role: AgentRole;
+  readonly temperature?: number;
+  readonly tags: readonly string[];
+  readonly toolsets: readonly string[];
+  readonly author: string;
+  readonly version: string;
+  readonly license: string;
+  readonly tier: HubTier;
+}
+
+export interface HubPluginDto {
+  readonly name: string;
+  readonly title: string;
+  readonly description: string;
+  readonly version?: string;
+  readonly maintainer: string;
+  readonly tier: HubTier;
+  readonly license: string;
+  readonly repo: string;
+  readonly sha: string;
+  readonly agents: readonly ({ readonly name: string } & HubInstallState)[];
+}
+
+/** GET /agents/hub: what the ADK Hub offers this workspace and what it already installed. */
+export interface HubAgentCatalogDto {
+  readonly generatedAt: string;
+  readonly agents: readonly HubAgentDto[];
+  readonly plugins: readonly HubPluginDto[];
 }

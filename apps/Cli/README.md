@@ -81,6 +81,24 @@ devkit skills remove api-contract-checks
 - `--json` prints search, info and installed results as JSON. `--hub-url` (or `ADK_HUB_URL`)
   reads another index, from a URL or a local file.
 
+### Agents for your ADK workspace
+
+Hub agents are installed in the active ADK workspace, not on this computer: they appear on the
+Agents page and run on Issues, in the Test Playground and in workflows. `devkit agents` calls the
+ADK API with the session of `devkit login`, the same way as the Hub tab of the Agents page and the
+`agents_hub_*` MCP tools; the server downloads each file and checks it before creating the agent.
+
+```bash
+devkit agents                                   # hub agents and plugin subagents (✓ installed, ↑ update)
+devkit agents search qa
+devkit agents install qa-test-designer
+devkit agents install --plugin jira-qa          # every subagent of a plugin; add names for some
+devkit agents update                            # everything with a new version; or pass names
+```
+
+Updating replaces an agent's name, description and instructions with the hub version and keeps
+the model, temperature and role set in the workspace. Remove an agent on the Agents page.
+
 ## Run E2E tests on your computer (local runner)
 
 Set a run's **Where the tests run** to **My computer** (`executionTarget: "local"` in MCP, or
@@ -212,6 +230,7 @@ src/
     catalog.ts              downloads and validates the ADK Hub index, search
     install.ts              verified skill downloads, pinned plugin checkouts, hub-lock.json
     command.ts, format.ts   devkit skills / devkit plugins and their output
+    agents-command.ts       devkit agents: hub agents in the ADK workspace, through the API
   vendor/e2e/               copy of the backend's Playwright runner (scripts/sync-e2e-runner.mjs)
 ```
 

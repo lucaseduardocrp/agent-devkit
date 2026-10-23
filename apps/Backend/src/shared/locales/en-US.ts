@@ -24,6 +24,12 @@ export const enUS = {
   WORKSPACE_NOT_FOUND: 'Workspace not found.',
   PROMPT_INJECTION_DETECTED: 'Prompt injection attempt detected and blocked for security.',
   AGENT_NOT_FOUND: 'Agent not found.',
+  HUB_UNAVAILABLE: 'The ADK Hub could not be reached. Try again in a moment.',
+  HUB_AGENT_NOT_FOUND: 'This agent is not in the ADK Hub.',
+  HUB_AGENT_INSTALLED: 'This agent is already installed in the workspace: {agent}.',
+  HUB_FILE_MISMATCH:
+    'The file downloaded from the ADK Hub does not match its index and was not installed.',
+  HUB_AGENT_NOT_FROM_HUB: 'This agent was not installed from the ADK Hub.',
   ISSUE_NOT_FOUND: 'Issue not found.',
   PBI_NOT_FOUND: 'PBI or card not found.',
   PBI_HIERARCHY: 'The PBI and card hierarchy is invalid.',

@@ -6,6 +6,8 @@ import { requireAuth } from './auth-middleware.js';
 import { ApplicationError } from '../../shared/errors.js';
 import { parseBody } from './validation.js';
 import type { AgentRole } from '../../modules/agents/domain/agent-entity.js';
+import type { HubAgentService } from '../../modules/hub/application/hub-agent-service.js';
+import { registerHubAgentRoutes } from './hub-agents-routes.js';
 
 const agentRoleEnum = z.enum(['QA', 'DOCUMENTATION', 'REFACTOR', 'CUSTOM']);
 
@@ -114,6 +116,7 @@ export function resolveWorkspaceId(request: Request): string {
 export function createAgentsRouter(
   agentService: AgentService,
   contextResolver?: RequestContextResolver,
+  hubAgents?: HubAgentService,
 ): Router {
   const router = Router();
 
@@ -127,6 +130,9 @@ export function createAgentsRouter(
       }
     });
   }
+
+  // Before /agents/:id, so /agents/hub is not read as an agent id.
+  if (hubAgents) registerHubAgentRoutes(router, hubAgents, resolveWorkspaceId);
 
   router.get('/agents', requireAuth, async (req, res, next) => {
     try {

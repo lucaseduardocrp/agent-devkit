@@ -17,6 +17,7 @@ import {
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import { AgentModal, type AgentLlmModelOption } from './AgentModal.js';
 import { AgentTopology } from './AgentTopology.js';
+import { AgentHubPanel } from './AgentHubPanel.js';
 import type { AgentRun, Issue } from '../issues/issue-types.js';
 import { ApiClient } from '../../lib/api-client.js';
 import type {
@@ -56,6 +57,8 @@ const workflowToolNames: Record<AgentWorkflowToolset, readonly string[]> = {
     'agents_create',
     'agents_delete',
     'agents_execute',
+    'agents_hub_install',
+    'agents_hub_update',
     'agents_update',
     'agents_workflow_update',
   ],
@@ -183,9 +186,9 @@ export function AgentsView({
     return role;
   };
   const { runActivity } = useActivityRunner();
-  const [activeViewTab, setActiveViewTab] = useState<'catalog' | 'playground' | 'map' | 'workflow'>(
-    'catalog',
-  );
+  const [activeViewTab, setActiveViewTab] = useState<
+    'catalog' | 'hub' | 'playground' | 'map' | 'workflow'
+  >('catalog');
   const [agents, setAgents] = useState<readonly CustomAgentDto[]>([]);
   const [topologyIssues, setTopologyIssues] = useState<readonly Issue[]>([]);
   const [topologyRuns, setTopologyRuns] = useState<readonly AgentRun[]>([]);
@@ -594,6 +597,22 @@ export function AgentsView({
           </span>
         </Button>
 
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => setActiveViewTab('hub')}
+          className={cn(
+            'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
+            visibleTab === 'hub'
+              ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
+              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+          )}
+          data-testid="tab-hub"
+          leftIcon={<i className="ti ti-world-download text-base" aria-hidden="true" />}
+        >
+          <span>{t('agents.hubTab')}</span>
+        </Button>
+
         {/* Running an agent is a write: members without edit access have no playground. */}
         {!isReadOnly && (
           <Button
@@ -662,6 +681,15 @@ export function AgentsView({
             {t('common.retry')}
           </Button>
         </div>
+      )}
+
+      {visibleTab === 'hub' && (
+        <AgentHubPanel
+          apiClient={apiClient}
+          isReadOnly={isReadOnly}
+          getRoleLabel={getRoleLabel}
+          onChanged={loadAgents}
+        />
       )}
 
       {visibleTab === 'map' && (
@@ -1278,6 +1306,18 @@ export function AgentsView({
                         {agent.isSystem && (
                           <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-400">
                             {t('agents.systemBadge')}
+                          </span>
+                        )}
+                        {agent.source && (
+                          <span
+                            className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-300"
+                            title={
+                              agent.source.plugin
+                                ? `${agent.source.plugin}/${agent.source.name}`
+                                : agent.source.name
+                            }
+                          >
+                            {t('agents.hubBadge', { version: agent.source.version })}
                           </span>
                         )}
                       </div>
