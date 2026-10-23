@@ -222,11 +222,21 @@ export function parseMarkdownBlocks(content: string): readonly MarkdownBlock[] {
   if (json !== null) return [{ type: 'code', language: 'json', code: json }];
 
   // Imported issue descriptions sometimes flatten Markdown into one long line.
-  // Restore heading boundaries outside fenced code without changing the stored text.
+  // Restore heading boundaries outside fenced code and table rows (a `| # |` column
+  // header is not a heading) without changing the stored text.
   const normalized = content
     .split(/(```[\s\S]*?```)/g)
     .map((part, index) =>
-      index % 2 === 0 ? part.replace(/([^\r\n])\s+(#{1,6})\s+/g, '$1\n\n$2 ') : part,
+      index % 2 === 0
+        ? part
+            .split(/(\r?\n)/)
+            .map((segment) =>
+              segment.trim().startsWith('|')
+                ? segment
+                : segment.replace(/([^\r\n])\s+(#{1,6})\s+/g, '$1\n\n$2 '),
+            )
+            .join('')
+        : part,
     )
     .join('');
   const lines = normalized.split(/\r?\n/);

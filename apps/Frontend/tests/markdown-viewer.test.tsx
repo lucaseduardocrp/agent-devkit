@@ -82,6 +82,20 @@ describe('MarkdownViewer & markdown utilities', () => {
       ]);
     });
 
+    it('keeps a "#" column header inside a table row', () => {
+      const blocks = parseMarkdownBlocks(
+        '| # | Eventos | Resultado |\n|---|---|---|\n| 1 | DT 01–05 | não sobrepõe |',
+      );
+      expect(blocks).toEqual([
+        {
+          type: 'table',
+          headers: ['#', 'Eventos', 'Resultado'],
+          alignments: ['left', 'left', 'left'],
+          rows: [['1', 'DT 01–05', 'não sobrepõe']],
+        },
+      ]);
+    });
+
     it('restores headings in flattened descriptions without changing fenced code', () => {
       const blocks = parseMarkdownBlocks(
         '## Goal Text. ## References More text.\n```md\n## stays in code\n```',
