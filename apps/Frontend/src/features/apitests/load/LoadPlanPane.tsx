@@ -14,6 +14,7 @@ import {
   type LoadStage,
   type LoadThreshold,
 } from '../api-test-types.js';
+import { RequestRowsSkeleton } from '../ApiTestSkeletons.js';
 import { MethodLabel } from '../integration/integration-parts.js';
 import { AreaChart } from './load-charts.js';
 import { PROFILE_ICON, metricUnit, peakVus, stagePoints, totalSeconds } from './load-model.js';
@@ -54,6 +55,7 @@ const OPERATORS: { value: LoadThreshold['operator']; label: string }[] = [
 export function LoadPlanPane({
   draft,
   requests,
+  loadingRequests = false,
   preset,
   readOnly,
   onChange,
@@ -62,6 +64,8 @@ export function LoadPlanPane({
 }: {
   readonly draft: LoadScenarioInput;
   readonly requests: readonly { request: ApiRequestSpec; path: string[] }[];
+  /** The scenario's collection is still being read, so its requests are not known yet. */
+  readonly loadingRequests?: boolean;
   readonly preset: { vus: number; durationSec: number };
   readonly readOnly: boolean;
   readonly onChange: (draft: LoadScenarioInput) => void;
@@ -280,7 +284,8 @@ export function LoadPlanPane({
 
       <Section title={t('apiTests.scenarioRequests')} hint={t('apiTests.loadUi.requestsHint')}>
         <ul className="flex flex-col divide-y divide-[var(--border)] rounded-lg border border-[var(--border)]">
-          {requests.length === 0 && (
+          {loadingRequests && <RequestRowsSkeleton />}
+          {!loadingRequests && requests.length === 0 && (
             <li className="p-4 text-xs text-[var(--text-muted)]">{t('apiTests.noRequests')}</li>
           )}
           {requests.map(({ request, path }) => {

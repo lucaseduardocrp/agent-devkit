@@ -1,5 +1,6 @@
 import type { CollectionInput, LoadScenarioInput } from '../domain/api-test.js';
 import { flattenRequests } from '../engine/collection-runner.js';
+import { DYNAMIC_VALUE_NAMES, resolveDynamicValue } from '../engine/dynamic-values.js';
 import { fillPathParams } from '../engine/http-request.js';
 import type {
   Assertion,
@@ -14,6 +15,29 @@ import type {
 // from the environment (`k6 run -e token=...`) and never written into the script.
 
 const js = (value: unknown) => JSON.stringify(value);
+
+/** Mock values the script computes on its own; every other `{{$helper}}` draws from a pool. */
+const NATIVE_HELPERS = new Set([
+  '$guid',
+  '$randomUUID',
+  '$timestamp',
+  '$isoTimestamp',
+  '$randomInt',
+]);
+/** Values per pool: enough variety for a load test, small enough to keep the script readable. */
+const POOL_SIZE = 40;
+
+/** The pools of the mock values the scenario uses, generated now (k6 has no copy of the catalog). */
+function mockPools(source: string): Record<string, string[]> {
+  const known = new Set(DYNAMIC_VALUE_NAMES);
+  const pools: Record<string, string[]> = {};
+  for (const match of source.matchAll(/\{\{\s*(\$[\w]+)\s*\}\}/g)) {
+    const name = match[1]!;
+    if (!known.has(name) || NATIVE_HELPERS.has(name) || pools[name]) continue;
+    pools[name] = Array.from({ length: POOL_SIZE }, () => resolveDynamicValue(name)!);
+  }
+  return pools;
+}
 
 /** `data.items[0].id` → `data.items.0.id` (k6 `res.json()` uses gjson paths). */
 const gjson = (path: string) =>
@@ -221,6 +245,12 @@ export function exportK6(
     return lines.join('\n');
   });
 
+  const pools = mockPools(
+    JSON.stringify([
+      chosen.map(({ flat }) => [flat!.request, flat!.auth]),
+      [...variables.values()],
+    ]),
+  );
   const varLines = [...variables.values()].map((variable) =>
     variable.secret
       ? `  ${js(variable.key)}: __ENV[${js(variable.key)}] || '',`
@@ -243,8 +273,30 @@ const vars = {
 ${varLines.join('\n')}
 };
 
+// Mock values ({{$randomFullName}}, {{$randomEmail}}...): drawn from pools generated when the
+// script was exported, so every request sends a different one.
+const pools = ${JSON.stringify(pools, null, 2)};
+
+function dynamic(name) {
+  if (name === '$guid' || name === '$randomUUID') {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = Math.floor(Math.random() * 16);
+      return (c === 'x' ? r : (r % 4) + 8).toString(16);
+    });
+  }
+  if (name === '$timestamp') return String(Math.floor(Date.now() / 1000));
+  if (name === '$isoTimestamp') return new Date().toISOString();
+  if (name === '$randomInt') return String(Math.floor(Math.random() * 1000));
+  const pool = pools[name];
+  return pool ? pool[Math.floor(Math.random() * pool.length)] : undefined;
+}
+
 function v(text) {
-  return String(text).replace(/\\{\\{\\s*([\\w.-]+)\\s*\\}\\}/g, (match, name) => (name in vars ? vars[name] : match));
+  return String(text).replace(/\\{\\{\\s*([$\\w.-]+)\\s*\\}\\}/g, (match, name) => {
+    if (name in vars) return vars[name];
+    const value = dynamic(name);
+    return value === undefined ? match : value;
+  });
 }
 
 function json(r, path) {

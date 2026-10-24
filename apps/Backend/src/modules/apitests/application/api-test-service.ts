@@ -20,6 +20,7 @@ import {
   type LoadScenario,
 } from '../domain/api-test.js';
 import { flattenRequests, selectRequests } from '../engine/collection-runner.js';
+import { DYNAMIC_VALUE_NAMES } from '../engine/dynamic-values.js';
 import { interpolate, scopeOf } from '../engine/http-request.js';
 import { peakVus, profileStages, totalDuration } from '../engine/load-profiles.js';
 import type { ApiItem, LoadProfileType, Variable } from '../engine/types.js';
@@ -900,6 +901,8 @@ const COLLECTION_SHAPE = `{
 }
 Operators: eq, neq, contains, notContains, exists, notExists, lt, lte, gt, gte, matches (regex), isType (string|number|boolean|object|array|null).`;
 
+const MOCK_HELPERS = DYNAMIC_VALUE_NAMES.map((name) => `{{${name}}}`).join(', ');
+
 const INTEGRATION_INSTRUCTION = `You are a senior QA engineer writing API integration tests for ADK.
 Write a collection of HTTP requests with assertions from the sources: test cases, Brain pages, specifications, PBIs and the user's requirements.
 
@@ -907,6 +910,7 @@ Rules:
 - Cover the main flows, then validation errors (400/422), authentication and permission errors (401/403), not found (404) and boundaries the sources describe. One request per check, named after what it verifies.
 - Chain requests the way a client would: capture tokens and created ids into variables and reuse them as {{variable}} in later requests (e.g. create, read, update, delete the same resource).
 - Use {{baseUrl}} and variables for hosts, credentials and data that change between environments. Mark credentials as "secret": true with an empty value; never write real secrets.
+- Fill request bodies, queries and headers with realistic data instead of placeholders such as "string" or "test". Mock helpers generate a new value on every request; write them as {{$helper}}, e.g. "name": "{{$randomFullName}}", "email": "{{$randomEmail}}", "cpf": "{{$randomCPF}}". Available helpers: ${MOCK_HELPERS}. A helper can stand for a JSON number or boolean only outside quotes, e.g. "age": {{$randomAge}}. Use fixed values where an assertion needs to know the data (a known login, a boundary value).
 - Assert what the sources state: status codes, required fields, values and formats. Do not invent endpoints, fields or rules the sources do not support; when an endpoint path is not given, infer the most likely REST path and say so in the request description.
 - When a source is a test plan, map each test case to requests and set testCaseId to the case id.
 - Group requests in folders by resource or flow.

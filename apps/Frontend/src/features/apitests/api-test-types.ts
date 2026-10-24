@@ -115,6 +115,28 @@ export interface ApiEnvironment {
   variables: Variable[];
 }
 
+export const MOCK_GROUPS = [
+  'ids',
+  'person',
+  'address',
+  'contact',
+  'company',
+  'finance',
+  'numbers',
+  'dates',
+  'internet',
+  'text',
+  'documents',
+] as const;
+export type MockGroup = (typeof MOCK_GROUPS)[number];
+
+/** A mock value requests can use as `{{name}}` (`{{$randomFullName}}`), with a sample of it. */
+export interface ApiMockValue {
+  name: string;
+  group: MockGroup;
+  sample: string;
+}
+
 export const LOAD_PROFILE_TYPES = [
   'smoke',
   'load',

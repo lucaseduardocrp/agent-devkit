@@ -14,6 +14,7 @@ import {
   type ApiCollectionSummary,
   type ApiEnvironment,
   type ApiFolder,
+  type ApiMockValue,
   type ApiRequestSpec,
   type ApiRun,
   type ApiRunTarget,
@@ -21,6 +22,7 @@ import {
   type ExportFormat,
 } from './api-test-types.js';
 import { GenerateDialog } from './ApiTestShared.js';
+import { IntegrationTestsSkeleton } from './ApiTestSkeletons.js';
 import { VariablesContext, variableSuggestions } from './variables-context.js';
 import { EnvironmentsPane } from './integration/EnvironmentsPane.js';
 import { downloadBlob } from './api-test-ui.js';
@@ -186,6 +188,11 @@ export function IntegrationTestsView({
   const [confirming, setConfirming] = useState<ConfirmPrompt | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // True until the collections are listed and the first one is open.
+  const [loading, setLoading] = useState(true);
+  // The mock values requests can use; they load on the side and the editor works without them.
+  const [mocks, setMocks] = useState<ApiMockValue[] | null>(null);
+  const [mocksFailed, setMocksFailed] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const loadedRef = useRef(loaded);
   loadedRef.current = loaded;
@@ -245,8 +252,23 @@ export function IntegrationTestsView({
     [loadCollection, openTab],
   );
 
+  const loadMocks = useCallback(() => {
+    setMocksFailed(false);
+    // Promise.resolve first: a client without the call fails like a server without the route.
+    return Promise.resolve()
+      .then(() => apiClient.listApiMockValues())
+      .then(setMocks)
+      .catch(() => setMocksFailed(true));
+  }, [apiClient]);
+
   useEffect(() => {
-    void loadLists().then((list) => (list[0] ? reveal(list[0].id, true) : undefined));
+    void loadMocks();
+  }, [loadMocks]);
+
+  useEffect(() => {
+    void loadLists()
+      .then((list) => (list[0] ? reveal(list[0].id, true) : undefined))
+      .finally(() => setLoading(false));
     // Only on mount: later reloads keep what is on screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -665,8 +687,9 @@ export function IntegrationTestsView({
       variableSuggestions(
         activeCollection,
         environments.find((environment) => environment.id === environmentId) ?? null,
+        mocks,
       ),
-    [activeCollection, environmentId, environments],
+    [activeCollection, environmentId, environments, mocks],
   );
   const dirtyIds = useMemo(() => new Set(Object.values(dirty).flatMap((ids) => [...ids])), [dirty]);
   const headerCollection =
@@ -812,6 +835,9 @@ export function IntegrationTestsView({
               key={requestId}
               request={activeRequest}
               readOnly={isReadOnly}
+              mocks={mocks}
+              mocksFailed={mocksFailed}
+              onRetryMocks={() => void loadMocks()}
               onChange={(next) => updateRequest(collectionId, next)}
             />
           }
@@ -831,6 +857,8 @@ export function IntegrationTestsView({
       </div>
     );
   };
+
+  if (loading) return <IntegrationTestsSkeleton />;
 
   return (
     <div

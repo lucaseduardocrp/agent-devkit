@@ -1,3 +1,4 @@
+import { resolveDynamicValue } from './dynamic-values.js';
 import type {
   ApiRequestSpec,
   Assertion,
@@ -30,17 +31,13 @@ export function scopeOf(...lists: readonly (readonly Variable[])[]): VariableSco
 }
 
 /**
- * Replaces `{{name}}` with the variable value. Dynamic helpers follow Postman's names:
- * `{{$guid}}`/`{{$randomUUID}}`, `{{$timestamp}}`, `{{$isoTimestamp}}`, `{{$randomInt}}`.
+ * Replaces `{{name}}` with the variable value. Names that start with `$` are mock values, a new one
+ * every time (`{{$guid}}`, `{{$randomFullName}}`, `{{$randomEmail}}`...; see dynamic-values.ts).
  * Unknown names are left as they are, so a missing variable is visible in the result.
  */
 export function interpolate(text: string, scope: VariableScope): string {
   return text.replace(/\{\{\s*([$\w.-]+)\s*\}\}/g, (match, name: string) => {
-    if (name === '$guid' || name === '$randomUUID') return crypto.randomUUID();
-    if (name === '$timestamp') return String(Math.floor(Date.now() / 1000));
-    if (name === '$isoTimestamp') return new Date().toISOString();
-    if (name === '$randomInt') return String(Math.floor(Math.random() * 1000));
-    return scope.get(name)?.value ?? match;
+    return resolveDynamicValue(name) ?? scope.get(name)?.value ?? match;
   });
 }
 

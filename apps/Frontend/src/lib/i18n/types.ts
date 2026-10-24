@@ -329,7 +329,61 @@ export interface I18nDictionary {
       readonly variablesTab: string;
     };
     readonly integrationTitle: string;
-    readonly beautify: string;
+    readonly editor: {
+      readonly format: string;
+      readonly formatInvalidJson: string;
+      readonly formatInvalidXml: string;
+      readonly shortcuts: string;
+      readonly shortcutsTitle: string;
+      readonly shortcutsHint: string;
+      readonly leaveField: string;
+      readonly shortcutList: {
+        readonly format: string;
+        readonly indent: string;
+        readonly outdent: string;
+        readonly copyDown: string;
+        readonly copyUp: string;
+        readonly duplicate: string;
+        readonly moveDown: string;
+        readonly moveUp: string;
+        readonly deleteLine: string;
+        readonly cutLine: string;
+        readonly copyLine: string;
+        readonly complete: string;
+        readonly mock: string;
+      };
+    };
+    readonly mocks: {
+      readonly button: string;
+      readonly title: string;
+      readonly hint: string;
+      readonly search: string;
+      readonly tabValues: string;
+      readonly tabTemplates: string;
+      readonly empty: string;
+      readonly unavailable: string;
+      readonly insert: string;
+      readonly groups: {
+        readonly ids: string;
+        readonly person: string;
+        readonly address: string;
+        readonly contact: string;
+        readonly company: string;
+        readonly finance: string;
+        readonly numbers: string;
+        readonly dates: string;
+        readonly internet: string;
+        readonly text: string;
+        readonly documents: string;
+      };
+      readonly templates: {
+        readonly customer: { readonly name: string; readonly description: string };
+        readonly address: { readonly name: string; readonly description: string };
+        readonly company: { readonly name: string; readonly description: string };
+        readonly order: { readonly name: string; readonly description: string };
+        readonly user: { readonly name: string; readonly description: string };
+      };
+    };
     readonly noBodyHint: string;
     readonly response: string;
     readonly waitingRunner: string;

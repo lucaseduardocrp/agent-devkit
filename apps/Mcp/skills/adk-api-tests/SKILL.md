@@ -20,6 +20,11 @@ ADK workers (`target: "remote"`, public URLs) or on the user's computer through 
    Server mode: `integration_generate { sources, instructions?, baseUrl? }` writes and saves it.
 3. Chain requests like a client: capture tokens and created ids (`captures`) and reuse them as
    `{{variable}}`. Assert status codes, required fields, values and formats from the sources only.
+   Fill bodies with realistic data using mock values, which make a new value on every send:
+   `{{$randomFullName}}`, `{{$randomEmail}}`, `{{$randomCPF}}`, `{{$randomPhoneNumber}}`,
+   `{{$randomCEP}}`, `{{$randomPrice}}`, `{{$guid}}`... (the full list comes with
+   `integration_prepare_generation`). Write numbers and booleans without quotes
+   (`"age": {{$randomAge}}`); keep fixed values where an assertion needs to know the data.
 4. Credentials go in an environment as secret variables (`integration_save_environment`), with an
    empty value: ask the user to type the secret in the web app, never in the chat.
 

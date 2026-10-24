@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 export const ENGINE_FILES = [
   'types.ts',
+  'dynamic-values.ts',
   'http-request.ts',
   'collection-runner.ts',
   'load-profiles.ts',

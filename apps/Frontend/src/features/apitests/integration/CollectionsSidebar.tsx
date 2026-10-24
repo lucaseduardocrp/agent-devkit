@@ -6,6 +6,7 @@ import { IconButton } from '../../../components/ui/icon-button.js';
 import { Input } from '../../../components/ui/input.js';
 import { useI18n } from '../../../lib/i18n/index.js';
 import { cn } from '../../../lib/utils.js';
+import { TreeRowSkeleton } from '../ApiTestSkeletons.js';
 import type { ApiCollection, ApiCollectionSummary, ApiItem } from '../api-test-types.js';
 import { itemMatches } from './integration-model.js';
 import { MethodLabel } from './integration-parts.js';
@@ -383,9 +384,11 @@ export function CollectionsSidebar({
                 </>
               )}
               {open && !collection && (
-                <p className="py-1.5 pl-9 text-xs text-[var(--text-muted)]">
-                  {t('common.loading')}
-                </p>
+                <div role="status" aria-busy="true" aria-label={t('common.loading')}>
+                  <TreeRowSkeleton depth={1} kind="request" name="w-28" />
+                  <TreeRowSkeleton depth={1} kind="request" name="w-36" />
+                  <TreeRowSkeleton depth={1} kind="request" name="w-20" />
+                </div>
               )}
             </div>
           );

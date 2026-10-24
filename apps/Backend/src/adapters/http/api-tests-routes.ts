@@ -14,6 +14,7 @@ import {
   type ApiRunKind,
 } from '../../modules/apitests/domain/api-test.js';
 import { flattenRequests } from '../../modules/apitests/engine/collection-runner.js';
+import { listDynamicValues } from '../../modules/apitests/engine/dynamic-values.js';
 import { LOAD_PROFILE_TYPES } from '../../modules/apitests/engine/types.js';
 import {
   EXPORT_FORMATS,
@@ -109,6 +110,18 @@ export function createApiTestsRouter(service: ApiTestService): Router {
     if (run.kind !== kind) throw new ApplicationError('API_RUN_NOT_FOUND', 'Run not found.', 404);
     return run;
   };
+
+  // ---------- Integration tests: mock values ----------
+
+  // The `{{$randomFullName}}`-style helpers requests can use, each with a fresh sample.
+  router.get(
+    '/integration-tests/dynamic-values',
+    requireAuth,
+    it('view'),
+    wrap((_request, response) => {
+      send(response, 200, { values: listDynamicValues() });
+    }),
+  );
 
   // ---------- Integration tests: collections ----------
 

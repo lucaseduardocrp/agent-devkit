@@ -3,11 +3,63 @@ import { createPortal } from 'react-dom';
 import { Input, type InputProps } from '../../components/ui/input.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { cn } from '../../lib/utils.js';
+import { rankSuggestions, restOfToken, textWidth, typingMatch } from './variable-suggest.js';
 import { VariablesContext, type VariableSuggestion } from './variables-context.js';
 
 const TOKEN = /(\{\{[^{}]*\}\})/;
-/** The variable being typed right before the caret: `{{bas|`. */
-const TYPING = /\{\{\s*([\w.$-]*)$/;
+/** The `{{` suggestions, floating at `left`/`top` of the window. */
+export function VariableSuggestionList({
+  items,
+  index,
+  left,
+  top,
+  onChoose,
+  onHover,
+}: {
+  readonly items: readonly VariableSuggestion[];
+  readonly index: number;
+  readonly left: number;
+  readonly top: number;
+  readonly onChoose: (suggestion: VariableSuggestion) => void;
+  readonly onHover: (index: number) => void;
+}): React.JSX.Element {
+  const { t } = useI18n();
+  return createPortal(
+    <div
+      role="listbox"
+      aria-label={t('apiTests.ui.variables')}
+      className="fixed z-[1000] w-80 overflow-hidden rounded-md border border-border bg-surface-1 py-1 shadow-xl"
+      style={{ left, top }}
+      data-testid="variable-suggestions"
+    >
+      {items.map((item, position) => (
+        <div
+          key={item.name}
+          role="option"
+          aria-selected={position === index}
+          className={cn(
+            'flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs',
+            position === index && 'bg-[var(--fill-ghost-hover)]',
+          )}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            onChoose(item);
+          }}
+          onMouseEnter={() => onHover(position)}
+        >
+          <span className="shrink-0 font-mono text-[var(--text-primary)]">{item.name}</span>
+          <span className="min-w-0 flex-1 truncate text-right font-mono text-[var(--text-muted)]">
+            {item.secret ? '••••••' : (item.value ?? '')}
+          </span>
+          <span className="shrink-0 rounded bg-[var(--surface-2)] px-1.5 py-px text-[10px] text-[var(--text-secondary)]">
+            {t(`apiTests.ui.variableSources.${item.source}`)}
+          </span>
+        </div>
+      ))}
+    </div>,
+    document.body,
+  );
+}
 
 interface Menu {
   readonly start: number;
@@ -15,18 +67,6 @@ interface Menu {
   readonly index: number;
   readonly left: number;
   readonly top: number;
-}
-
-/** Width of `text` in the input's font, to open the suggestions under the `{{`. */
-function textWidth(element: HTMLInputElement, text: string): number {
-  const style = window.getComputedStyle(element);
-  const probe = document.createElement('span');
-  probe.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font:${style.font}`;
-  probe.textContent = text;
-  document.body.appendChild(probe);
-  const width = probe.getBoundingClientRect().width;
-  probe.remove();
-  return width;
 }
 
 export interface VariableInputProps extends Omit<InputProps, 'value' | 'onChange'> {
@@ -53,7 +93,6 @@ export function VariableInput({
   onBlur,
   ...rest
 }: VariableInputProps): React.JSX.Element {
-  const { t } = useI18n();
   const variables = useContext(VariablesContext);
   const input = useRef<HTMLInputElement>(null);
   const backdrop = useRef<HTMLDivElement>(null);
@@ -95,17 +134,10 @@ export function VariableInput({
     const element = input.current;
     if (!element || document.activeElement !== element) return setMenu(null);
     const caret = element.selectionStart ?? element.value.length;
-    const match = TYPING.exec(element.value.slice(0, caret));
-    if (!match) return setMenu(null);
-    const query = match[1]!.toLowerCase();
-    const items = variables
-      .filter((variable) => variable.name.toLowerCase().includes(query))
-      .sort(
-        (a, b) =>
-          Number(!a.name.toLowerCase().startsWith(query)) -
-          Number(!b.name.toLowerCase().startsWith(query)),
-      )
-      .slice(0, 8);
+    const typing = typingMatch(element.value.slice(0, caret));
+    if (!typing) return setMenu(null);
+    const match = { index: typing.start };
+    const items = rankSuggestions(variables, typing.query);
     if (!items.length) return setMenu(null);
     const rect = element.getBoundingClientRect();
     const padding = parseFloat(window.getComputedStyle(element).paddingLeft) || 0;
@@ -128,7 +160,7 @@ export function VariableInput({
     if (!element || !menu) return;
     const caret = element.selectionStart ?? value.length;
     // Completing inside an existing token replaces the rest of it.
-    const after = value.slice(caret).replace(/^[\w.$-]*\s*\}\}/, '');
+    const after = restOfToken(value.slice(caret));
     const inserted = `{{${suggestion.name}}}`;
     onValueChange(value.slice(0, menu.start) + inserted + after);
     setMenu(null);
@@ -230,42 +262,16 @@ export function VariableInput({
           {'  '}
         </span>
       </div>
-      {menu &&
-        createPortal(
-          <div
-            role="listbox"
-            aria-label={t('apiTests.ui.variables')}
-            className="fixed z-[1000] w-80 overflow-hidden rounded-md border border-border bg-surface-1 py-1 shadow-xl"
-            style={{ left: menu.left, top: menu.top }}
-            data-testid="variable-suggestions"
-          >
-            {menu.items.map((item, index) => (
-              <div
-                key={item.name}
-                role="option"
-                aria-selected={index === menu.index}
-                className={cn(
-                  'flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs',
-                  index === menu.index && 'bg-[var(--fill-ghost-hover)]',
-                )}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  choose(item);
-                }}
-                onMouseEnter={() => setMenu({ ...menu, index })}
-              >
-                <span className="shrink-0 font-mono text-[var(--text-primary)]">{item.name}</span>
-                <span className="min-w-0 flex-1 truncate text-right font-mono text-[var(--text-muted)]">
-                  {item.secret ? '••••••' : (item.value ?? '')}
-                </span>
-                <span className="shrink-0 rounded bg-[var(--surface-2)] px-1.5 py-px text-[10px] text-[var(--text-secondary)]">
-                  {t(`apiTests.ui.variableSources.${item.source}`)}
-                </span>
-              </div>
-            ))}
-          </div>,
-          document.body,
-        )}
+      {menu && (
+        <VariableSuggestionList
+          items={menu.items}
+          index={menu.index}
+          left={menu.left}
+          top={menu.top}
+          onChoose={choose}
+          onHover={(index) => setMenu({ ...menu, index })}
+        />
+      )}
     </div>
   );
 }

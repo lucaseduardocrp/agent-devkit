@@ -32,6 +32,15 @@
   --bg-pro: rgba(123, 97, 212, 0.15);
   --fill-ghost-hover: rgba(255, 255, 255, 0.05);
   --fill-ghost-selected: rgba(255, 255, 255, 0.08);
+  /* Syntax colors of request bodies (JSON keys, strings, numbers, XML tags...) */
+  --code-key: #7cb7ff;
+  --code-string: #8fd19e;
+  --code-number: #f0a35e;
+  --code-keyword: #c792ea;
+  --code-punct: #8b8b88;
+  --code-tag: #f07178;
+  --code-attr: #e6c07b;
+  --code-comment: #7a7a77;
   --radius: 8px;
   --radius-sm: 6px;
   --radius-lg: 12px;

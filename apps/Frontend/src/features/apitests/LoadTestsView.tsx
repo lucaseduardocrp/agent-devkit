@@ -23,6 +23,7 @@ import {
   type LoadSummary,
 } from './api-test-types.js';
 import { GenerateDialog } from './ApiTestShared.js';
+import { LoadTestsSkeleton } from './ApiTestSkeletons.js';
 import { downloadBlob } from './api-test-ui.js';
 import { EmptyPane, NameDialog, PaneTabs } from './integration/integration-parts.js';
 import { LoadPlanPane } from './load/LoadPlanPane.js';
@@ -64,6 +65,8 @@ export function LoadTestsView({
   const [naming, setNaming] = useState<'new' | 'rename' | 'duplicate' | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // True until the scenarios, collections and environments are listed.
+  const [loading, setLoading] = useState(true);
   // Picking another collection (or creating a scenario) selects all of its requests once loaded.
   const selectAllOnLoad = useRef(false);
 
@@ -89,7 +92,7 @@ export function LoadTestsView({
   }, [apiClient]);
 
   useEffect(() => {
-    void load();
+    void load().finally(() => setLoading(false));
   }, [load]);
 
   useEffect(() => {
@@ -415,6 +418,9 @@ export function LoadTestsView({
               <LoadPlanPane
                 draft={draft}
                 requests={requests}
+                loadingRequests={
+                  Boolean(draft.collectionId) && collection?.id !== draft.collectionId
+                }
                 preset={preset}
                 readOnly={isReadOnly}
                 onChange={setDraft}
@@ -447,6 +453,8 @@ export function LoadTestsView({
   };
 
   const selectedName = draft?.name ?? '';
+  if (loading) return <LoadTestsSkeleton />;
+
   return (
     <div
       className="-m-5 flex h-[calc(100%+2.5rem)] min-h-[560px] overflow-hidden bg-[var(--surface-0)]"

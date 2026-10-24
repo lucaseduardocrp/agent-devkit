@@ -22,6 +22,7 @@ import type {
   ApiCollection,
   ApiCollectionSummary,
   ApiEnvironment,
+  ApiMockValue,
   ApiRun,
   ApiRunTarget,
   ExportFormat,
@@ -2829,6 +2830,18 @@ export class ApiClient {
     return { fileName, blob: await response.blob() };
   }
 
+  /** The mock values (`{{$randomFullName}}`...) requests can use, each with a fresh sample. */
+  public async listApiMockValues(signal?: AbortSignal): Promise<ApiMockValue[]> {
+    return (
+      await this.apiTestRequest<{ values: ApiMockValue[] }>(
+        'GET',
+        '/integration-tests/dynamic-values',
+        undefined,
+        signal,
+      )
+    ).values;
+  }
+
   public async listApiEnvironments(signal?: AbortSignal): Promise<ApiEnvironment[]> {
     return (
       await this.apiTestRequest<{ environments: ApiEnvironment[] }>(
@@ -2878,9 +2891,7 @@ export class ApiClient {
     filter: { collectionId?: string; scenarioId?: string } = {},
     signal?: AbortSignal,
   ): Promise<ApiRun[]> {
-    const query = new URLSearchParams(
-      Object.entries(filter).filter(([, value]) => Boolean(value)),
-    );
+    const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => Boolean(value)));
     const base = kind === 'integration' ? '/integration-tests/runs' : '/load-tests/runs';
     return (
       await this.apiTestRequest<{ runs: ApiRun[] }>(

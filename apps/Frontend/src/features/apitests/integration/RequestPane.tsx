@@ -1,4 +1,4 @@
-import React, { useId, useState } from 'react';
+import React, { useId, useRef, useState } from 'react';
 import { Button } from '../../../components/ui/button.js';
 import { IconButton } from '../../../components/ui/icon-button.js';
 import { Input } from '../../../components/ui/input.js';
@@ -14,6 +14,7 @@ import {
   ASSERTION_SOURCES,
   HTTP_METHODS,
   type ApiCollection,
+  type ApiMockValue,
   type ApiRequestSpec,
   type Assertion,
   type Capture,
@@ -22,6 +23,8 @@ import {
 } from '../api-test-types.js';
 import { KeyValueEditor } from '../ApiTestShared.js';
 import { VariableInput } from '../VariableInput.js';
+import { CodeEditor, type CodeEditorHandle } from './CodeEditor.js';
+import { CodeEditorToolbar } from './CodeEditorToolbar.js';
 import {
   METHOD_COLOR,
   composeUrl,
@@ -197,46 +200,6 @@ function CodeDialog({
 }
 
 // ---------- editors ----------
-
-/** Text with line numbers, for request bodies. */
-export function CodeArea({
-  value,
-  onChange,
-  readOnly,
-  placeholder,
-  label,
-}: {
-  readonly value: string;
-  readonly onChange: (value: string) => void;
-  readonly readOnly: boolean;
-  readonly placeholder?: string;
-  readonly label: string;
-}): React.JSX.Element {
-  const lines = Math.max(1, value.split('\n').length);
-  return (
-    <div className="flex min-h-[220px] flex-1 overflow-auto rounded-md border border-[var(--border)] bg-[var(--surface-2)] focus-within:border-[var(--border-accent)]">
-      <div
-        aria-hidden="true"
-        className="select-none border-r border-[var(--border)] px-2 py-2 text-right font-mono text-xs leading-5 text-[var(--text-muted)]"
-      >
-        {Array.from({ length: lines }, (_, index) => (
-          <div key={index}>{index + 1}</div>
-        ))}
-      </div>
-      <Textarea
-        aria-label={label}
-        spellCheck={false}
-        wrap="off"
-        className="min-h-full flex-1 resize-none rounded-none border-0 bg-transparent px-3 py-2 font-mono text-xs leading-5 shadow-none focus-visible:ring-0"
-        style={{ height: `${lines * 20 + 16}px` }}
-        value={value}
-        disabled={readOnly}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </div>
-  );
-}
 
 export function AuthEditor({
   auth,
@@ -536,12 +499,20 @@ export function RequestPane({
   request,
   readOnly,
   onChange,
+  mocks = null,
+  mocksFailed = false,
+  onRetryMocks = () => undefined,
 }: {
   readonly request: ApiRequestSpec;
   readonly readOnly: boolean;
   readonly onChange: (request: ApiRequestSpec) => void;
+  /** The mock values the API offers, for the body editor; null while they load. */
+  readonly mocks?: readonly ApiMockValue[] | null;
+  readonly mocksFailed?: boolean;
+  readonly onRetryMocks?: () => void;
 }): React.JSX.Element {
   const { t } = useI18n();
+  const editor = useRef<CodeEditorHandle>(null);
   const [tab, setTab] = useState<RequestTab>(request.body.mode !== 'none' ? 'body' : 'query');
   const set = (patch: Partial<ApiRequestSpec>) => onChange({ ...request, ...patch });
   const pathParams = syncPathParams(request.url, request.pathParams);
@@ -560,19 +531,6 @@ export function RequestPane({
             ? { mode, fields: fieldBody?.fields ?? [] }
             : { mode, content: textBody?.content ?? '' },
     });
-  const beautify = () => {
-    if (!textBody) return;
-    try {
-      set({
-        body: {
-          mode: textBody.mode,
-          content: JSON.stringify(JSON.parse(textBody.content), null, 2),
-        },
-      });
-    } catch {
-      // Not valid JSON yet: leave it as typed.
-    }
-  };
   const enabled = (rows: readonly { enabled?: boolean }[]) =>
     rows.filter((row) => row.enabled !== false).length;
 
@@ -671,19 +629,28 @@ export function RequestPane({
                 <option value="urlencoded">Form URL Encoded</option>
                 <option value="form">Multipart Form</option>
               </Select>
-              {textBody?.mode === 'json' && !readOnly && (
-                <Button variant="ghost" size="sm" onClick={beautify}>
-                  <i className="ti ti-braces" aria-hidden="true" />
-                  {t('apiTests.beautify')}
-                </Button>
+              {textBody && (
+                <CodeEditorToolbar
+                  editor={editor}
+                  language={textBody.mode}
+                  readOnly={readOnly}
+                  mocks={mocks}
+                  mocksFailed={mocksFailed}
+                  onRetryMocks={onRetryMocks}
+                />
               )}
             </div>
             {textBody && (
-              <CodeArea
+              <CodeEditor
+                ref={editor}
                 label={t('apiTests.tabs.body')}
                 value={textBody.content}
+                language={textBody.mode}
                 readOnly={readOnly}
-                placeholder={textBody.mode === 'json' ? '{\n  "name": "{{name}}"\n}' : ''}
+                mocks={mocks}
+                placeholder={
+                  textBody.mode === 'json' ? '{\n  "name": "{{$randomFullName}}"\n}' : ''
+                }
                 onChange={(content) => set({ body: { mode: textBody.mode, content } })}
               />
             )}
