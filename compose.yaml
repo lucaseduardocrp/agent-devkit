@@ -28,6 +28,18 @@ services:
       timeout: 3s
       retries: 20
 
+  # Read cache shared by the API instances (PBI lists, Brain, workspace access).
+  # Losing it only costs a reload from Postgres, so it keeps nothing on disk.
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "volatile-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   api:
     build:
       context: apps/Backend
@@ -36,12 +48,15 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
       LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_PROVIDER: postgres
       DATABASE_URL: *database-url
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       INTEGRATION_ENCRYPTION_KEY: *encryption-key
       OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET:-}
       AUTH_CODE_SECRET: ${AUTH_CODE_SECRET:-}
@@ -65,6 +80,11 @@ services:
       E2E_WORKER_TOKEN: ${E2E_WORKER_TOKEN:-}
       E2E_WORKER_CONCURRENCY: ${E2E_WORKER_CONCURRENCY:-2}
       API_TESTS_ALLOW_PRIVATE_NETWORK: ${API_TESTS_ALLOW_PRIVATE_NETWORK:-false}
+      # Tests of http://localhost reach this computer while ADK is open to it alone (see
+      # apps/Backend/src/shared/host-access.ts): `auto` turns it off when the ports are opened to
+      # the network, so a shared server never exposes the services of the machine it runs on.
+      ADK_HOST_ACCESS: ${ADK_HOST_ACCESS:-auto}
+      ADK_BIND_ADDRESS: ${ADK_BIND_ADDRESS:-127.0.0.1}
       E2E_R2_URL: ${E2E_R2_URL:-}
       E2E_R2_ACCESS_KEY_ID: ${E2E_R2_ACCESS_KEY_ID:-}
       E2E_R2_SECRET_ACCESS_KEY: ${E2E_R2_SECRET_ACCESS_KEY:-}
@@ -118,6 +138,8 @@ services:
       E2E_WORKER_CONCURRENCY: ${E2E_WORKER_CONCURRENCY:-2}
       API_TESTS_ALLOW_PRIVATE_NETWORK: ${API_TESTS_ALLOW_PRIVATE_NETWORK:-false}
       API_TESTS_WORKER_CONCURRENCY: ${API_TESTS_WORKER_CONCURRENCY:-2}
+      ADK_HOST_ACCESS: ${ADK_HOST_ACCESS:-auto}
+      ADK_BIND_ADDRESS: ${ADK_BIND_ADDRESS:-127.0.0.1}
       E2E_R2_URL: ${E2E_R2_URL:-}
       E2E_R2_ACCESS_KEY_ID: ${E2E_R2_ACCESS_KEY_ID:-}
       E2E_R2_SECRET_ACCESS_KEY: ${E2E_R2_SECRET_ACCESS_KEY:-}

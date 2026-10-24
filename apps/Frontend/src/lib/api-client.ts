@@ -91,6 +91,12 @@ import type {
   FieldValue,
 } from '../features/field-mapping/types.js';
 
+/** What this ADK install can do (GET /capabilities). */
+export interface ServerCapabilities {
+  /** A local install: runs on the ADK workers reach http://localhost on the user's computer. */
+  readonly workersReachLocalhost: boolean;
+}
+
 export interface HealthResponse {
   readonly status: 'ok';
   readonly requestId: string;
@@ -1191,6 +1197,14 @@ export class ApiClient {
     }
 
     return body as HealthResponse;
+  }
+
+  /** Servers older than the call answer 404: they have none of the capabilities. */
+  public async getCapabilities(signal?: AbortSignal): Promise<ServerCapabilities> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/capabilities`, { signal });
+    if (!response.ok) return { workersReachLocalhost: false };
+    const body = (await response.json()) as Partial<ServerCapabilities>;
+    return { workersReachLocalhost: body.workersReachLocalhost === true };
   }
 
   public async getReadiness(signal?: AbortSignal): Promise<ReadinessResponse> {

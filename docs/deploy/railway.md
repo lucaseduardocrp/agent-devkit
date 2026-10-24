@@ -14,8 +14,9 @@ the credits can still pay for the maintainer's own Railway usage.
 | Service    | Source                                 | Config file                             | Public | Purpose                                     |
 | ---------- | -------------------------------------- | --------------------------------------- | ------ | ------------------------------------------- |
 | `Postgres` | Railway PostgreSQL database            | —                                       | No     | Data, E2E job queue and test videos         |
+| `Redis`    | Railway Redis database                 | —                                       | No     | Read cache shared by the API instances      |
 | `API`      | this repo, root directory `/apps/Backend`  | `/apps/Backend/railway.json`            | Yes    | REST API; applies migrations on start       |
-| `Worker`   | this repo, root directory `/apps/Backend`  | `/apps/Backend/railway.e2e-worker.json` | No     | Playwright E2E worker; sleeps when idle     |
+| `Worker`   | this repo, root directory `/apps/Backend`  | `/apps/Backend/railway.e2e-worker.json` | No     | Runs E2E, integration and load tests; sleeps when idle |
 | `Web`      | this repo, root directory `/apps/Frontend` | `/apps/Frontend/railway.json`           | Yes    | Web app (static build served by nginx)      |
 | `MCP`      | this repo, root directory `/apps/Mcp`      | `/apps/Mcp/railway.json`                | Yes    | Remote MCP server for claude.ai, Claude Code |
 
@@ -27,6 +28,13 @@ not redeploy the others.
 Service-to-service traffic uses the private network (`RAILWAY_PRIVATE_DOMAIN`). Only the browser
 needs public domains: the web app calls the API from the user's browser, and assistants connect
 to the MCP server from outside Railway.
+
+Railway's private network is IPv6 only. The API and the worker listen on every address, and the
+API's Redis client resolves IPv6 (`family: 0` in `apps/Backend/src/shared/cache.ts`), so the
+plain `${{Redis.REDIS_URL}}` reference works without a `?family=0` suffix.
+
+Redis is optional for the API (without `REDIS_URL` it caches in memory), but the template includes
+it so that scaling the API to more than one replica keeps the cache consistent.
 
 ## Variables
 
@@ -41,6 +49,7 @@ evaluated once, when a user deploys the template, so every deployment gets its o
 | `NODE_ENV`                   | `production`                                              | Runtime mode.                                                               |
 | `DATABASE_PROVIDER`          | `postgres`                                                | Persistence driver. PostgreSQL is the only supported provider.              |
 | `DATABASE_URL`               | `${{Postgres.DATABASE_URL}}`                              | Private connection string of the Postgres service.                          |
+| `REDIS_URL`                  | `${{Redis.REDIS_URL}}`                                    | Private connection string of the Redis service (read cache).                |
 | `INTEGRATION_ENCRYPTION_KEY` | `${{secret(64, "abcdef0123456789")}}`                     | 32-byte hex key that encrypts stored integration secrets. Never change it after the first deploy, or saved integrations can no longer be decrypted. |
 | `OAUTH_STATE_SECRET`         | `${{secret(64)}}`                                         | Signs OAuth state during Google and GitHub sign-in.                         |
 | `AUTH_CODE_SECRET`           | `${{secret(64)}}`                                         | Pepper for account-recovery code hashes.                                    |
@@ -70,6 +79,7 @@ API and the worker.
 | `INTEGRATION_ENCRYPTION_KEY` | `${{API.INTEGRATION_ENCRYPTION_KEY}}`        | Must match the API to read repository and test-management credentials. |
 | `E2E_WORKER_TOKEN`           | `${{secret(48)}}`                            | Token the API presents when it wakes the worker.                    |
 | `E2E_WORKER_CONCURRENCY`     | `2`                                          | Parallel test runs. Each Chromium needs about 0.5 vCPU and 500 MB.  |
+| `API_TESTS_WORKER_CONCURRENCY` | `2`                                        | Integration and load test runs executed at once by the worker.      |
 | `RAILWAY_DOCKERFILE_PATH`    | `Dockerfile.e2e-worker`                      | Builds the Playwright image instead of the API image.               |
 
 No public domain. The worker sleeps when idle (`sleepApplication`), so it costs nothing between
@@ -93,12 +103,13 @@ test runs, and wakes on the API's private request.
 
 ## Creating the template
 
-1. **Build the reference project.** In Railway, create a project, add a PostgreSQL database
-   and four services from this GitHub repository. Name them `Postgres`, `API`, `Worker`, `Web`
-   and `MCP`, and set each root directory, config file and variables as described above.
-   Generate public domains for `API`, `Web` and `MCP` only.
+1. **Build the reference project.** In Railway, create a project, add a PostgreSQL database, a
+   Redis database and four services from this GitHub repository. Name them `Postgres`, `Redis`,
+   `API`, `Worker`, `Web` and `MCP`, and set each root directory, config file and variables as
+   described above. Generate public domains for `API`, `Web` and `MCP` only.
 2. **Check it end to end.** Open the web app, create an account and a workspace, queue an E2E
-   run to confirm the worker wakes, and connect an assistant to `https://<mcp-domain>/mcp`.
+   run and an integration test run to confirm the worker wakes, check that the API log says
+   `[Cache] Using Redis.`, and connect an assistant to `https://<mcp-domain>/mcp`.
 3. **Generate the template.** In the project, open **Settings → Generate Template from
    Project**. In the composer, confirm every variable has a description (copy them from the
    tables above), mark optional variables as optional and upload a square icon with a

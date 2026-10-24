@@ -71,6 +71,11 @@ export interface ApiTestServiceOptions {
   readonly defaultLlm?: LlmPort;
   /** Defaults to INTEGRATION_ENCRYPTION_KEY. */
   readonly encryptionKey?: string;
+  /**
+   * The ADK workers reach the user's localhost: a local install with host access on (see
+   * shared/host-access.ts). Otherwise remote runs to localhost are refused up front.
+   */
+  readonly workersReachLocalhost?: boolean;
 }
 
 export interface GenerationInput {
@@ -391,11 +396,12 @@ export class ApiTestService {
   }
 
   /**
-   * Remote runs execute on the ADK workers, which cannot reach the user's localhost. Catching it
-   * here gives a clear message instead of a run full of connection errors.
+   * Remote runs execute on the ADK workers, which cannot reach the user's localhost unless ADK is
+   * a local install with host access. Catching it here gives a clear message instead of a run full
+   * of connection errors.
    */
-  private static checkReachable(urls: readonly string[], target: ApiRunTarget): void {
-    if (target !== 'remote') return;
+  private checkReachable(urls: readonly string[], target: ApiRunTarget): void {
+    if (target !== 'remote' || this.options.workersReachLocalhost) return;
     for (const url of urls) {
       let host: string;
       try {
@@ -442,7 +448,7 @@ export class ApiTestService {
         detail: 'no request',
       });
     const scope = scopeOf(collection.variables, environment);
-    ApiTestService.checkReachable(
+    this.checkReachable(
       selected.map((entry) => interpolate(entry.request.url, scope)),
       target,
     );
@@ -524,7 +530,7 @@ export class ApiTestService {
       );
     }
     const scope = scopeOf(collection.variables, environment);
-    ApiTestService.checkReachable(
+    this.checkReachable(
       requests.map((entry) => interpolate(entry.request.url, scope)),
       target,
     );

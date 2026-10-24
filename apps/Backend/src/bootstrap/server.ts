@@ -69,6 +69,7 @@ import {
   GoogleOAuthProvider,
 } from '../modules/identity/adapters/oauth-providers.js';
 import type { OAuthProvider } from '../modules/identity/application/oauth-provider.js';
+import { hostAliasFromEnv } from '../shared/host-access.js';
 
 const config = loadRuntimeConfig(process.env);
 // Stop at startup, not at the first saved integration, when INTEGRATION_ENCRYPTION_KEY is missing.
@@ -248,6 +249,7 @@ const app = createApp({
     ? new HttpE2eDispatcher({ url: e2eWorkerUrl, token: e2eWorkerToken })
     : undefined,
   apiTestAllowPrivateNetwork: process.env['API_TESTS_ALLOW_PRIVATE_NETWORK'] === 'true',
+  hostAlias: hostAliasFromEnv(),
   e2eTranscoder: ffmpegPath ? new FfmpegVideoTranscoder({ ffmpegPath }) : null,
   readinessProbes: database
     ? [{ name: `database:${database.provider}`, check: () => database.check() }]

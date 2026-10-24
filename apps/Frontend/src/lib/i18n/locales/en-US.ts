@@ -657,6 +657,8 @@ export const enUS: I18nDictionary = {
     localUrlHint:
       'This local address is only available on your computer. Start a tunnel to connect the application to the tests.',
     publicUrlHint: 'Use a public URL or start a tunnel to connect the application to the tests.',
+    localhostReachable:
+      'ADK runs on this computer, so the ADK workers open this localhost address directly, with its localhost origin.',
     localConnectionTitle: 'Application running locally',
     tunnelSetupOptions: 'Set up the helper or start the tunnel manually',
     connectionCheckTitle: 'Check the connection',

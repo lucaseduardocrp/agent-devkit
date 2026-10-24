@@ -7,9 +7,9 @@ assistants through an MCP server.
 
 ## About Hosting ADK
 
-Hosting ADK means running four services next to a PostgreSQL database: the REST API, the web
-app, a remote MCP server that assistants connect to, and a Playwright worker that executes E2E
-tests. This template wires them together on Railway's private network, generates every secret
+Hosting ADK means running four services next to a PostgreSQL database and a Redis cache: the
+REST API, the web app, a remote MCP server that assistants connect to, and a Playwright worker
+that executes E2E, integration and load tests. This template wires them together on Railway's private network, generates every secret
 for you, applies database migrations on each deploy and puts the worker to sleep when no tests
 are running. After the deploy finishes, open the web app, create your account and workspace,
 and connect your assistant to the MCP URL. Email (SMTP), Google and GitHub sign-in, and
@@ -25,6 +25,7 @@ Cloudflare R2 video storage are optional.
 ## Dependencies for ADK Hosting
 
 - PostgreSQL 17
+- Redis 7
 - Node.js 24
 - Playwright (Chromium)
 - nginx (serves the web app)

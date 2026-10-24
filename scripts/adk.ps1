@@ -37,12 +37,44 @@ function Get-EnvValue([string]$Key, [string]$Default) {
   return $Default
 }
 
-function Test-Docker {
-  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    Fail 'Docker is not installed. Install Docker Desktop: https://docs.docker.com/desktop/setup/install/windows-install/'
-  }
+# Docker Desktop installs for all users (Program Files) or for the current one (AppData).
+function Find-DockerDesktop {
+  $candidates = @(
+    (Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\Docker Desktop.exe')
+  )
+  return $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+}
+
+function Test-DockerEngine {
   docker info *> $null
-  if ($LASTEXITCODE -ne 0) { Fail 'Docker is not running. Start Docker Desktop, wait until it says "Engine running", and try again.' }
+  return $LASTEXITCODE -eq 0
+}
+
+function Test-Docker {
+  $desktop = Find-DockerDesktop
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue) -and -not $desktop) {
+    $download = 'https://docs.docker.com/desktop/setup/install/windows-install/'
+    try { Start-Process $download -ErrorAction Stop } catch {}
+    Fail "Docker Desktop is not installed. Install it from $download (the page was opened), then start ADK again."
+  }
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    # Installed but the terminal predates it: its bin folder is not on PATH yet.
+    $env:Path = "$(Join-Path (Split-Path $desktop) 'resources\bin');$env:Path"
+  }
+  if (-not (Test-DockerEngine)) {
+    if (-not $desktop) { Fail 'Docker is not running. Start Docker, wait until it is ready, and try again.' }
+    Say 'Starting Docker Desktop. The first time it can take a couple of minutes...'
+    Start-Process -FilePath $desktop
+    $deadline = (Get-Date).AddMinutes(4)
+    while (-not (Test-DockerEngine)) {
+      if ((Get-Date) -gt $deadline) {
+        Fail 'Docker Desktop did not start in 4 minutes. Open it, accept any prompt it shows, wait until it says "Engine running", and start ADK again.'
+      }
+      Start-Sleep -Seconds 3
+    }
+    Ok 'Docker is running.'
+  }
   docker compose version *> $null
   if ($LASTEXITCODE -ne 0) { Fail 'Docker Compose v2 is missing. Update Docker Desktop.' }
 }
@@ -127,6 +159,10 @@ switch ($Command.ToLowerInvariant()) {
   'setup' {
     Test-Docker
     Invoke-SetupThenStart
+  }
+  { $_ -in @('stop', 'logs', 'status') -and -not (Test-Path (Join-Path $Root '.env')) } {
+    Say 'ADK is not set up yet. Double-click adk.cmd (or run .\adk) to open the setup wizard.'
+    exit 0
   }
   'stop' {
     Test-Docker

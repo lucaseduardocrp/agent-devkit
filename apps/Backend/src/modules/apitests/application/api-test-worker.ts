@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ApiRun } from '../domain/api-test.js';
 import { executeRun } from '../engine/run-executor.js';
 import type { ApiTestService } from './api-test-service.js';
+import { hostAccessFetch } from '../../../shared/host-access.js';
 import { remoteTargetGuard } from './target-guard.js';
 
 export interface ApiTestWorkerOptions {
@@ -18,6 +19,11 @@ export interface ApiTestWorkerOptions {
   readonly maxAttempts?: number;
   /** Self-hosted setups may test services on their own private network. */
   readonly allowPrivateNetwork?: boolean;
+  /**
+   * Host access of a local install: `localhost` targets go to this alias, the user's computer
+   * (see shared/host-access.ts). Null or absent keeps localhost blocked.
+   */
+  readonly hostAlias?: string | null;
   readonly fetch?: typeof fetch;
   /** Replaces the network guard (tests only). */
   readonly guard?: (url: URL) => Promise<void>;
@@ -34,8 +40,13 @@ export class ApiTestWorker {
   private draining: Promise<void> | null = null;
   private wakeRequested = false;
 
+  /** The requests' fetch: the given one, the host-access one, or the global fetch (undefined). */
+  private readonly fetch: typeof fetch | undefined;
+
   constructor(private readonly options: ApiTestWorkerOptions) {
     this.workerId = options.workerId ?? `api-worker-${randomUUID()}`;
+    this.fetch =
+      options.fetch ?? (options.hostAlias ? hostAccessFetch(options.hostAlias) : undefined);
   }
 
   get status() {
@@ -92,8 +103,11 @@ export class ApiTestWorker {
             : 'stopped',
         guard:
           this.options.guard ??
-          remoteTargetGuard({ allowPrivateNetwork: this.options.allowPrivateNetwork }),
-        ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
+          remoteTargetGuard({
+            allowPrivateNetwork: this.options.allowPrivateNetwork,
+            hostAlias: this.options.hostAlias,
+          }),
+        ...(this.fetch ? { fetch: this.fetch } : {}),
       });
     } catch (error) {
       outcome = {

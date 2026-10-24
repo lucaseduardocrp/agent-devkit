@@ -278,6 +278,26 @@ export function E2eConfigForm({
   const [dragging, setDragging] = useState(false);
   const prdInput = useRef<HTMLInputElement>(null);
   const diffInput = useRef<HTMLInputElement>(null);
+  // In a local install the ADK workers open http://localhost on this computer themselves.
+  const [workersReachLocalhost, setWorkersReachLocalhost] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    // Promise.resolve first: a client or a server without the call means "no".
+    void Promise.resolve()
+      .then(() => apiClient.getCapabilities())
+      .then((capabilities) => {
+        if (active) setWorkersReachLocalhost(capabilities.workersReachLocalhost);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [apiClient]);
+
+  /** A localhost target only the local runner or a tunnel can open; null when the workers can. */
+  const unreachableLocalTarget = (value: string) =>
+    workersReachLocalhost ? null : localAppOrigin(value);
 
   useEffect(() => {
     let active = true;
@@ -601,10 +621,11 @@ export function E2eConfigForm({
     const next = new Set<FieldError>();
     if (!form.name.trim()) next.add('name');
     if (!form.agentId) next.add('agentId');
-    // Only a runner on the user's computer can open localhost addresses.
+    // Only a runner on the user's computer can open localhost addresses (or the workers of a
+    // local install).
     if (
       !isHttpUrl(form.baseUrl) ||
-      (form.executionTarget === 'remote' && localAppOrigin(form.baseUrl))
+      (form.executionTarget === 'remote' && unreachableLocalTarget(form.baseUrl))
     )
       next.add('baseUrl');
     if (
@@ -908,22 +929,26 @@ export function E2eConfigForm({
           />
           {fieldError(
             'baseUrl',
-            localAppOrigin(form.baseUrl) ? 'e2e.validationReachableUrl' : 'e2e.validationUrl',
+            unreachableLocalTarget(form.baseUrl)
+              ? 'e2e.validationReachableUrl'
+              : 'e2e.validationUrl',
           )}
           <p className="text-xs text-[var(--text-muted)]">
             {t(
               form.executionTarget === 'local'
                 ? 'e2e.localRunnerUrlHint'
-                : localAppOrigin(form.baseUrl)
+                : unreachableLocalTarget(form.baseUrl)
                   ? 'e2e.localUrlHint'
-                  : 'e2e.publicUrlHint',
+                  : localAppOrigin(form.baseUrl)
+                    ? 'e2e.localhostReachable'
+                    : 'e2e.publicUrlHint',
             )}
           </p>
         </div>
 
         {form.executionTarget === 'local' ? (
           <E2eLocalRunnerPanel apiClient={apiClient} {...(creationId ? { creationId } : {})} />
-        ) : localAppOrigin(form.baseUrl) ? (
+        ) : unreachableLocalTarget(form.baseUrl) ? (
           <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4">
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-[var(--surface-1)] p-3">
               <p className="min-w-0 flex-1 text-xs text-[var(--text-secondary)]">

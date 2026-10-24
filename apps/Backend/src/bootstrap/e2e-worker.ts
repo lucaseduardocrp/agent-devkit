@@ -31,6 +31,7 @@ import { createE2eWorkerApp } from '../adapters/http/e2e-worker-app.js';
 import { PrismaApiTestStore } from '../modules/apitests/adapters/prisma-api-test-store.js';
 import { ApiTestService } from '../modules/apitests/application/api-test-service.js';
 import { ApiTestWorker } from '../modules/apitests/application/api-test-worker.js';
+import { hostAliasFromEnv } from '../shared/host-access.js';
 
 /**
  * On-demand E2E worker. Shares the API's database (queue, runs, videos) and integrations,
@@ -61,6 +62,10 @@ const agents = new AgentService({
   dynamicProviderFactory: providers,
 });
 const ffmpegPath = resolveFfmpegPath();
+// A local install reaches the user's localhost through Docker's host alias (shared/host-access.ts).
+const hostAlias = hostAliasFromEnv();
+if (hostAlias)
+  console.log(`[E2eWorker] localhost targets go to this computer through ${hostAlias}.`);
 const store = new PrismaE2eStore(database.client);
 // Same choice as the API (R2 or Postgres), so videos recorded here are served there.
 const artifacts = createE2eArtifactStore(process.env, database.client).store;
@@ -72,7 +77,7 @@ const worker = new E2eWorker({
     store,
     artifacts,
     scripts: new GitScriptRepository(integrations),
-    runner: new PlaywrightE2eRunner(),
+    runner: new PlaywrightE2eRunner({ hostAlias }),
     // Runs set to execute locally wait here while the user's `devkit runner` drives the browser.
     localRunner: new LocalE2eRunner({
       tasks: new PrismaE2eRunnerTaskStore(database.client),
@@ -94,6 +99,7 @@ const apiTests = new ApiTestWorker({
   service: new ApiTestService({ store: new PrismaApiTestStore(database.client) }),
   concurrency: Number(process.env['API_TESTS_WORKER_CONCURRENCY']) || 2,
   allowPrivateNetwork: process.env['API_TESTS_ALLOW_PRIVATE_NETWORK'] === 'true',
+  hostAlias,
   onIdle: () => console.log('[ApiTestWorker] Queue empty; idle until the next wake.'),
 });
 const workers = {

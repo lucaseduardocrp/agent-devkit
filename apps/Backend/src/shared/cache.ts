@@ -79,6 +79,9 @@ export class RedisCacheStore implements CacheStore {
 
   constructor(url: string) {
     this.client = new Redis(url, {
+      // Looks up IPv4 and IPv6: Railway's private network (redis.railway.internal) is IPv6 only,
+      // and ioredis would otherwise resolve IPv4 alone.
+      family: 0,
       maxRetriesPerRequest: 1,
       enableOfflineQueue: false,
       connectTimeout: 2_000,

@@ -81,7 +81,7 @@ const enUS = {
   'access.host.hint': 'Keep “localhost” if only you will use ADK, on this computer.',
   'access.network.title': 'Allow access from other devices',
   'access.network.text':
-    'Opens the ports on every network interface, so colleagues on your network can use ADK. Enter this computer’s IP address or host name above.',
+    'Opens the ports on every network interface, so colleagues on your network can use ADK. Enter this computer’s IP address or host name above. Tests of http://localhost then no longer reach this computer, so it does not expose its services to others.',
   'access.ports.title': 'Ports',
   'access.ports.text': 'Change a port only if another program already uses it.',
   'access.port.web': 'Web app',
@@ -346,7 +346,7 @@ const ptBR = {
   'access.host.hint': 'Mantenha “localhost” se só você for usar o ADK, neste computador.',
   'access.network.title': 'Permitir acesso de outros dispositivos',
   'access.network.text':
-    'Abre as portas em todas as interfaces de rede, para que colegas na sua rede possam usar o ADK. Informe acima o IP ou o nome deste computador.',
+    'Abre as portas em todas as interfaces de rede, para que colegas na sua rede possam usar o ADK. Informe acima o IP ou o nome deste computador. Os testes de http://localhost deixam de alcançar este computador, para não expor os serviços dele aos outros.',
   'access.ports.title': 'Portas',
   'access.ports.text': 'Só mude uma porta se outro programa já estiver usando.',
   'access.port.web': 'App web',

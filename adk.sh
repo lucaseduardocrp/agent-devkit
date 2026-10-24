@@ -29,11 +29,35 @@ env_value() {
   printf '%s' "${value:-$2}"
 }
 
+# Starts Docker Desktop when it is installed but not running; false when there is nothing to start.
+start_docker_desktop() {
+  if [ "$(uname)" = Darwin ] && open -Ra Docker >/dev/null 2>&1; then
+    open -a Docker
+  elif command -v systemctl >/dev/null 2>&1 && systemctl --user cat docker-desktop >/dev/null 2>&1; then
+    systemctl --user start docker-desktop
+  else
+    return 1
+  fi
+}
+
 check_docker() {
-  command -v docker >/dev/null 2>&1 ||
-    fail "Docker is not installed. Install Docker Desktop: https://docs.docker.com/get-docker/"
-  docker info >/dev/null 2>&1 ||
-    fail "Docker is not running. Start Docker Desktop (or the Docker service) and try again."
+  if ! command -v docker >/dev/null 2>&1; then
+    open_url https://docs.docker.com/get-docker/
+    fail "Docker is not installed. Install Docker Desktop from https://docs.docker.com/get-docker/ (the page was opened), then start ADK again."
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    start_docker_desktop ||
+      fail "Docker is not running. Start Docker Desktop (or the Docker service) and try again."
+    say "Starting Docker Desktop. The first time it can take a couple of minutes…"
+    local waited=0
+    until docker info >/dev/null 2>&1; do
+      [ "$waited" -lt 240 ] ||
+        fail "Docker Desktop did not start in 4 minutes. Open it, accept any prompt it shows, and start ADK again."
+      sleep 3
+      waited=$((waited + 3))
+    done
+    ok "Docker is running."
+  fi
   docker compose version >/dev/null 2>&1 ||
     fail "Docker Compose v2 is missing. Update Docker: https://docs.docker.com/compose/install/"
 }
@@ -121,6 +145,11 @@ setup_then_start() {
 
 command="${1:-start}"
 [ $# -gt 0 ] && shift
+
+if [[ "$command" =~ ^(stop|logs|status)$ ]] && [ ! -f .env ]; then
+  say "ADK is not set up yet. Run ./adk.sh (or double-click ADK.command on macOS) to open the setup wizard."
+  exit 0
+fi
 
 case "$command" in
   start)

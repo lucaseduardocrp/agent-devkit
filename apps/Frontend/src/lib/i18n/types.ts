@@ -746,6 +746,7 @@ export interface I18nDictionary {
     readonly reachableWarning: string;
     readonly localhostHint: string;
     readonly localUrlHint: string;
+    readonly localhostReachable: string;
     readonly publicUrlHint: string;
     readonly localConnectionTitle: string;
     readonly tunnelSetupOptions: string;

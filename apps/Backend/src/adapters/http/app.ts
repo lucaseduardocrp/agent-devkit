@@ -201,6 +201,11 @@ export interface AppOptions {
   readonly apiTestDispatcher?: ApiTestDispatcher;
   /** Lets in-process remote runs reach private networks (self-hosted, single box). */
   readonly apiTestAllowPrivateNetwork?: boolean;
+  /**
+   * Host access of a local install: in-process runs (API tests and E2E) reach `localhost` targets
+   * on the user's computer through this alias (see shared/host-access.ts).
+   */
+  readonly hostAlias?: string | null;
   readonly e2eWorkerConcurrency?: number;
   /** Converts recordings to MP4; the server wires FFmpeg, tests usually omit it. */
   readonly e2eTranscoder?: E2eVideoTranscoder | null;
@@ -440,7 +445,7 @@ export function createApp(options: AppOptions = {}) {
       concurrency: options.e2eWorkerConcurrency,
       executor: new E2eExecutor({
         store: e2eStore,
-        runner: options.e2eRunner ?? new PlaywrightE2eRunner(),
+        runner: options.e2eRunner ?? new PlaywrightE2eRunner({ hostAlias: options.hostAlias }),
         localRunner: new LocalE2eRunner({ tasks: e2eRunnerTasks, artifacts: e2eArtifacts }),
         transcoder: options.e2eTranscoder,
         scripts: e2eScripts,
@@ -490,6 +495,7 @@ export function createApp(options: AppOptions = {}) {
   let apiTestDispatcher = options.apiTestDispatcher;
   const apiTestService = new ApiTestService({
     store: options.apiTestStore ?? new InMemoryApiTestStore(),
+    workersReachLocalhost: Boolean(options.hostAlias),
     sources: new WorkspaceSourceLoader({
       tests: audited.tests,
       suites: testSuites,
@@ -506,6 +512,7 @@ export function createApp(options: AppOptions = {}) {
     const worker = new ApiTestWorker({
       service: apiTestService,
       allowPrivateNetwork: options.apiTestAllowPrivateNetwork,
+      hostAlias: options.hostAlias,
     });
     apiTestDispatcher = {
       wake: () => {
@@ -547,6 +554,12 @@ export function createApp(options: AppOptions = {}) {
     const locale = response.locals.locale as SupportedLocale;
     const context = createRequestContext(requestId, locale);
     response.status(200).json(getHealthStatus(context));
+  });
+
+  // What this server can do that the web app adapts to. Public: it describes the install only.
+  app.get('/capabilities', (_request, response) => {
+    // A local install with host access: runs on the ADK workers reach the user's localhost.
+    response.status(200).json({ workersReachLocalhost: Boolean(options.hostAlias) });
   });
 
   app.get('/health/live', (_request, response) => {

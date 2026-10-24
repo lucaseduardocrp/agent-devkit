@@ -1,6 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { ApplicationError } from '../../../shared/errors.js';
+import { isLoopbackName } from '../../../shared/host-access.js';
 
 // The ADK workers run inside the ADK infrastructure. Requests from a run must not reach that
 // infrastructure itself (loopback, the cloud metadata endpoint) and, unless the self-hosted
@@ -60,18 +61,26 @@ export function isPrivateAddress(address: string): boolean {
  * followed by fetch without a second check, so the guard is a safety net, not a sandbox: the
  * network policy of the worker remains the real boundary.
  */
-export function remoteTargetGuard(options: { readonly allowPrivateNetwork?: boolean } = {}) {
+export function remoteTargetGuard(
+  options: {
+    readonly allowPrivateNetwork?: boolean;
+    /**
+     * Host access of a local install (see shared/host-access.ts): `localhost` goes to this alias,
+     * which is the user's own computer, and the private network it sits on is reachable too.
+     */
+    readonly hostAlias?: string | null;
+  } = {},
+) {
   const cache = new Map<string, Promise<void>>();
+  const allowPrivateNetwork = options.allowPrivateNetwork || Boolean(options.hostAlias);
   const check = async (hostname: string) => {
+    if (options.hostAlias && isLoopbackName(hostname)) return;
     if (isBlockedHostname(hostname)) throw blocked(hostname);
     const addresses = isIP(hostname.replace(/^\[|\]$/g, ''))
       ? [hostname.replace(/^\[|\]$/g, '')]
       : (await lookup(hostname, { all: true })).map((entry) => entry.address);
     for (const address of addresses) {
-      if (
-        isLoopbackOrLinkLocal(address) ||
-        (!options.allowPrivateNetwork && isPrivateAddress(address))
-      ) {
+      if (isLoopbackOrLinkLocal(address) || (!allowPrivateNetwork && isPrivateAddress(address))) {
         throw blocked(hostname);
       }
     }

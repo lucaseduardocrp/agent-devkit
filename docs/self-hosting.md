@@ -58,6 +58,7 @@ do, restart with `adk` / `./adk.sh` afterwards.
 | `E2E_WORKER_CONCURRENCY`        | `2`                      | Parallel test runs (about 0.5 CPU and 500 MB each)             |
 | `API_TESTS_WORKER_CONCURRENCY`  | `2`                      | Integration and load test runs executed at once by the worker  |
 | `API_TESTS_ALLOW_PRIVATE_NETWORK` | `false`                | Lets remote API/load tests reach private networks (10.x, 192.168.x); loopback and the metadata endpoint stay blocked |
+| `ADK_HOST_ACCESS`               | `auto`                   | Tests of `http://localhost` reach this computer. `auto`: on while the ports listen on `127.0.0.1` only, off when they are open to the network; `true` or `false` force it |
 | `E2E_R2_URL`, `E2E_R2_ACCESS_KEY_ID`, `E2E_R2_SECRET_ACCESS_KEY`, `E2E_R2_PREFIX` | *(empty)* | Store test videos in Cloudflare R2 instead of PostgreSQL |
 | `ADK_HUB_URL`                   | public ADK Hub           | Another hub index for the Hub tab of the Agents page (e.g. a mirror) |
 | `ADK_HUB_GITHUB_TOKEN`          | *(empty)*                | Read-only GitHub token; lifts the limit of 60 anonymous calls an hour |
@@ -79,18 +80,32 @@ By default every port listens on `127.0.0.1`, so only this computer can open ADK
   in, so the next start rebuilds it automatically.
 
 claude.ai and other remote MCP connectors reach the MCP server from the internet, so they need
-its public HTTPS URL. Assistants on this computer can use the `devkit` CLI instead, which needs
-no open port.
+its public HTTPS URL. Assistants on this computer connect to `http://localhost:3333/mcp` (the MCP
+server container), or use the optional `devkit` CLI.
+
+Opening the ports to the network also turns off [host access](#testing-apps-that-run-on-your-computer),
+so a shared server does not let its users reach the services of the machine it runs on.
 
 ## Testing apps that run on your computer
 
-Inside the E2E worker, `localhost` is the worker itself. Use
-`http://host.docker.internal:<port>` as the test target, and start your app on an interface
-Docker can reach (for Angular CLI, `ng serve --host 0.0.0.0`). For apps that only work on their
-original `localhost` origin, the `devkit runner` command runs the tests in your own browser; see
-[apps/Cli/README.md](../apps/Cli/README.md).
+While ADK is reachable from this computer only (the default), integration, load and E2E tests of
+`http://localhost:<port>` (or `127.0.0.1`) run on the ADK workers and reach the apps running on
+this computer, even ones listening on `127.0.0.1` only. Nothing else is needed: no tunnel, no
+`devkit runner`, no `--host 0.0.0.0`.
 
-Integrations that call services on your computer, such as Ollama, also use
+The workers send `localhost` to Docker's `host.docker.internal` without changing the request:
+API requests still say `Host: localhost` and use the `localhost` TLS name, and the browser keeps
+the `http://localhost:<port>` origin, so cookies, CORS, sign-in redirects and dev servers that only
+accept `localhost` behave as in your own browser. The code is in
+`apps/Backend/src/shared/host-access.ts`; `ADK_HOST_ACCESS` (see the settings reference) turns it
+on or off.
+
+With access from other devices turned on, host access is off: use
+`http://host.docker.internal:<port>` as the target and start your app on an interface Docker can
+reach, or run the tests in your own browser with `devkit runner` (see
+[apps/Cli/README.md](../apps/Cli/README.md)).
+
+Integrations that call services on your computer, such as Ollama, use
 `http://host.docker.internal:<port>`.
 
 ## Backups

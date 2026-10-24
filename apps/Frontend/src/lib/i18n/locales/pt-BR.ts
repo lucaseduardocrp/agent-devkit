@@ -659,6 +659,8 @@ export const ptBR: I18nDictionary = {
     localUrlHint:
       'O endereço local está acessível apenas neste computador. Inicie um túnel para conectar a aplicação aos testes.',
     publicUrlHint: 'Use uma URL pública ou inicie um túnel para conectar a aplicação aos testes.',
+    localhostReachable:
+      'O ADK roda neste computador, então os workers do ADK abrem este endereço localhost diretamente, com a origem localhost.',
     localConnectionTitle: 'Aplicação rodando localmente',
     tunnelSetupOptions: 'Configurar o auxiliar ou iniciar o túnel manualmente',
     connectionCheckTitle: 'Verifique a conexão',

@@ -7,15 +7,21 @@ workspaces, and exposes all of it to Claude, Codex and other assistants through 
 ## Quick start
 
 All you need is [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker
-Engine with Compose v2) running, and about 5 GB of free disk space.
+Engine with Compose v2) and about 5 GB of free disk space. Nothing else is installed on your
+computer: the database, the API, the web app, the E2E worker, the MCP server and the test inbox
+all run in containers. No terminal is needed.
 
 1. **Download ADK**: `git clone https://github.com/lucaseduardocrp/agent-devkit.git`, or use
    **Code → Download ZIP** on GitHub and extract it.
-2. **Start it** from the ADK folder:
+2. **Double-click the launcher** in the ADK folder:
 
-   | Windows                                             | macOS / Linux |
-   | --------------------------------------------------- | ------------- |
-   | Double-click `adk.cmd` (or run `.\adk` in a terminal) | `./adk.sh`    |
+   | Windows   | macOS         | Linux                         |
+   | --------- | ------------- | ----------------------------- |
+   | `adk.cmd` | `ADK.command` | `adk.sh` (or run `./adk.sh`) |
+
+   If Docker Desktop is installed but closed, the launcher opens it and waits for it; if it is
+   not installed, the launcher opens the download page. On macOS, a copy downloaded as a ZIP may
+   need **right-click → Open** the first time.
 
 3. **Configure it in your browser.** The setup wizard opens by itself at `http://localhost:4000`.
    Secure keys are generated for you, so the defaults are enough: click **Use recommended
@@ -24,7 +30,20 @@ Engine with Compose v2) running, and about 5 GB of free disk space.
 
 ![The ADK setup wizard](docs/images/setup-wizard.png)
 
-Then open `http://localhost:8080`, create your account and your first workspace.
+Then open `http://localhost:8080`, create your account and your first workspace, and connect your
+assistant to the MCP server at `http://localhost:3333/mcp` (see
+[Using ADK from an AI assistant](#using-adk-from-an-ai-assistant)).
+
+From then on, double-clicking the launcher starts ADK in seconds. To stop it without a terminal,
+use the **Containers** screen of Docker Desktop: the `agent-devkit` group has stop and start
+buttons, and your data is kept.
+
+**Testing apps on your computer.** Integration, load and E2E tests of `http://localhost:<port>`
+reach the apps running on this computer, even though the tests run in containers: requests keep
+`Host: localhost` and the browser keeps the localhost origin, so dev servers, cookies, CORS and
+sign-in work as in your own browser. This is on while ADK is reachable from this computer only;
+allowing access from other devices in the wizard turns it off, so a shared server never exposes
+the services of the machine it runs on.
 
 ### Everyday commands
 
@@ -48,9 +67,13 @@ The launchers are thin wrappers around Docker Compose. Without them: run
 | Web app    | `http://localhost:8080`      | Always on                                               |
 | API        | `http://localhost:3000`      | Always on; applies database migrations when it starts   |
 | PostgreSQL | internal only                | Always on; data lives in the `agent-devkit_database-data` volume |
-| E2E worker | internal only                | Optional: Playwright and Chromium, about 2 GB           |
-| MCP server | `http://localhost:3333/mcp`  | Optional: remote MCP for claude.ai and other assistants |
-| Mailpit    | `http://localhost:8025`      | Optional: local inbox that catches password-recovery emails |
+| Redis      | internal only                | Always on; read cache, keeps nothing on disk            |
+| E2E worker | internal only                | On by default: Playwright and Chromium (about 2 GB); also runs integration and load tests |
+| MCP server | `http://localhost:3333/mcp`  | On by default: MCP for Claude Code, Codex, VS Code and other assistants |
+| Mailpit    | `http://localhost:8025`      | On by default: local inbox that catches password-recovery emails |
+
+The recommended settings turn on every service; the wizard can turn the E2E worker, the MCP
+server and Mailpit off.
 
 Every port, the services to run, email (SMTP), Google and GitHub sign-in, video storage and
 access from other devices are set in the wizard and saved to `.env` in the ADK folder. Keep a
@@ -62,14 +85,14 @@ troubleshooting.
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/agent-devkit)
 
-The button creates a complete ADK in your Railway account: PostgreSQL, the API, the web app, the
-remote MCP server and the E2E worker, with every secret generated and the services connected over
-Railway's private network. When the deploy finishes:
+The button creates a complete ADK in your Railway account: PostgreSQL, Redis, the API, the web
+app, the remote MCP server and the test worker (E2E, integration and load), with every secret
+generated and the services connected over Railway's private network. When the deploy finishes:
 
 1. Open the `Web` service's URL and create your account and first workspace.
-2. Connect your assistant: `npm install -g @agent-devkit/cli`, then
-   `devkit login --api-url https://<API service URL>`. Remote connectors such as claude.ai use
-   `https://<MCP service URL>/mcp` directly.
+2. Connect your assistant to `https://<MCP service URL>/mcp` (claude.ai, Claude Code, Codex and
+   other MCP clients sign in through OAuth). The CLI is optional:
+   `npm install -g @agent-devkit/cli`, then `devkit login --api-url https://<API service URL>`.
 3. Optional: set `SMTP_URL` on the `API` service for password-recovery emails, and the Google or
    GitHub OAuth variables for social sign-in.
 
@@ -78,7 +101,21 @@ The services, variables and how the template is maintained are documented in
 
 ## Using ADK from an AI assistant
 
-Install the CLI and log in to your ADK API:
+With ADK running on your computer, point your assistant to the MCP server in its container,
+`http://localhost:3333/mcp`; it asks you to sign in to ADK the first time. Nothing has to be
+installed:
+
+- **Claude Code:** `claude mcp add --transport http adk http://localhost:3333/mcp`, then `/mcp`.
+- **VS Code, Cursor and other MCP clients:** add an HTTP server with that URL in their MCP
+  settings.
+- **Codex:** `url = "http://localhost:3333/mcp"` under `[mcp_servers.adk]`, with an access token
+  from your ADK profile in `bearer_token_env_var`.
+
+claude.ai on the web reaches only public addresses, so it needs ADK behind a public HTTPS URL
+(see the [self-hosting guide](docs/self-hosting.md)).
+
+The CLI is optional. It installs the ADK skills in your assistant's skills folder, runs E2E tests
+in a browser on your desktop and opens tunnels to share local apps with a remote ADK:
 
 ```bash
 npm install -g @agent-devkit/cli

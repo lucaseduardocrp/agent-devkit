@@ -8,6 +8,7 @@ on:
       - 'setup/**'
       - 'compose.yaml'
       - 'adk.sh'
+      - 'ADK.command'
       - 'adk.cmd'
       - 'scripts/adk.ps1'
       - 'apps/*/Dockerfile*'
@@ -19,6 +20,7 @@ on:
       - 'setup/**'
       - 'compose.yaml'
       - 'adk.sh'
+      - 'ADK.command'
       - 'adk.cmd'
       - 'scripts/adk.ps1'
       - 'apps/*/Dockerfile*'
@@ -40,6 +42,7 @@ jobs:
       - name: Check the launchers
         run: |
           bash -n adk.sh
+          bash -n ADK.command
           pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/adk.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
       - name: Validate the Compose files
         run: |

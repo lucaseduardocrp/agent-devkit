@@ -127,10 +127,15 @@ function setup(
     runners?: unknown[];
     initialSavedCases?: { suiteId?: string; planId?: string; caseIds?: string[] };
     savedPlans?: unknown[] | Error | Promise<unknown[]>;
+    /** A local install: the ADK workers open http://localhost on the user's computer. */
+    workersReachLocalhost?: boolean;
   } = {},
 ) {
   const client = {
     apiUrl: 'https://api.adk.example.com',
+    getCapabilities: vi
+      .fn()
+      .mockResolvedValue({ workersReachLocalhost: options.workersReachLocalhost ?? false }),
     getE2eRunners: vi.fn().mockResolvedValue(options.runners ?? []),
     getAgents: vi.fn(() =>
       options.agents instanceof Error
@@ -1177,5 +1182,39 @@ describe('E2eSavedCasePicker', () => {
     setup({ initialSavedCases: { suiteId: 'root' }, savedPlans: failing.promise }).view.unmount();
     failing.reject('gone');
     await act(() => Promise.resolve());
+  });
+});
+
+describe('E2eConfigForm in a local install', () => {
+  it('lets the ADK workers open a localhost target, without a tunnel or the local runner', async () => {
+    const { view, client } = setup({ workersReachLocalhost: true });
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    fireEvent.change(view.getByLabelText('URL base'), {
+      target: { value: 'http://localhost:5173/login' },
+    });
+    expect(
+      await view.findByText(
+        'O ADK roda neste computador, então os workers do ADK abrem este endereço localhost diretamente, com a origem localhost.',
+      ),
+    ).toBeInTheDocument();
+    expect(view.queryByText('Aplicação rodando localmente')).toBeNull();
+  });
+
+  it('still asks for a tunnel or the local runner when the workers cannot reach localhost', async () => {
+    const { view, client } = setup({ workersReachLocalhost: false });
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    fireEvent.change(view.getByLabelText('URL base'), {
+      target: { value: 'http://localhost:5173/login' },
+    });
+    expect(view.getByText('Aplicação rodando localmente')).toBeInTheDocument();
+  });
+
+  it('treats a server without the capabilities call as one whose workers cannot', async () => {
+    const { view, client } = setup();
+    client.getCapabilities.mockRejectedValue(new Error('404'));
+    fireEvent.change(view.getByLabelText('URL base'), {
+      target: { value: 'http://localhost:5173/login' },
+    });
+    expect(view.getByText('Aplicação rodando localmente')).toBeInTheDocument();
   });
 });
