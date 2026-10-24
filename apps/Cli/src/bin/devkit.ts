@@ -35,6 +35,7 @@ import {
   runnerHome,
 } from '../e2e/local-runner/playwright-setup.js';
 import { runLocally } from '../e2e/local-runner/run-command.js';
+import { ApiTestRunnerAgent, formatApiRunnerEvent } from '../apitests/runner-agent.js';
 import { runAgentsCommand } from '../hub/agents-command.js';
 import { runHubCommand } from '../hub/command.js';
 import { HubInstaller } from '../hub/install.js';
@@ -201,13 +202,22 @@ async function main(): Promise<void> {
       return;
     }
     case 'runner': {
-      const { agent, signal } = await localAgent(config, {
+      const { api, agent, signal, identity } = await localAgent(config, {
         ...(values['base-url'] ? { baseUrl: values['base-url'] } : {}),
       });
       say(
-        '[devkit] Waiting for E2E tests set to run on this computer. Keep this terminal open; press Ctrl+C to stop.',
+        '[devkit] Waiting for E2E, API and load tests set to run on this computer. Keep this terminal open; press Ctrl+C to stop.',
       );
-      await agent.serve({ ...(values.run ? { creationId: values.run } : {}), signal });
+      // API and load test runs need no browser; they share the session and the identity.
+      const apiTests = new ApiTestRunnerAgent({
+        api,
+        identity,
+        onEvent: (event) => say(formatApiRunnerEvent(event)),
+      });
+      await Promise.all([
+        agent.serve({ ...(values.run ? { creationId: values.run } : {}), signal }),
+        values.run ? Promise.resolve() : apiTests.serve({ signal }),
+      ]);
       return;
     }
     case 'e2e': {
@@ -332,7 +342,7 @@ async function localAgent(config: McpConfig, overrides: LocalOverrides) {
   say(
     `[devkit] Runner "${identity.name}" signed in${userName ? ` as ${userName}` : ''} at ${config.apiUrl}${workspaceId ? ` (workspace ${workspaceId})` : ''}.`,
   );
-  return { api, agent, signal: controller.signal };
+  return { api, agent, identity, signal: controller.signal };
 }
 
 main().catch((error: unknown) => {

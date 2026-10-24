@@ -34,6 +34,8 @@ const titleKeys: Record<NavTab, TranslationKey> = {
   design: 'nav.design',
   testplans: 'nav.testPlans',
   e2e: 'nav.e2e',
+  integrationTests: 'nav.integrationTests',
+  loadTests: 'nav.loadTests',
   connect: 'nav.connect',
   settings: 'nav.settings',
   workspaces: 'nav.workspaces',

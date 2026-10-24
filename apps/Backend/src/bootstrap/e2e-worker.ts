@@ -28,6 +28,9 @@ import { E2eWorker } from '../modules/e2e/application/e2e-worker.js';
 import { E2eRunReporter } from '../modules/e2e/application/e2e-reporter.js';
 import { IntegrationTestManagementResolver } from '../modules/test-management/adapters/integration-test-management-resolver.js';
 import { createE2eWorkerApp } from '../adapters/http/e2e-worker-app.js';
+import { PrismaApiTestStore } from '../modules/apitests/adapters/prisma-api-test-store.js';
+import { ApiTestService } from '../modules/apitests/application/api-test-service.js';
+import { ApiTestWorker } from '../modules/apitests/application/api-test-worker.js';
 
 /**
  * On-demand E2E worker. Shares the API's database (queue, runs, videos) and integrations,
@@ -86,15 +89,32 @@ const worker = new E2eWorker({
   onIdle: () => console.log('[E2eWorker] Queue empty; idle until the next wake.'),
 });
 
-const server = createE2eWorkerApp(worker, token).listen(config.port, () => {
+// Remote integration and load runs share the worker host and its wake call.
+const apiTests = new ApiTestWorker({
+  service: new ApiTestService({ store: new PrismaApiTestStore(database.client) }),
+  concurrency: Number(process.env['API_TESTS_WORKER_CONCURRENCY']) || 2,
+  allowPrivateNetwork: process.env['API_TESTS_ALLOW_PRIVATE_NETWORK'] === 'true',
+  onIdle: () => console.log('[ApiTestWorker] Queue empty; idle until the next wake.'),
+});
+const workers = {
+  wake: () => {
+    worker.wake();
+    apiTests.wake();
+  },
+  get status() {
+    return { ...worker.status, apiTests: apiTests.status };
+  },
+};
+
+const server = createE2eWorkerApp(workers, token).listen(config.port, () => {
   console.log(`E2E worker ${worker.workerId} listening on port ${config.port}`);
   // Jobs enqueued while this instance was asleep (or a lost wake call) run right away.
-  worker.wake();
+  workers.wake();
 });
 
 async function shutdown(): Promise<void> {
   server.close();
-  await worker.idle();
+  await Promise.all([worker.idle(), apiTests.idle()]);
   await database.close();
 }
 

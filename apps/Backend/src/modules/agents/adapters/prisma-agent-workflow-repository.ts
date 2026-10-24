@@ -32,6 +32,8 @@ const workflowToolsets = new Set<AgentWorkflowToolset>([
   'design',
   'e2e',
   'releasenotes',
+  'integrationtests',
+  'loadtests',
   'audit',
   'workspaces',
 ]);

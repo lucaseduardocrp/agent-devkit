@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-// The parts of the ADK Hub index (lucaseduardocrp/agent-devkit-hub, index.json) that ADK installs
-// into a workspace: agents and the subagents of plugins. Skills are installed by `devkit` on the
-// user's computer and are not read here. Unknown fields are ignored so newer indexes still load.
+// The parts of the ADK Hub index (lucaseduardocrp/agent-devkit-hub, index.json) that ADK uses in a
+// workspace: agents, the subagents of plugins, and skills, which workspace agents can use (`devkit`
+// also installs skills on the user's computer). Unknown fields are ignored so newer indexes load.
 
 const name = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const sha = z.string().regex(/^[0-9a-f]{40}$/);
@@ -16,6 +16,31 @@ const category = z.object({
   id: z.string(),
   icon: z.string(),
   label: z.record(z.string(), z.string()),
+});
+
+const fileSchema = z.object({
+  path: relativePath,
+  size: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+const skillSchema = z.object({
+  name,
+  description: z.string(),
+  category: z.string(),
+  tags: z.array(z.string()).default([]),
+  author: z.string(),
+  version: z.string(),
+  license: z.string(),
+  tier: z.enum(['built-in', 'official', 'community']),
+  path: relativePath,
+  /** Set when the skill lives outside the hub repository (built-in skills live in ADK). */
+  repository: z
+    .string()
+    .regex(/^[\w.-]+\/[\w.-]+$/)
+    .optional(),
+  commit: sha.optional(),
+  files: z.array(fileSchema).min(1),
 });
 
 const agentSchema = z.object({
@@ -32,15 +57,7 @@ const agentSchema = z.object({
   license: z.string(),
   tier,
   path: relativePath,
-  files: z
-    .array(
-      z.object({
-        path: relativePath,
-        size: z.number().int().nonnegative(),
-        sha256: z.string().regex(/^[0-9a-f]{64}$/),
-      }),
-    )
-    .min(1),
+  files: z.array(fileSchema).min(1),
 });
 
 const pluginSchema = z.object({
@@ -63,8 +80,12 @@ const indexSchema = z.object({
   repository: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
   commit: sha,
   generatedAt: z.string(),
-  categories: z.object({ agents: z.array(category).default([]) }),
+  categories: z.object({
+    agents: z.array(category).default([]),
+    skills: z.array(category).default([]),
+  }),
   agents: z.array(agentSchema).default([]),
+  skills: z.array(skillSchema).default([]),
   plugins: z.array(pluginSchema).default([]),
   removed: z
     .array(z.object({ name: z.string(), repo: z.string().optional(), reason: z.string() }))
@@ -73,12 +94,18 @@ const indexSchema = z.object({
 
 export type HubIndex = z.infer<typeof indexSchema>;
 export type HubAgentEntry = z.infer<typeof agentSchema>;
+export type HubSkillEntry = z.infer<typeof skillSchema>;
 export type HubPluginEntry = z.infer<typeof pluginSchema>;
 
 /** Checks the shape of a downloaded index; returns null when this ADK cannot read it. */
 export function parseHubIndex(raw: unknown): HubIndex | null {
   const parsed = indexSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
+}
+
+/** The instructions file of a hub skill: skills/<name>/SKILL.md. */
+export function skillFileOf(skill: HubSkillEntry) {
+  return skill.files.find((file) => file.path === 'SKILL.md') ?? null;
 }
 
 /** The instructions file of a hub agent: agents/<name>/AGENT.md. */

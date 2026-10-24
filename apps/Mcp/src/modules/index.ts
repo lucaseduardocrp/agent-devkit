@@ -1,6 +1,7 @@
 import type { McpModule } from '../core/registry.js';
 import { accountModule } from './account/tools.js';
 import { agentsModule } from './agents/tools.js';
+import { integrationTestsModule, loadTestsModule } from './apitests/tools.js';
 import { auditModule } from './audit/tools.js';
 import { brainModule } from './brain/tools.js';
 import { designModule } from './design/tools.js';
@@ -37,6 +38,8 @@ export const modules: readonly McpModule[] = [
   testPlanFieldsModule,
   designModule,
   e2eModule,
+  integrationTestsModule,
+  loadTestsModule,
   releaseNotesModule,
   auditModule,
 ];
@@ -53,6 +56,12 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Binary MP4 stream for the web player; e2e_get_video_url returns a shareable link instead of sending video bytes through the model.',
   'GET /e2e/tests/:id/steps/:position/screenshot':
     'Binary PNG evidence for the web app; step results report hasScreenshot and e2e_publish_run uploads the screenshots to the test management platform, so no image bytes go through the model.',
+  'POST /api-tests/runner/claim':
+    'Protocol of `devkit runner`: it long-polls for its user’s local API test runs; the model starts them with integration_run or load_run (target local).',
+  'POST /api-tests/runner/runs/:id/heartbeat':
+    'Protocol of `devkit runner`: progress of a local API test run.',
+  'POST /api-tests/runner/runs/:id/complete':
+    'Protocol of `devkit runner`: result of a local API test run.',
   'POST /e2e/runner/claim':
     'Protocol of `devkit runner`: the local runner long-polls for its user’s browser work; the model starts local runs with e2e_run instead.',
   'POST /e2e/runner/tasks/:id/heartbeat':

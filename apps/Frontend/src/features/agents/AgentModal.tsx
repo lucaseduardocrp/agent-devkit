@@ -9,7 +9,14 @@ import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import { AGENT_TEMPLATES } from './agent-templates.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { usePermissions } from '../workspaces/permissions.js';
-import type { AgentRole, CustomAgentDto, CreateAgentDto, UpdateAgentDto } from './agent-types.js';
+import { AgentSkillsField } from './AgentSkillsField.js';
+import type {
+  AgentRole,
+  CustomAgentDto,
+  CreateAgentDto,
+  HubSkillDto,
+  UpdateAgentDto,
+} from './agent-types.js';
 
 export interface AgentLlmModelOption {
   readonly providerId: string;
@@ -25,6 +32,8 @@ export interface AgentModalProps {
   readonly isSaving?: boolean;
   readonly availableLlmModels?: readonly AgentLlmModelOption[];
   readonly agents?: readonly CustomAgentDto[];
+  /** The ADK Hub skills an agent can use; without it the modal has no skills field. */
+  readonly loadHubSkills?: () => Promise<readonly HubSkillDto[]>;
 }
 
 export function AgentModal({
@@ -35,6 +44,7 @@ export function AgentModal({
   isSaving = false,
   availableLlmModels = [],
   agents = [],
+  loadHubSkills,
 }: AgentModalProps): React.JSX.Element | null {
   const { t } = useI18n();
   const { can } = usePermissions();
@@ -46,8 +56,31 @@ export function AgentModal({
   const [model, setModel] = useState('');
   const [temperature, setTemperature] = useState(0.2);
   const [parentAgentId, setParentAgentId] = useState('');
+  const [skills, setSkills] = useState<readonly string[]>([]);
+  const [refreshSkills, setRefreshSkills] = useState<readonly string[]>([]);
+  const [hubSkills, setHubSkills] = useState<readonly HubSkillDto[] | null>(null);
+  const [hubSkillsError, setHubSkillsError] = useState(false);
   const [tab, setTab] = useState<'edit' | 'preview'>('edit');
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || !loadHubSkills) return;
+    let active = true;
+    setHubSkillsError(false);
+    loadHubSkills().then(
+      (list) => {
+        if (active) setHubSkills(list);
+      },
+      () => {
+        if (!active) return;
+        setHubSkills([]);
+        setHubSkillsError(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [isOpen, loadHubSkills]);
 
   const eligibleParents = agents.filter((candidate) => {
     if (!initialData) return true;
@@ -71,6 +104,7 @@ export function AgentModal({
       setModel(initialData.model ?? '');
       setTemperature(initialData.temperature);
       setParentAgentId(initialData.parentAgentId ?? '');
+      setSkills((initialData.skills ?? []).map((skill) => skill.name));
     } else {
       setName('');
       setSlug('');
@@ -80,7 +114,9 @@ export function AgentModal({
       setModel('');
       setTemperature(0.2);
       setParentAgentId('');
+      setSkills([]);
     }
+    setRefreshSkills([]);
     setTab('edit');
     setError(null);
   }, [initialData, isOpen]);
@@ -131,6 +167,9 @@ export function AgentModal({
         model: model.trim(),
         temperature,
         parentAgentId: parentAgentId || null,
+        // Without the hub field the agent keeps the skills it has.
+        ...(loadHubSkills ? { skills } : {}),
+        ...(initialData && refreshSkills.length > 0 ? { refreshSkills } : {}),
       });
       onClose();
     } catch (err) {
@@ -344,6 +383,18 @@ export function AgentModal({
                 placeholder={t('runtime.shortAgentDescriptionPlaceholder')}
               />
             </div>
+
+            {loadHubSkills && (
+              <AgentSkillsField
+                value={skills}
+                onChange={setSkills}
+                refresh={refreshSkills}
+                onRefreshChange={setRefreshSkills}
+                attached={initialData?.skills ?? []}
+                catalog={hubSkills}
+                catalogError={hubSkillsError}
+              />
+            )}
 
             {/* Instructions Markdown Editor / Preview */}
             <div>

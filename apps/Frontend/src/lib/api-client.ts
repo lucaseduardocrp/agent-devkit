@@ -19,6 +19,18 @@ import type {
 } from '../features/agents/agent-types.js';
 import type { SupportedLocale } from './i18n/types.js';
 import type {
+  ApiCollection,
+  ApiCollectionSummary,
+  ApiEnvironment,
+  ApiRun,
+  ApiRunTarget,
+  ExportFormat,
+  GenerationRequest,
+  LoadProfileDefaults,
+  LoadScenario,
+  LoadScenarioInput,
+} from '../features/apitests/api-test-types.js';
+import type {
   Issue,
   IssueChanges,
   IssueComment,
@@ -426,6 +438,8 @@ const AGENT_WORKFLOW_TOOLSETS = new Set([
   'design',
   'e2e',
   'releasenotes',
+  'integrationtests',
+  'loadtests',
   'audit',
   'workspaces',
 ]);
@@ -2721,5 +2735,246 @@ export class ApiClient {
       provider?: string;
     };
     return { content: payload.result, agentName: payload.agent.name, provider: payload.provider };
+  }
+
+  // ---------- Integration and overload tests ----------
+
+  private async apiTestRequest<T>(
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}${path}`, {
+      method,
+      ...(body === undefined
+        ? {}
+        : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+      signal,
+    });
+    if (!response.ok) return this.handleErrorResponse(response);
+    return (await response.json()) as T;
+  }
+
+  public async listApiCollections(signal?: AbortSignal): Promise<ApiCollectionSummary[]> {
+    return (
+      await this.apiTestRequest<{ collections: ApiCollectionSummary[] }>(
+        'GET',
+        '/integration-tests/collections',
+        undefined,
+        signal,
+      )
+    ).collections;
+  }
+
+  public async getApiCollection(id: string, signal?: AbortSignal): Promise<ApiCollection> {
+    return (
+      await this.apiTestRequest<{ collection: ApiCollection }>(
+        'GET',
+        `/integration-tests/collections/${encodeURIComponent(id)}`,
+        undefined,
+        signal,
+      )
+    ).collection;
+  }
+
+  /** Creates a collection, or replaces it when `id` is given. */
+  public async saveApiCollection(
+    collection: Partial<ApiCollection> & { name: string },
+    id?: string,
+  ): Promise<ApiCollection> {
+    return (
+      await this.apiTestRequest<{ collection: ApiCollection }>(
+        id ? 'PUT' : 'POST',
+        id
+          ? `/integration-tests/collections/${encodeURIComponent(id)}`
+          : '/integration-tests/collections',
+        collection,
+      )
+    ).collection;
+  }
+
+  public async deleteApiCollection(id: string): Promise<void> {
+    await this.apiTestRequest('DELETE', `/integration-tests/collections/${encodeURIComponent(id)}`);
+  }
+
+  public async importApiCollection(
+    content: string,
+    name?: string,
+  ): Promise<{ format: string; collection: ApiCollection }> {
+    return this.apiTestRequest('POST', '/integration-tests/collections/import', {
+      content,
+      ...(name ? { name } : {}),
+    });
+  }
+
+  /** Downloads an export as a file (JSON or, for Bruno, a zip). */
+  public async exportApiCollection(
+    id: string,
+    format: ExportFormat,
+    environmentIds: readonly string[] = [],
+  ): Promise<{ fileName: string; blob: Blob }> {
+    const query = new URLSearchParams({
+      format,
+      ...(environmentIds.length ? { environmentIds: environmentIds.join(',') } : {}),
+    });
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/integration-tests/collections/${encodeURIComponent(id)}/export?${query.toString()}`,
+    );
+    if (!response.ok) return this.handleErrorResponse(response);
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const fileName =
+      /filename="([^"]+)"/.exec(disposition)?.[1] ??
+      `collection.${format === 'bruno' ? 'zip' : 'json'}`;
+    return { fileName, blob: await response.blob() };
+  }
+
+  public async listApiEnvironments(signal?: AbortSignal): Promise<ApiEnvironment[]> {
+    return (
+      await this.apiTestRequest<{ environments: ApiEnvironment[] }>(
+        'GET',
+        '/integration-tests/environments',
+        undefined,
+        signal,
+      )
+    ).environments;
+  }
+
+  public async saveApiEnvironment(
+    environment: Pick<ApiEnvironment, 'name' | 'variables'>,
+    id?: string,
+  ): Promise<ApiEnvironment> {
+    return (
+      await this.apiTestRequest<{ environment: ApiEnvironment }>(
+        id ? 'PUT' : 'POST',
+        id
+          ? `/integration-tests/environments/${encodeURIComponent(id)}`
+          : '/integration-tests/environments',
+        environment,
+      )
+    ).environment;
+  }
+
+  public async deleteApiEnvironment(id: string): Promise<void> {
+    await this.apiTestRequest(
+      'DELETE',
+      `/integration-tests/environments/${encodeURIComponent(id)}`,
+    );
+  }
+
+  public async startIntegrationRun(input: {
+    collectionId: string;
+    environmentId?: string | null;
+    itemIds?: string[];
+    target: ApiRunTarget;
+    bail?: boolean;
+  }): Promise<ApiRun> {
+    return (await this.apiTestRequest<{ run: ApiRun }>('POST', '/integration-tests/runs', input))
+      .run;
+  }
+
+  public async listApiRuns(
+    kind: 'integration' | 'load',
+    filter: { collectionId?: string; scenarioId?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<ApiRun[]> {
+    const query = new URLSearchParams(
+      Object.entries(filter).filter(([, value]) => Boolean(value)),
+    );
+    const base = kind === 'integration' ? '/integration-tests/runs' : '/load-tests/runs';
+    return (
+      await this.apiTestRequest<{ runs: ApiRun[] }>(
+        'GET',
+        `${base}?${query.toString()}`,
+        undefined,
+        signal,
+      )
+    ).runs;
+  }
+
+  public async getApiRun(
+    kind: 'integration' | 'load',
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ApiRun> {
+    const base = kind === 'integration' ? '/integration-tests/runs' : '/load-tests/runs';
+    return (
+      await this.apiTestRequest<{ run: ApiRun }>(
+        'GET',
+        `${base}/${encodeURIComponent(id)}`,
+        undefined,
+        signal,
+      )
+    ).run;
+  }
+
+  public async cancelApiRun(kind: 'integration' | 'load', id: string): Promise<ApiRun> {
+    const base = kind === 'integration' ? '/integration-tests/runs' : '/load-tests/runs';
+    return (
+      await this.apiTestRequest<{ run: ApiRun }>('POST', `${base}/${encodeURIComponent(id)}/cancel`)
+    ).run;
+  }
+
+  public async deleteApiRun(kind: 'integration' | 'load', id: string): Promise<void> {
+    const base = kind === 'integration' ? '/integration-tests/runs' : '/load-tests/runs';
+    await this.apiTestRequest('DELETE', `${base}/${encodeURIComponent(id)}`);
+  }
+
+  /** Server mode: the workspace model writes the tests and they are saved. */
+  public async generateApiTests(
+    kind: 'integration' | 'load',
+    input: GenerationRequest,
+  ): Promise<{ collection?: ApiCollection | null; scenario?: LoadScenario | null }> {
+    return this.apiTestRequest(
+      'POST',
+      kind === 'integration' ? '/integration-tests/generate' : '/load-tests/generate',
+      input,
+    );
+  }
+
+  public async getLoadProfiles(vus: number, durationSec: number): Promise<LoadProfileDefaults[]> {
+    return (
+      await this.apiTestRequest<{ profiles: LoadProfileDefaults[] }>(
+        'GET',
+        `/load-tests/profiles?vus=${vus}&durationSec=${durationSec}`,
+      )
+    ).profiles;
+  }
+
+  public async listLoadScenarios(signal?: AbortSignal): Promise<LoadScenario[]> {
+    return (
+      await this.apiTestRequest<{ scenarios: LoadScenario[] }>(
+        'GET',
+        '/load-tests/scenarios',
+        undefined,
+        signal,
+      )
+    ).scenarios;
+  }
+
+  public async saveLoadScenario(scenario: LoadScenarioInput, id?: string): Promise<LoadScenario> {
+    return (
+      await this.apiTestRequest<{ scenario: LoadScenario }>(
+        id ? 'PUT' : 'POST',
+        id ? `/load-tests/scenarios/${encodeURIComponent(id)}` : '/load-tests/scenarios',
+        scenario,
+      )
+    ).scenario;
+  }
+
+  public async deleteLoadScenario(id: string): Promise<void> {
+    await this.apiTestRequest('DELETE', `/load-tests/scenarios/${encodeURIComponent(id)}`);
+  }
+
+  public async exportLoadScenarioK6(id: string): Promise<{ fileName: string; body: string }> {
+    return this.apiTestRequest('GET', `/load-tests/scenarios/${encodeURIComponent(id)}/k6`);
+  }
+
+  public async startLoadRun(input: {
+    scenarioId: string;
+    target: ApiRunTarget;
+    authorized: boolean;
+  }): Promise<ApiRun> {
+    return (await this.apiTestRequest<{ run: ApiRun }>('POST', '/load-tests/runs', input)).run;
   }
 }

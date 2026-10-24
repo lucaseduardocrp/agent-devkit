@@ -101,6 +101,10 @@ the model, temperature and role set in the workspace. Remove an agent on the Age
 
 ## Run E2E tests on your computer (local runner)
 
+`devkit runner` also executes the integration and load tests set to run on **My computer**
+(Test → Integration Tests / Overload Tests, or `integration_run` / `load_run` with
+`target: "local"`), so they reach localhost and internal networks. Those runs need no browser.
+
 Set a run's **Where the tests run** to **My computer** (`executionTarget: "local"` in MCP, or
 `e2e_set_execution`). ADK keeps planning, writing and healing the specs, analysing failures,
 storing results and publishing them; only the browser runs on your computer, so `localhost`

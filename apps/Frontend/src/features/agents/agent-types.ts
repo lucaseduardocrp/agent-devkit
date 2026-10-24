@@ -26,6 +26,8 @@ export type AgentWorkflowToolset =
   | 'design'
   | 'e2e'
   | 'releasenotes'
+  | 'integrationtests'
+  | 'loadtests'
   | 'audit'
   | 'workspaces';
 
@@ -66,9 +68,22 @@ export interface CustomAgentDto {
   readonly isSystem: boolean;
   /** Set for agents installed from the ADK Hub. */
   readonly source?: AgentSourceDto | null;
+  /** ADK Hub skills the agent uses, at the version copied when they were attached. */
+  readonly skills?: readonly AgentSkillDto[];
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+export interface AgentSkillDto {
+  readonly name: string;
+  readonly description: string;
+  readonly version: string;
+  /** sha256 of the copied SKILL.md; differs from the hub's when an update is available. */
+  readonly revision: string;
+}
+
+/** At most this many skills per agent (the API refuses more). */
+export const MAX_AGENT_SKILLS = 10;
 
 export interface CreateAgentDto {
   readonly parentAgentId?: string | null;
@@ -79,6 +94,8 @@ export interface CreateAgentDto {
   readonly role?: AgentRole;
   readonly model?: string;
   readonly temperature?: number;
+  /** Hub skill names; the API copies each SKILL.md. */
+  readonly skills?: readonly string[];
 }
 
 export interface UpdateAgentDto {
@@ -90,6 +107,10 @@ export interface UpdateAgentDto {
   readonly role?: AgentRole;
   readonly model?: string;
   readonly temperature?: number;
+  /** Every skill the agent uses; the ones it already has keep their copy. */
+  readonly skills?: readonly string[];
+  /** Skills to copy again from the hub, to bring them to its current version. */
+  readonly refreshSkills?: readonly string[];
 }
 
 export interface ExecuteAgentDto {
@@ -163,4 +184,19 @@ export interface HubAgentCatalogDto {
   readonly generatedAt: string;
   readonly agents: readonly HubAgentDto[];
   readonly plugins: readonly HubPluginDto[];
+  /** Absent from APIs older than agent skills. */
+  readonly skills?: readonly HubSkillDto[];
+}
+
+/** A hub skill an agent can use. */
+export interface HubSkillDto {
+  readonly name: string;
+  readonly description: string;
+  readonly category: string;
+  readonly tags?: readonly string[];
+  readonly version: string;
+  readonly author: string;
+  readonly tier: 'built-in' | 'official' | 'community';
+  /** sha256 of the hub's current SKILL.md. */
+  readonly revision: string;
 }

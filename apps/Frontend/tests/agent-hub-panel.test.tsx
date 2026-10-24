@@ -1,7 +1,7 @@
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentHubPanel } from '../src/features/agents/AgentHubPanel.js';
-import type { HubAgentCatalogDto } from '../src/features/agents/agent-types.js';
+import type { CustomAgentDto, HubAgentCatalogDto } from '../src/features/agents/agent-types.js';
 import type { ApiClient } from '../src/lib/api-client.js';
 
 const catalog: HubAgentCatalogDto = {
@@ -55,13 +55,26 @@ const catalog: HubAgentCatalogDto = {
       ],
     },
   ],
+  skills: [
+    {
+      name: 'test-design',
+      description: 'Designs test cases.',
+      category: 'qa',
+      tags: ['qa'],
+      version: '1.2.0',
+      author: 'ADK',
+      tier: 'official',
+      revision: 'new',
+    },
+  ],
 };
 
-function setup(isReadOnly = false) {
+function setup(isReadOnly = false, agents: readonly CustomAgentDto[] = []) {
   const api = {
     listHubAgents: vi.fn(() => Promise.resolve(catalog)),
     installHubAgent: vi.fn(() => Promise.resolve([])),
     updateHubAgent: vi.fn(() => Promise.resolve({})),
+    updateAgent: vi.fn(() => Promise.resolve({})),
   };
   const onChanged = vi.fn();
   const view = render(
@@ -69,6 +82,7 @@ function setup(isReadOnly = false) {
       apiClient={api as unknown as ApiClient}
       isReadOnly={isReadOnly}
       getRoleLabel={(role) => role}
+      agents={agents}
       onChanged={onChanged}
     />,
   );
@@ -123,13 +137,15 @@ describe('AgentHubPanel', () => {
     expect(confirm.mock.calls[0]?.[0]).toContain('Technical writer');
   });
 
-  it('filters by role and text, and shows errors from the API', async () => {
+  it('switches between agents and skills, filters by text, and shows errors from the API', async () => {
     const { api, view } = setup();
     await view.findByTestId('hub-agent-qa-test-designer');
-    fireEvent.click(view.getByRole('button', { name: 'DOCUMENTATION' }));
+    expect(view.queryByRole('button', { name: 'DOCUMENTATION' })).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: 'Skills' }));
     expect(view.queryByTestId('hub-agent-qa-test-designer')).toBeNull();
     expect(view.queryByTestId('hub-plugin-jira-qa')).toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Todos' }));
+    expect(view.getByTestId('hub-skill-test-design')).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: 'Agentes' }));
     fireEvent.change(view.getByPlaceholderText('Buscar agentes do hub...'), {
       target: { value: 'jira' },
     });
@@ -139,6 +155,40 @@ describe('AgentHubPanel', () => {
     api.installHubAgent.mockRejectedValueOnce(new Error('Este agente já está instalado.'));
     fireEvent.click(view.getByTestId('hub-install-jira-qa/jira-triager'));
     expect(await view.findByRole('alert')).toHaveTextContent('Este agente já está instalado.');
+  });
+
+  it('assigns a skill to agents, takes it away, and updates outdated copies', async () => {
+    const agent = (id: string, name: string, skills: CustomAgentDto['skills']) =>
+      ({ id, name, skills }) as CustomAgentDto;
+    const agents = [
+      agent('a1', 'QA', [
+        { name: 'test-design', description: '', version: '0.9.0', revision: 'old' },
+      ]),
+      agent('a2', 'Writer', [
+        { name: 'edge-hunter', description: '', version: '1.0.0', revision: 'e' },
+      ]),
+    ];
+    const { api, onChanged, view } = setup(false, agents);
+    fireEvent.click(await view.findByRole('button', { name: 'Skills' }));
+    const card = view.getByTestId('hub-skill-test-design');
+    expect(card).toHaveTextContent('QA');
+    expect(card).not.toHaveTextContent('Writer');
+
+    fireEvent.click(view.getByTestId('hub-skill-assign-test-design'));
+    const dialog = view.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /QA/ }));
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Writer/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(api.updateAgent).toHaveBeenCalledWith('a1', { skills: [] });
+    expect(api.updateAgent).toHaveBeenCalledWith('a2', {
+      skills: ['edge-hunter', 'test-design'],
+    });
+
+    fireEvent.click(view.getByRole('button', { name: 'Atualizar para 1.2.0 nos agentes' }));
+    await waitFor(() =>
+      expect(api.updateAgent).toHaveBeenLastCalledWith('a1', { refreshSkills: ['test-design'] }),
+    );
   });
 
   it('shows what is installed but offers no actions to read-only members', async () => {

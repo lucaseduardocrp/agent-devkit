@@ -11,8 +11,12 @@ const resolveMaxWidth = (
   return element?.parentElement?.getBoundingClientRect().width || window.innerWidth;
 };
 
+/** Released this far below the minimum width, a collapsible sidebar folds to its compact width. */
+const COLLAPSE_SLACK = 60;
+
 export interface ResizableSidebarProps {
-  readonly children: ReactNode;
+  /** Content, or a function of the width shown and whether the edge is being dragged. */
+  readonly children: ReactNode | ((width: number, dragging: boolean) => ReactNode);
   readonly defaultWidth?: number;
   readonly minWidth?: number;
   readonly maxWidth?: number | 'viewport' | 'container';
@@ -21,6 +25,15 @@ export interface ResizableSidebarProps {
   readonly className?: string;
   readonly 'aria-label'?: string;
   readonly 'data-testid'?: string;
+  /**
+   * Makes the sidebar collapsible: while `collapsed` it is `collapsedWidth` wide. The edge follows
+   * the pointer below the minimum width; released well below it, `onCollapse` folds the sidebar,
+   * and dragging a folded sidebar open calls `onExpand`.
+   */
+  readonly collapsed?: boolean;
+  readonly collapsedWidth?: number;
+  readonly onCollapse?: () => void;
+  readonly onExpand?: () => void;
 }
 
 export function ResizableSidebar({
@@ -33,26 +46,57 @@ export function ResizableSidebar({
   className,
   'aria-label': ariaLabel,
   'data-testid': testId,
+  collapsed = false,
+  collapsedWidth = 64,
+  onCollapse,
+  onExpand,
 }: ResizableSidebarProps) {
   const { t } = useI18n();
   const resolvedResizeLabel = resizeLabel ?? t('common.resizeSidebar');
+  const collapsible = Boolean(onCollapse);
   const [width, setWidth] = useState(defaultWidth);
-  const [isResizing, setIsResizing] = useState(false);
+  // The width while dragging; null when the pointer is up.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
   const dragStart = useRef({ pointerX: 0, width: defaultWidth });
+  const latest = useRef<number | null>(null);
+  const frame = useRef(0);
   const sidebarRef = useRef<HTMLElement>(null);
+  const isResizing = dragWidth !== null;
 
   useEffect(() => {
     if (!isResizing) return;
 
+    const lower = collapsible ? collapsedWidth : minWidth;
     const handlePointerMove = (event: PointerEvent) => {
       const pointerDelta = event.clientX - dragStart.current.pointerX;
-      const nextWidth =
+      const next =
         dragStart.current.width + (resizeEdge === 'right' ? pointerDelta : -pointerDelta);
-      setWidth(
-        Math.min(resolveMaxWidth(maxWidth, sidebarRef.current), Math.max(minWidth, nextWidth)),
+      latest.current = Math.min(
+        resolveMaxWidth(maxWidth, sidebarRef.current),
+        Math.max(lower, next),
       );
+      // The edge follows the pointer at once, without a React render; the state (which the
+      // content may depend on) catches up once per frame.
+      if (sidebarRef.current) sidebarRef.current.style.width = `${latest.current}px`;
+      if (!frame.current)
+        frame.current = window.requestAnimationFrame(() => {
+          frame.current = 0;
+          setDragWidth(latest.current);
+        });
     };
-    const stopResizing = () => setIsResizing(false);
+    const stopResizing = () => {
+      window.cancelAnimationFrame(frame.current);
+      frame.current = 0;
+      const released = latest.current ?? dragStart.current.width;
+      latest.current = null;
+      setDragWidth(null);
+      if (collapsible && released < minWidth - COLLAPSE_SLACK) {
+        if (!collapsed) onCollapse?.();
+        return;
+      }
+      setWidth(Math.max(minWidth, released));
+      if (collapsed) onExpand?.();
+    };
 
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', stopResizing);
@@ -67,33 +111,63 @@ export function ResizableSidebar({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [isResizing, maxWidth, minWidth, resizeEdge]);
+  }, [
+    collapsed,
+    collapsedWidth,
+    collapsible,
+    isResizing,
+    maxWidth,
+    minWidth,
+    onCollapse,
+    onExpand,
+    resizeEdge,
+  ]);
 
   const resizeWithKeyboard = (direction: -1 | 1) => {
-    setWidth((currentWidth) =>
+    const step = (currentWidth: number) =>
       Math.min(
         resolveMaxWidth(maxWidth, sidebarRef.current),
         Math.max(minWidth, currentWidth + direction * 10),
-      ),
-    );
+      );
+    // During a drag the width on screen is the pointer's, not the stored one.
+    if (isResizing && latest.current !== null) {
+      latest.current = step(latest.current);
+      dragStart.current = { ...dragStart.current, width: dragStart.current.width + direction * 10 };
+      setDragWidth(latest.current);
+      return;
+    }
+    setWidth(step);
   };
+
+  const shownWidth = isResizing
+    ? (latest.current ?? dragWidth ?? width)
+    : collapsed
+      ? collapsedWidth
+      : width;
 
   return (
     <aside
       ref={sidebarRef}
-      className={cn('relative flex shrink-0 flex-col', className)}
-      style={{ width, maxWidth: maxWidth === 'container' ? '100%' : undefined }}
+      className={cn(
+        'relative flex shrink-0 flex-col',
+        // Snaps (fold, unfold, back to the minimum) animate; dragging follows the pointer as is.
+        !isResizing && 'transition-[width] duration-200 ease-out motion-reduce:transition-none',
+        collapsible && 'overflow-hidden',
+        className,
+      )}
+      style={{ width: shownWidth, maxWidth: maxWidth === 'container' ? '100%' : undefined }}
       aria-label={ariaLabel}
       data-testid={testId}
+      data-collapsed={collapsed ? 'true' : undefined}
     >
-      {children}
+      {typeof children === 'function' ? children(shownWidth, isResizing) : children}
       <div
         role="separator"
         aria-label={resolvedResizeLabel}
         aria-orientation="vertical"
-        aria-valuemin={minWidth}
+        aria-valuemin={collapsible ? collapsedWidth : minWidth}
         aria-valuemax={resolveMaxWidth(maxWidth, sidebarRef.current)}
-        aria-valuenow={width}
+        aria-valuenow={Math.round(shownWidth)}
         tabIndex={0}
         className={cn(
           'absolute inset-y-0 z-20 w-1 cursor-col-resize touch-none transition-colors hover:bg-[var(--fill-accent)] focus-visible:bg-[var(--fill-accent)] focus-visible:outline-none',
@@ -103,8 +177,10 @@ export function ResizableSidebar({
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           event.preventDefault();
-          dragStart.current = { pointerX: event.clientX, width };
-          setIsResizing(true);
+          const start = collapsed ? collapsedWidth : width;
+          dragStart.current = { pointerX: event.clientX, width: start };
+          latest.current = start;
+          setDragWidth(start);
         }}
         onKeyDown={(event) => {
           if (event.key === 'ArrowLeft') {

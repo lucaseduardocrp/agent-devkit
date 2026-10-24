@@ -60,6 +60,8 @@ const modulesSchema = z.object({
   releaseNotes: level,
   testplans: level,
   e2e: level,
+  integrationTests: level,
+  loadTests: level,
   integrations: level,
 } satisfies Record<PermissionModule, typeof level>);
 

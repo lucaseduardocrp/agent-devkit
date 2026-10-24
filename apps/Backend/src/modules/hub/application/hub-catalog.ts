@@ -1,4 +1,9 @@
-import type { HubAgentEntry, HubIndex, HubPluginEntry } from '../domain/hub-index.js';
+import type {
+  HubAgentEntry,
+  HubIndex,
+  HubPluginEntry,
+  HubSkillEntry,
+} from '../domain/hub-index.js';
 
 /**
  * Read access to the ADK Hub. The adapter decides where the index comes from (GitHub by default,
@@ -9,6 +14,8 @@ export interface HubCatalog {
   index(): Promise<HubIndex>;
   /** Text of agents/<name>/AGENT.md, at the commit the index pins it to. */
   agentFile(index: HubIndex, agent: HubAgentEntry): Promise<string>;
+  /** Text of skills/<name>/SKILL.md, at the commit the index pins it to (its own for built-ins). */
+  skillFile(index: HubIndex, skill: HubSkillEntry): Promise<string>;
   /** Text of agents/<agent>.md in the plugin's repository, at its pinned commit. */
   pluginAgentFile(plugin: HubPluginEntry, agent: string): Promise<string>;
 }

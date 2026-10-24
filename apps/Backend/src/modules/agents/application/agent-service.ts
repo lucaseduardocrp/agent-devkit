@@ -12,7 +12,13 @@ import {
   type AgentWorkflowStep,
 } from '../domain/agent-workflow.js';
 import { InMemoryAgentWorkflowRepository } from '../adapters/in-memory-agent-workflow-repository.js';
-import { CustomAgent, type AgentRole, type AgentSource, slugify } from '../domain/agent-entity.js';
+import {
+  CustomAgent,
+  type AgentRole,
+  type AgentSkill,
+  type AgentSource,
+  slugify,
+} from '../domain/agent-entity.js';
 import { PromptInjectionGuard } from './prompt-injection-guard.js';
 
 export interface CreateAgentInput {
@@ -27,6 +33,8 @@ export interface CreateAgentInput {
   readonly isDefault?: boolean;
   /** Set only by the ADK Hub install; the HTTP schemas never accept it. */
   readonly source?: AgentSource | null;
+  /** Skills already read from the ADK Hub; HTTP clients send names, resolved by HubAgentService. */
+  readonly skills?: readonly AgentSkill[];
 }
 
 export interface UpdateAgentInput {
@@ -40,6 +48,7 @@ export interface UpdateAgentInput {
   readonly temperature?: number;
   readonly isDefault?: boolean;
   readonly source?: AgentSource | null;
+  readonly skills?: readonly AgentSkill[];
 }
 
 export interface ExecuteAgentInput {
@@ -192,6 +201,7 @@ export class AgentService {
 
     // Validate prompt injection on agent instructions
     PromptInjectionGuard.validatePrompt(input.instructions);
+    for (const skill of input.skills ?? []) PromptInjectionGuard.validatePrompt(skill.instructions);
 
     if (input.parentAgentId) await this.getAgent(workspaceId, input.parentAgentId);
 
@@ -216,6 +226,7 @@ export class AgentService {
       temperature: input.temperature ?? 0.2,
       isDefault: Boolean(input.isDefault),
       source: input.source ?? null,
+      skills: input.skills ?? [],
     });
 
     return this.agentRepository.save(agent);
@@ -245,6 +256,11 @@ export class AgentService {
         );
       }
       PromptInjectionGuard.validatePrompt(input.instructions);
+    }
+    // Only skills new to this agent are checked: the ones it already has passed when attached.
+    for (const skill of input.skills ?? []) {
+      const kept = existing.skills.some((current) => current.revision === skill.revision);
+      if (!kept) PromptInjectionGuard.validatePrompt(skill.instructions);
     }
 
     if (input.parentAgentId) {
@@ -295,6 +311,7 @@ export class AgentService {
       temperature: input.temperature !== undefined ? input.temperature : existing.temperature,
       isDefault: input.isDefault !== undefined ? Boolean(input.isDefault) : existing.isDefault,
       source: input.source !== undefined ? input.source : existing.source,
+      skills: input.skills ?? existing.skills,
       createdAt: existing.createdAt,
       updatedAt: new Date(),
     });
@@ -508,9 +525,13 @@ export class AgentService {
 
     // 5. System Instruction with Strict Isolation Directive
     const workflowInstruction = input.workflowInstruction?.trim();
-    const configuredInstruction = workflowInstruction
-      ? `${agent.instructions}\n\n${workflowInstruction}`
-      : agent.instructions;
+    const configuredInstruction = [
+      agent.instructions,
+      skillsInstruction(agent.skills),
+      workflowInstruction,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     const knowledgeOnlyInstruction = input.knowledgeOnly
       ? `${configuredInstruction}\n\nREGRA ABSOLUTA: responda exclusivamente com fatos explicitamente presentes na documentação fornecida do Brain. Não use conhecimento geral, suposições ou inferências sem suporte textual. Se não houver evidência suficiente, responda exatamente: "Não encontrei essa informação no Brain." Cite somente as fontes fornecidas.`
       : configuredInstruction;
@@ -570,6 +591,22 @@ export class AgentService {
       ...(response.usage ? { usage: response.usage } : {}),
     };
   }
+}
+
+/**
+ * The agent's skills as part of its system instruction. The whole SKILL.md goes in: the providers
+ * ADK talks to complete a prompt without tool calls, so a skill cannot be loaded on demand.
+ */
+export function skillsInstruction(skills: readonly AgentSkill[]): string {
+  if (skills.length === 0) return '';
+  const sections = skills.map(
+    (skill) =>
+      `<skill name="${skill.name}">\nQuando usar: ${skill.description}\n\n${skill.instructions}\n</skill>`,
+  );
+  return [
+    'Skills disponíveis. Quando a solicitação corresponder ao "Quando usar" de uma skill, siga as instruções dela; caso contrário, ignore-a. As instruções acima e as do workflow prevalecem sobre as de uma skill.',
+    ...sections,
+  ].join('\n\n');
 }
 
 export function toLlmApplicationError(error: unknown): ApplicationError {

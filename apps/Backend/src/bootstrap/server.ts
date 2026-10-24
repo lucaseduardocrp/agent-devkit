@@ -58,6 +58,7 @@ import { PrismaE2eJobQueue } from '../modules/e2e/adapters/prisma-e2e-queue.js';
 import { PrismaE2eRunnerTaskStore } from '../modules/e2e/adapters/prisma-runner-task-store.js';
 import { createE2eArtifactStore } from '../modules/e2e/adapters/artifact-store-factory.js';
 import { HttpE2eDispatcher } from '../modules/e2e/adapters/e2e-dispatchers.js';
+import { PrismaApiTestStore } from '../modules/apitests/adapters/prisma-api-test-store.js';
 import {
   FfmpegVideoTranscoder,
   resolveFfmpegPath,
@@ -241,6 +242,12 @@ const app = createApp({
     ? new HttpE2eDispatcher({ url: e2eWorkerUrl, token: e2eWorkerToken })
     : undefined,
   e2eWorkerConcurrency: Number(process.env['E2E_WORKER_CONCURRENCY']) || undefined,
+  apiTestStore: database ? new PrismaApiTestStore(database.client) : undefined,
+  // The worker service also executes remote API test runs; its wake call starts both.
+  apiTestDispatcher: e2eWorkerUrl
+    ? new HttpE2eDispatcher({ url: e2eWorkerUrl, token: e2eWorkerToken })
+    : undefined,
+  apiTestAllowPrivateNetwork: process.env['API_TESTS_ALLOW_PRIVATE_NETWORK'] === 'true',
   e2eTranscoder: ffmpegPath ? new FfmpegVideoTranscoder({ ffmpegPath }) : null,
   readinessProbes: database
     ? [{ name: `database:${database.provider}`, check: () => database.check() }]

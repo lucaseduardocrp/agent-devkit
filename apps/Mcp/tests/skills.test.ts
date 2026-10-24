@@ -17,6 +17,7 @@ describe('packaged skills', () => {
     const skills = await loadSkills();
     expect(skills.map((skill) => skill.name)).toEqual([
       'adk-agents',
+      'adk-api-tests',
       'adk-brain',
       'adk-design',
       'adk-e2e',

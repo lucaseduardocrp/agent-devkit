@@ -1,6 +1,20 @@
-import { fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../src/components/layout/Sidebar.js';
+
+// jsdom has no PointerEvent: a MouseEvent with the same type carries clientX.
+const moveTo = (clientX: number) =>
+  act(() => {
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX }));
+  });
+
+const pressAt = (element: Element, clientX: number) =>
+  fireEvent(element, new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX }));
+
+const release = () =>
+  act(() => {
+    window.dispatchEvent(new MouseEvent('pointerup'));
+  });
 
 describe('Sidebar', () => {
   it('renders navigation sections and settings in footer', () => {
@@ -19,8 +33,8 @@ describe('Sidebar', () => {
     const navigationButtons = getByRole('navigation').querySelectorAll('button');
     expect(navigationButtons[0]).toHaveTextContent('Issues');
     expect(navigationButtons[1]).toHaveTextContent('PBIs');
-    expect(navigationButtons[2]).toHaveTextContent('Dashboard');
-    expect(navigationButtons[3]).toHaveTextContent('Inbox');
+    expect(navigationButtons[2]).toHaveTextContent('Inbox');
+    expect(navigationButtons[3]).toHaveTextContent('Dashboard');
 
     const settingsFooterBtn = getByTestId('sidebar-settings-footer-button');
     expect(settingsFooterBtn).toBeInTheDocument();
@@ -146,5 +160,29 @@ describe('Sidebar', () => {
     const wsBtn = getByTestId('sidebar-workspaces-button');
     expect(wsBtn).toHaveTextContent('Workspaces');
     expect(wsBtn).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('follows the pointer below the minimum width and folds to icons when released there', () => {
+    window.localStorage.removeItem('adk.sidebar.collapsed');
+    const view = render(<Sidebar activeTab="brain" onSelectTab={vi.fn()} />);
+    const edge = () => view.getByRole('separator', { name: 'Redimensionar barra lateral' });
+    pressAt(edge(), 280);
+    moveTo(120);
+    release();
+    expect(view.getByRole('complementary')).toHaveAttribute('data-collapsed', 'true');
+    // Only icons: the module name is the accessible label, without a visible text.
+    expect(view.getByRole('button', { name: 'Brain' }).textContent).toBe('');
+    expect(window.localStorage.getItem('adk.sidebar.collapsed')).toBe('1');
+
+    // Released just below the minimum, it springs back to the minimum instead of folding.
+    pressAt(edge(), 64);
+    moveTo(280);
+    release();
+    expect(view.getByRole('complementary')).not.toHaveAttribute('data-collapsed');
+    expect(view.getByRole('button', { name: 'Brain' }).textContent).toBe('Brain');
+    pressAt(edge(), 280);
+    moveTo(220);
+    release();
+    expect(view.getByRole('complementary')).not.toHaveAttribute('data-collapsed');
   });
 });

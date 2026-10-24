@@ -150,6 +150,27 @@ const workflowToolNames: Record<AgentWorkflowToolset, readonly string[]> = {
     'release_notes_generate',
     'release_notes_update',
   ],
+  integrationtests: [
+    'integration_cancel_run',
+    'integration_delete_collection',
+    'integration_delete_environment',
+    'integration_delete_run',
+    'integration_generate',
+    'integration_import',
+    'integration_prepare_generation',
+    'integration_run',
+    'integration_save_collection',
+    'integration_save_environment',
+  ],
+  loadtests: [
+    'load_cancel_run',
+    'load_delete_run',
+    'load_delete_scenario',
+    'load_generate',
+    'load_prepare_generation',
+    'load_run',
+    'load_save_scenario',
+  ],
   audit: [],
   workspaces: [
     'workspaces_add_member',
@@ -367,6 +388,11 @@ export function AgentsView({
     setEditingAgent(agent);
     setIsModalOpen(true);
   };
+
+  const loadHubSkills = useCallback(
+    async () => (await apiClient.listHubAgents()).skills ?? [],
+    [apiClient],
+  );
 
   const handleSaveAgent = async (data: CreateAgentDto | UpdateAgentDto) => {
     setIsSaving(true);
@@ -597,22 +623,6 @@ export function AgentsView({
           </span>
         </Button>
 
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => setActiveViewTab('hub')}
-          className={cn(
-            'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
-            visibleTab === 'hub'
-              ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
-              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-          )}
-          data-testid="tab-hub"
-          leftIcon={<i className="ti ti-world-download text-base" aria-hidden="true" />}
-        >
-          <span>{t('agents.hubTab')}</span>
-        </Button>
-
         {/* Running an agent is a write: members without edit access have no playground. */}
         {!isReadOnly && (
           <Button
@@ -666,6 +676,21 @@ export function AgentsView({
         >
           <span>{t('agents.workflow')}</span>
         </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => setActiveViewTab('hub')}
+          className={cn(
+            'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
+            visibleTab === 'hub'
+              ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
+              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+          )}
+          data-testid="tab-hub"
+          leftIcon={<i className="ti ti-world-download text-base" aria-hidden="true" />}
+        >
+          <span>{t('agents.hubTab')}</span>
+        </Button>
       </div>
 
       {error && (
@@ -688,6 +713,7 @@ export function AgentsView({
           apiClient={apiClient}
           isReadOnly={isReadOnly}
           getRoleLabel={getRoleLabel}
+          agents={agents}
           onChanged={loadAgents}
         />
       )}
@@ -1046,6 +1072,10 @@ export function AgentsView({
                           <option value="releasenotes">
                             {t('agents.workflowModuleReleaseNotes')}
                           </option>
+                          <option value="integrationtests">
+                            {t('agents.workflowModuleIntegrationTests')}
+                          </option>
+                          <option value="loadtests">{t('agents.workflowModuleLoadTests')}</option>
                           <option value="audit">{t('agents.workflowModuleAudit')}</option>
                           <option value="workspaces">{t('agents.workflowModuleWorkspaces')}</option>
                         </Select>
@@ -1318,6 +1348,15 @@ export function AgentsView({
                             }
                           >
                             {t('agents.hubBadge', { version: agent.source.version })}
+                          </span>
+                        )}
+                        {agent.skills && agent.skills.length > 0 && (
+                          <span
+                            className="rounded bg-[var(--fill-accent)]/10 px-1.5 py-0.5 text-[10px] font-medium text-[var(--fill-accent)]"
+                            title={agent.skills.map((skill) => skill.name).join(', ')}
+                          >
+                            <i className="ti ti-sparkles mr-0.5" aria-hidden="true" />
+                            {t('agents.skillsCount', { count: agent.skills.length })}
                           </span>
                         )}
                       </div>
@@ -1677,6 +1716,7 @@ export function AgentsView({
         isSaving={isSaving}
         availableLlmModels={availableLlmModels}
         agents={agents}
+        loadHubSkills={loadHubSkills}
       />
     </div>
   );

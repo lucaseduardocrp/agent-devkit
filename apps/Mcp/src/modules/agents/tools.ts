@@ -224,6 +224,8 @@ export const agentsModule: McpModule = {
                 'design',
                 'e2e',
                 'releasenotes',
+                'integrationtests',
+                'loadtests',
                 'audit',
                 'workspaces',
               ]),

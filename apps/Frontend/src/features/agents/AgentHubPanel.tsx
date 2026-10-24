@@ -14,7 +14,14 @@ import {
 import type { ApiClient } from '../../lib/api-client.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { useActivityRunner } from '../activities/ActivityCenter.js';
-import type { AgentRole, HubAgentCatalogDto, HubInstallState, HubTier } from './agent-types.js';
+import { HubSkillsPanel } from './HubSkillsPanel.js';
+import type {
+  AgentRole,
+  CustomAgentDto,
+  HubAgentCatalogDto,
+  HubInstallState,
+  HubTier,
+} from './agent-types.js';
 
 const HUB_REPOSITORY_URL = 'https://github.com/lucaseduardocrp/agent-devkit-hub';
 
@@ -29,18 +36,24 @@ export interface AgentHubPanelProps {
   readonly apiClient: ApiClient;
   readonly isReadOnly: boolean;
   readonly getRoleLabel: (role: AgentRole) => string;
+  /** Workspace agents, which hub skills can be assigned to. */
+  readonly agents?: readonly CustomAgentDto[];
   /** Called after an install or update so the catalog and the playground see the change. */
   readonly onChanged: () => Promise<void> | void;
 }
 
+type HubView = 'agents' | 'skills';
+
 /**
- * The Hub tab of the Agents page: agents from the ADK Hub and subagents of hub plugins, installed
- * into this workspace by the API (which downloads and checks every file) and updated in place.
+ * The Hub tab of the Agents page. Agents: hub agents and subagents of hub plugins, installed into
+ * this workspace by the API (which downloads and checks every file) and updated in place. Skills:
+ * hub skills, assigned to workspace agents.
  */
 export function AgentHubPanel({
   apiClient,
   isReadOnly,
   getRoleLabel,
+  agents: workspaceAgents = [],
   onChanged,
 }: AgentHubPanelProps): React.JSX.Element {
   const { t } = useI18n();
@@ -50,7 +63,7 @@ export function AgentHubPanel({
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [role, setRole] = useState<AgentRole | 'ALL'>('ALL');
+  const [view, setView] = useState<HubView>('agents');
 
   const load = useCallback(async () => {
     setError(null);
@@ -67,25 +80,24 @@ export function AgentHubPanel({
 
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const matches = (text: string) => terms.every((term) => text.toLowerCase().includes(term));
-  const agents = (catalog?.agents ?? []).filter(
-    (agent) =>
-      (role === 'ALL' || agent.role === role) &&
-      matches([agent.name, agent.description, agent.author, agent.tags.join(' ')].join(' ')),
+  const agents = (catalog?.agents ?? []).filter((agent) =>
+    matches([agent.name, agent.description, agent.author, agent.tags.join(' ')].join(' ')),
   );
-  // Plugin subagents are installed as custom agents.
-  const plugins =
-    role === 'ALL' || role === 'CUSTOM'
-      ? (catalog?.plugins ?? []).filter((plugin) =>
-          matches(
-            [
-              plugin.name,
-              plugin.title,
-              plugin.description,
-              ...plugin.agents.map((agent) => agent.name),
-            ].join(' '),
-          ),
-        )
-      : [];
+  const plugins = (catalog?.plugins ?? []).filter((plugin) =>
+    matches(
+      [
+        plugin.name,
+        plugin.title,
+        plugin.description,
+        ...plugin.agents.map((agent) => agent.name),
+      ].join(' '),
+    ),
+  );
+  const skills = (catalog?.skills ?? []).filter((skill) =>
+    matches([skill.name, skill.description, skill.author, ...(skill.tags ?? [])].join(' ')),
+  );
+  const empty =
+    view === 'agents' ? agents.length === 0 && plugins.length === 0 : skills.length === 0;
 
   const run = async (key: string, title: string, operation: () => Promise<unknown>) => {
     setBusy(key);
@@ -167,26 +179,32 @@ export function AgentHubPanel({
 
   return (
     <div className="flex flex-col gap-6" data-testid="hub-panel">
-      <p className="max-w-3xl text-sm text-[var(--text-secondary)]">{t('agents.hubSubtitle')}</p>
+      <p className="max-w-3xl text-sm text-[var(--text-secondary)]">
+        {t(view === 'agents' ? 'agents.hubSubtitle' : 'agents.hubSkillsSubtitle')}
+      </p>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-1">
-          {(['ALL', 'QA', 'DOCUMENTATION', 'REFACTOR', 'CUSTOM'] as const).map((value) => (
+          {(['agents', 'skills'] as const).map((value) => (
             <Button
               key={value}
               type="button"
               size="sm"
-              variant={role === value ? 'default' : 'ghost'}
-              aria-pressed={role === value}
-              onClick={() => setRole(value)}
+              variant={view === value ? 'default' : 'ghost'}
+              aria-pressed={view === value}
+              onClick={() => setView(value)}
               className={cn(
                 'h-8 px-3 text-xs font-medium',
-                role === value
+                view === value
                   ? 'bg-[var(--fill-accent)] text-[#0d1b2c] hover:bg-[var(--fill-accent-hover)]'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
               )}
             >
-              {value === 'ALL' ? t('common.all') : getRoleLabel(value)}
+              <i
+                className={cn('ti mr-1.5', value === 'agents' ? 'ti-robot' : 'ti-sparkles')}
+                aria-hidden="true"
+              />
+              {t(value === 'agents' ? 'agents.hubViewAgents' : 'agents.hubViewSkills')}
             </Button>
           ))}
         </div>
@@ -194,7 +212,11 @@ export function AgentHubPanel({
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={t('agents.hubSearchPlaceholder')}
+            placeholder={t(
+              view === 'agents'
+                ? 'agents.hubSearchPlaceholder'
+                : 'agents.hubSearchSkillsPlaceholder',
+            )}
             className="text-xs"
           />
         </div>
@@ -226,11 +248,22 @@ export function AgentHubPanel({
             />
           ))}
         </div>
-      ) : catalog && agents.length === 0 && plugins.length === 0 ? (
+      ) : catalog && empty ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-12 text-center">
           <i className="ti ti-world-search text-4xl text-[var(--text-muted)]" aria-hidden="true" />
-          <p className="mt-3 text-sm text-[var(--text-secondary)]">{t('agents.hubEmpty')}</p>
+          <p className="mt-3 text-sm text-[var(--text-secondary)]">
+            {t(view === 'agents' ? 'agents.hubEmpty' : 'agents.hubSkillsEmpty')}
+          </p>
         </div>
+      ) : view === 'skills' ? (
+        <HubSkillsPanel
+          skills={skills}
+          agents={workspaceAgents}
+          isReadOnly={isReadOnly}
+          busy={busy}
+          run={run}
+          updateAgentSkills={(agentId, change) => apiClient.updateAgent(agentId, change)}
+        />
       ) : (
         <>
           {agents.length > 0 && (

@@ -1,12 +1,19 @@
 import { ApplicationError } from '../../../shared/errors.js';
 import type { AgentService } from '../../agents/application/agent-service.js';
-import type { AgentSource, CustomAgent } from '../../agents/domain/agent-entity.js';
+import {
+  MAX_AGENT_SKILLS,
+  type AgentSkill,
+  type AgentSource,
+  type CustomAgent,
+} from '../../agents/domain/agent-entity.js';
 import { parseAgentMarkdown } from '../domain/agent-markdown.js';
 import {
   agentFileOf,
+  skillFileOf,
   type HubAgentEntry,
   type HubIndex,
   type HubPluginEntry,
+  type HubSkillEntry,
 } from '../domain/hub-index.js';
 import type { HubCatalog } from './hub-catalog.js';
 
@@ -44,7 +51,18 @@ export interface HubAgentCatalog {
   readonly agents: readonly HubAgentView[];
   /** Plugins that ship subagents; the ones without agents have nothing to install here. */
   readonly plugins: readonly HubPluginView[];
+  readonly skillCategories: HubIndex['categories']['skills'];
+  /** Skills an agent can use. */
+  readonly skills: readonly HubSkillView[];
 }
+
+/** A hub skill; `revision` tells an agent's copy apart from the hub's current one. */
+export type HubSkillView = Omit<HubSkillEntry, 'files' | 'path' | 'repository' | 'commit'> & {
+  readonly revision: string;
+};
+
+/** A skill's instructions above this size would crowd out the agent's own prompt. */
+const MAX_SKILL_CHARACTERS = 64_000;
 
 /** What to install: a hub agent, one subagent of a plugin, or (no name) all of a plugin's. */
 export interface HubAgentRef {
@@ -61,6 +79,8 @@ interface AgentDefinition {
   readonly role?: CustomAgent['role'];
   readonly temperature?: number;
   readonly source: AgentSource;
+  /** Hub skills the agent file asks for (`skills: a, b` in its front matter). */
+  readonly skills: readonly string[];
 }
 
 const sameSource = (a: AgentSource, b: Pick<AgentSource, 'kind' | 'name' | 'plugin'>) =>
@@ -120,7 +140,44 @@ export class HubAgentService {
             ...state({ kind: 'hub-plugin', name, plugin: plugin.name }, plugin.sha),
           })),
         })),
+      skillCategories: index.categories.skills,
+      skills: available(index, index.skills).flatMap((entry) => {
+        const file = skillFileOf(entry);
+        if (!file) return [];
+        const { files: _files, path: _path, repository: _repo, commit: _commit, ...skill } = entry;
+        return [{ ...skill, revision: file.sha256 }];
+      }),
     };
+  }
+
+  /**
+   * Turns the skill names an agent should use into copies of their SKILL.md, read from the hub and
+   * checked against its index. Skills the agent already has keep their copy unless they are named
+   * in `refresh`, so saving an agent never changes the skills it runs with behind the user's back.
+   */
+  public async resolveSkills(
+    names: readonly string[],
+    current: readonly AgentSkill[] = [],
+    refresh: readonly string[] = [],
+  ): Promise<AgentSkill[]> {
+    const wanted = [...new Set(names)];
+    if (wanted.length > MAX_AGENT_SKILLS) {
+      throw new ApplicationError(
+        'AGENT_TOO_MANY_SKILLS',
+        `An agent can use at most ${MAX_AGENT_SKILLS} skills.`,
+        400,
+        [{ field: 'skills' }],
+      );
+    }
+    const kept = (name: string) =>
+      refresh.includes(name) ? undefined : current.find((skill) => skill.name === name);
+    if (wanted.every(kept)) return wanted.map((name) => kept(name)!);
+    const index = await this.catalogPort.index();
+    return Promise.all(
+      wanted.map(
+        async (name) => kept(name) ?? (await this.fromHubSkill(index, this.findSkill(index, name))),
+      ),
+    );
   }
 
   /** Installs one hub agent, one plugin subagent, or every subagent of a plugin not yet installed. */
@@ -143,14 +200,24 @@ export class HubAgentService {
     if (!ref.plugin) {
       const entry = this.findAgent(index, ref.name);
       refuseInstalled({ kind: 'hub-agent', name: entry.name });
-      return [await this.create(workspaceId, await this.fromHubAgent(index, entry))];
+      return [
+        await this.create(
+          workspaceId,
+          await this.withSkills(await this.fromHubAgent(index, entry)),
+        ),
+      ];
     }
     const plugin = this.findPlugin(index, ref.plugin);
     if (ref.name) {
       if (!plugin.capabilities.agents.includes(ref.name))
         throw notFound(`${plugin.name}/${ref.name}`);
       refuseInstalled({ kind: 'hub-plugin', name: ref.name, plugin: plugin.name });
-      return [await this.create(workspaceId, await this.fromPlugin(plugin, ref.name))];
+      return [
+        await this.create(
+          workspaceId,
+          await this.withSkills(await this.fromPlugin(plugin, ref.name)),
+        ),
+      ];
     }
     const pending = plugin.capabilities.agents.filter(
       (name) =>
@@ -159,7 +226,9 @@ export class HubAgentService {
         ),
     );
     // Download and check every file before creating anything, so a bad file installs nothing.
-    const definitions = await Promise.all(pending.map((name) => this.fromPlugin(plugin, name)));
+    const definitions = await Promise.all(
+      pending.map(async (name) => this.withSkills(await this.fromPlugin(plugin, name))),
+    );
     const created: CustomAgent[] = [];
     for (const definition of definitions) created.push(await this.create(workspaceId, definition));
     return created;
@@ -167,7 +236,9 @@ export class HubAgentService {
 
   /**
    * Replaces an installed agent's name, description and instructions with the current hub
-   * version. The workspace's own choices (model, temperature, role, parent) are kept.
+   * version, and brings its skills to their current hub version. The workspace's own choices
+   * (model, temperature, role, parent, which skills it uses) are kept; skills taken out of the
+   * hub are dropped.
    */
   public async update(workspaceId: string, agentId: string): Promise<CustomAgent> {
     const agent = await this.agents.getAgent(workspaceId, agentId);
@@ -184,11 +255,15 @@ export class HubAgentService {
       source.kind === 'hub-agent'
         ? await this.fromHubAgent(index, this.findAgent(index, source.name))
         : await this.fromPlugin(this.findPlugin(index, source.plugin), source.name, true);
+    const names = agent.skills
+      .map((skill) => skill.name)
+      .filter((name) => available(index, index.skills).some((entry) => entry.name === name));
     return this.agents.updateAgent(workspaceId, agentId, {
       name: definition.name,
       description: definition.description,
       instructions: definition.instructions,
       source: definition.source,
+      skills: await this.resolveSkills(names, agent.skills, names),
     });
   }
 
@@ -202,6 +277,50 @@ export class HubAgentService {
     const entry = available(index, index.agents).find((agent) => agent.name === name);
     if (!entry) throw notFound(name ?? '');
     return entry;
+  }
+
+  private findSkill(index: HubIndex, name: string): HubSkillEntry {
+    const entry = available(index, index.skills).find((skill) => skill.name === name);
+    if (!entry || !skillFileOf(entry)) {
+      throw new ApplicationError(
+        'HUB_SKILL_NOT_FOUND',
+        `The skill '${name}' is not in the ADK Hub.`,
+        404,
+        [{ field: 'skills' }],
+        { skill: name },
+      );
+    }
+    return entry;
+  }
+
+  private async fromHubSkill(index: HubIndex, entry: HubSkillEntry): Promise<AgentSkill> {
+    const markdown = parseAgentMarkdown(await this.catalogPort.skillFile(index, entry));
+    if (!markdown.instructions) {
+      throw new ApplicationError('HUB_FILE_MISMATCH', `${entry.path}/SKILL.md is empty.`, 502);
+    }
+    if (markdown.instructions.length > MAX_SKILL_CHARACTERS) {
+      throw new ApplicationError(
+        'HUB_SKILL_TOO_LARGE',
+        `The skill '${entry.name}' is too large for an agent (at most ${MAX_SKILL_CHARACTERS} characters).`,
+        400,
+        [{ field: 'skills' }],
+        { skill: entry.name },
+      );
+    }
+    return {
+      name: entry.name,
+      description: entry.description.slice(0, 1024),
+      instructions: markdown.instructions,
+      version: entry.version,
+      revision: skillFileOf(entry)!.sha256,
+    };
+  }
+
+  /** Reads the skills an agent file asks for, before the agent is created. */
+  private async withSkills(
+    definition: AgentDefinition,
+  ): Promise<AgentDefinition & { readonly resolvedSkills: readonly AgentSkill[] }> {
+    return { ...definition, resolvedSkills: await this.resolveSkills(definition.skills) };
   }
 
   private findPlugin(index: HubIndex, name: string | undefined): HubPluginEntry {
@@ -225,6 +344,7 @@ export class HubAgentService {
         version: entry.version,
         revision: agentFileOf(entry).sha256,
       },
+      skills: skillList(markdown.fields['skills']),
     };
   }
 
@@ -249,10 +369,14 @@ export class HubAgentService {
         version: plugin.version ?? plugin.sha.slice(0, 12),
         revision: plugin.sha,
       },
+      skills: skillList(markdown.fields['skills']),
     };
   }
 
-  private create(workspaceId: string, definition: AgentDefinition): Promise<CustomAgent> {
+  private create(
+    workspaceId: string,
+    definition: AgentDefinition & { readonly resolvedSkills: readonly AgentSkill[] },
+  ): Promise<CustomAgent> {
     return this.agents.createAgent(workspaceId, {
       name: definition.name,
       slug: definition.slug,
@@ -261,8 +385,19 @@ export class HubAgentService {
       ...(definition.role ? { role: definition.role } : {}),
       ...(definition.temperature !== undefined ? { temperature: definition.temperature } : {}),
       source: definition.source,
+      skills: definition.resolvedSkills,
     });
   }
+}
+
+/** `skills: a, b` or `skills: [a, b]` in an agent's front matter. */
+function skillList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .replace(/^\[|\]$/g, '')
+    .split(',')
+    .map((name) => name.trim().replace(/^(["'])(.*)\1$/, '$2'))
+    .filter(Boolean);
 }
 
 /** Items removed from the hub for security or policy reasons are never offered or installed. */

@@ -16,6 +16,8 @@ export const TOOLSETS = [
   'design',
   'e2e',
   'releasenotes',
+  'integrationtests',
+  'loadtests',
   'audit',
 ] as const;
 export type Toolset = (typeof TOOLSETS)[number];

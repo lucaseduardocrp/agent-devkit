@@ -7,6 +7,8 @@ import {
   type HubAgentEntry,
   type HubIndex,
   type HubPluginEntry,
+  type HubSkillEntry,
+  skillFileOf,
 } from '../domain/hub-index.js';
 
 export const HUB_REPOSITORY = 'lucaseduardocrp/agent-devkit-hub';
@@ -55,14 +57,36 @@ export class HttpHubCatalog implements HubCatalog {
   }
 
   public async agentFile(index: HubIndex, agent: HubAgentEntry): Promise<string> {
-    const file = agentFileOf(agent);
+    return this.checkedFile(index.repository, index.commit, agent.path, agentFileOf(agent));
+  }
+
+  public async skillFile(index: HubIndex, skill: HubSkillEntry): Promise<string> {
+    const file = skillFileOf(skill);
+    if (!file) {
+      throw new ApplicationError('HUB_FILE_MISMATCH', `${skill.path} has no SKILL.md.`, 502);
+    }
+    return this.checkedFile(
+      skill.repository ?? index.repository,
+      skill.commit ?? index.commit,
+      skill.path,
+      file,
+    );
+  }
+
+  /** A file at a commit, refused unless it matches the sha256 the index lists for it. */
+  private async checkedFile(
+    repository: string,
+    commit: string,
+    folder: string,
+    file: { readonly path: string; readonly sha256: string },
+  ): Promise<string> {
     const bytes = await this.get(
-      `https://raw.githubusercontent.com/${index.repository}/${index.commit}/${agent.path}/${file.path}`,
+      `https://raw.githubusercontent.com/${repository}/${commit}/${folder}/${file.path}`,
     );
     if (createHash('sha256').update(bytes).digest('hex') !== file.sha256) {
       throw new ApplicationError(
         'HUB_FILE_MISMATCH',
-        `${agent.path}/${file.path} does not match the sha256 in the hub index.`,
+        `${folder}/${file.path} does not match the sha256 in the hub index.`,
         502,
       );
     }

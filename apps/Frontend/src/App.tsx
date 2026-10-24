@@ -26,6 +26,8 @@ import { DesignView } from './features/design/DesignView.js';
 import { WorkView } from './features/issues/WorkView.js';
 import { PbiView } from './features/pbi/PbiView.js';
 import { E2eView } from './features/e2e/E2eView.js';
+import { IntegrationTestsView } from './features/apitests/IntegrationTestsView.js';
+import { LoadTestsView } from './features/apitests/LoadTestsView.js';
 import { accessFor, allows, PermissionsProvider } from './features/workspaces/permissions.js';
 import type { ModuleOperation, PermissionModule } from './features/workspaces/workspace-types.js';
 import { canSeeTab, NAV_TAB_ORDER } from './components/layout/nav-access.js';
@@ -349,6 +351,20 @@ function AppContent({
             initialSavedCases={e2eSeed?.selection}
             onOpenAgents={() => setActiveTab('agents')}
             onOpenIntegrations={() => setActiveTab('connect')}
+          />
+        )}
+        {currentTab === 'integrationTests' && (
+          <IntegrationTestsView
+            key={activeWorkspaceId ?? 'no-workspace'}
+            apiClient={apiClient}
+            isReadOnly={readOnly('integrationTests')}
+          />
+        )}
+        {currentTab === 'loadTests' && (
+          <LoadTestsView
+            key={activeWorkspaceId ?? 'no-workspace'}
+            apiClient={apiClient}
+            isReadOnly={readOnly('loadTests')}
           />
         )}
         {currentTab === 'spec' && (

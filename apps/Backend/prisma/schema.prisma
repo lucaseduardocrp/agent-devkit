@@ -157,6 +157,10 @@ model WorkspaceRecord {
   fieldMappings    FieldMappingTemplateRecord[]
   releaseNotes     ReleaseNoteRecord[]
   e2eCreations     E2eCreationRecord[]
+  apiCollections   ApiCollectionRecord[]
+  apiEnvironments  ApiEnvironmentRecord[]
+  loadScenarios    LoadScenarioRecord[]
+  apiRuns          ApiRunRecord[]
   llmUsageEvents   LlmUsageEventRecord[]
   permissionGroups PermissionGroupRecord[]
   agentWorkflow    AgentWorkflowRecord?
@@ -561,6 +565,8 @@ model AgentRecord {
   isDefault     Boolean   @default(false) @map("is_default")
   /// Where an agent installed from the ADK Hub came from (AgentSource); null for agents made here.
   source        Json?
+  /// ADK Hub skills attached to the agent (AgentSkill[]), each with a copy of its SKILL.md.
+  skills        Json      @default("[]")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
@@ -763,4 +769,94 @@ model E2eArtifactRecord {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("e2e_artifacts")
+}
+
+/// Integration tests: a collection of requests with assertions (folders, auth, variables).
+model ApiCollectionRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  description String?  @db.Text
+  /// { variables, auth, items }; secret variable values are AES-GCM encrypted.
+  definition  Json
+  /// { kind: manual|adk|postman|insomnia|openapi|generated, detail? }
+  source      Json
+  createdBy   String   @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  scenarios LoadScenarioRecord[]
+
+  @@index([workspaceId], map: "api_collections_workspace_idx")
+  @@map("api_collections")
+}
+
+/// Variables shared by integration and load runs (base URLs, credentials); secrets encrypted.
+model ApiEnvironmentRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  variables   Json     @default("[]")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId], map: "api_environments_workspace_idx")
+  @@map("api_environments")
+}
+
+/// Overload tests: requests of a collection replayed under a load profile with thresholds.
+model LoadScenarioRecord {
+  id           String   @id @default(uuid())
+  workspaceId  String   @map("workspace_id")
+  collectionId String   @map("collection_id")
+  name         String
+  /// LoadScenarioInput without name and collectionId.
+  definition   Json
+  createdBy    String   @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  workspace  WorkspaceRecord     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  collection ApiCollectionRecord @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId], map: "load_scenarios_workspace_idx")
+  @@map("load_scenarios")
+}
+
+/// One integration or load run. Also the work queue: workers claim queued remote runs and
+/// `devkit runner` claims queued local runs of the user who requested them.
+model ApiRunRecord {
+  id            String    @id @default(uuid())
+  workspaceId   String    @map("workspace_id")
+  kind          String
+  /// Kept without a foreign key so the history survives deleting the collection or scenario.
+  collectionId  String    @map("collection_id")
+  scenarioId    String?   @map("scenario_id")
+  environmentId String?   @map("environment_id")
+  itemIds       Json      @default("[]") @map("item_ids")
+  name          String
+  target        String
+  status        String    @default("queued")
+  requestedBy   String    @map("requested_by")
+  claimedBy     String?   @map("claimed_by")
+  claimLabel    String?   @map("claim_label")
+  heartbeatAt   DateTime? @map("heartbeat_at")
+  attempts      Int       @default(0)
+  /// AES-GCM encrypted input (collection, decrypted environment); cleared when the run ends.
+  payload       String?   @db.Text
+  result        Json?
+  error         String?   @db.Text
+  createdAt     DateTime  @default(now()) @map("created_at")
+  startedAt     DateTime? @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([status, target, createdAt], map: "api_runs_claim_idx")
+  @@index([workspaceId, createdAt], map: "api_runs_workspace_idx")
+  @@map("api_runs")
 }

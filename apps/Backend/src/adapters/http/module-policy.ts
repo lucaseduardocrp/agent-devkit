@@ -50,6 +50,9 @@ const prefixes: readonly [RegExp, PermissionModule][] = [
   [/^\/release-notes(\/|$)/, 'releaseNotes'],
   [/^\/TestPlan(\/|$)/, 'testplans'],
   [/^\/e2e(\/|$)/, 'e2e'],
+  [/^\/integration-tests(\/|$)/, 'integrationTests'],
+  // Load scenarios also read collections: their routes require view on Integration Tests too.
+  [/^\/load-tests(\/|$)/, 'loadTests'],
   [/^\/integrations(\/|$)/, 'integrations'],
 ];
 

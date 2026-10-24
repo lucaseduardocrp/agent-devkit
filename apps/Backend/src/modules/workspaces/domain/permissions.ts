@@ -11,6 +11,8 @@ export const PERMISSION_MODULES = [
   'releaseNotes',
   'testplans',
   'e2e',
+  'integrationTests',
+  'loadTests',
   'integrations',
 ] as const;
 export type PermissionModule = (typeof PERMISSION_MODULES)[number];

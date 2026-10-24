@@ -117,6 +117,17 @@ import {
 import { PlaywrightE2eRunner } from '../../modules/e2e/adapters/playwright-runner.js';
 import { createE2eRouter } from './e2e-routes.js';
 import { createE2eRunnerRouter } from './e2e-runner-routes.js';
+import { createApiTestsRouter } from './api-tests-routes.js';
+import {
+  ApiTestService,
+  type ApiTestDispatcher,
+} from '../../modules/apitests/application/api-test-service.js';
+import {
+  InMemoryApiTestStore,
+  type ApiTestStore,
+} from '../../modules/apitests/application/api-test-store.js';
+import { ApiTestWorker } from '../../modules/apitests/application/api-test-worker.js';
+import { WorkspaceSourceLoader } from '../../modules/apitests/adapters/workspace-source-loader.js';
 import {
   InMemoryE2eRunnerTaskStore,
   type E2eRunnerTaskStore,
@@ -184,6 +195,12 @@ export interface AppOptions {
    * in-process worker (local development).
    */
   readonly e2eDispatcher?: E2eDispatcher;
+  /** Integration and load tests; in memory by default. */
+  readonly apiTestStore?: ApiTestStore;
+  /** Wakes the workers for remote API test runs; without one the API runs them itself. */
+  readonly apiTestDispatcher?: ApiTestDispatcher;
+  /** Lets in-process remote runs reach private networks (self-hosted, single box). */
+  readonly apiTestAllowPrivateNetwork?: boolean;
   readonly e2eWorkerConcurrency?: number;
   /** Converts recordings to MP4; the server wires FFmpeg, tests usually omit it. */
   readonly e2eTranscoder?: E2eVideoTranscoder | null;
@@ -297,6 +314,8 @@ export function createApp(options: AppOptions = {}) {
   app.use('/design', express.json({ limit: '30mb' }));
   // E2E runs carry the product spec and an optional code diff (up to 500k characters each).
   app.use('/e2e', express.json({ limit: '5mb' }));
+  // Imported collections and the results runners report can be several megabytes.
+  app.use(['/integration-tests', '/load-tests', '/api-tests'], express.json({ limit: '10mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(modulePolicy);
   const e2eArtifacts = options.e2eArtifacts ?? new InMemoryE2eArtifactStore();
@@ -468,6 +487,34 @@ export function createApp(options: AppOptions = {}) {
     ),
   );
   const specRepository = audited.specs;
+  let apiTestDispatcher = options.apiTestDispatcher;
+  const apiTestService = new ApiTestService({
+    store: options.apiTestStore ?? new InMemoryApiTestStore(),
+    sources: new WorkspaceSourceLoader({
+      tests: audited.tests,
+      suites: testSuites,
+      knowledge: knowledgeRepository,
+      specs: specRepository,
+      pbis: pbiStore,
+    }),
+    dispatcher: { wake: () => apiTestDispatcher?.wake() ?? Promise.resolve() },
+    dynamicProviderFactory,
+    defaultLlm: options.defaultLlm,
+  });
+  if (!apiTestDispatcher) {
+    // Without a remote worker the API executes remote runs itself (local development).
+    const worker = new ApiTestWorker({
+      service: apiTestService,
+      allowPrivateNetwork: options.apiTestAllowPrivateNetwork,
+    });
+    apiTestDispatcher = {
+      wake: () => {
+        worker.wake();
+        return Promise.resolve();
+      },
+    };
+  }
+  app.use(createApiTestsRouter(apiTestService));
   const specCollaborator = new AgentSpecCollaborator(agentService);
   app.use(
     createSpecRouter(

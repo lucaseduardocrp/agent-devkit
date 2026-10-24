@@ -1,6 +1,7 @@
 import type { AgentRepository } from '../application/agent-repository.js';
 import {
   CustomAgent,
+  parseAgentSkills,
   parseAgentSource,
   type AgentProps,
   type AgentRole,
@@ -8,6 +9,8 @@ import {
 
 /** AgentSource as Prisma stores it: a JSON object of strings. */
 type JsonSource = { readonly [key: string]: string | undefined };
+/** AgentSkill as Prisma stores it. */
+type JsonSkill = { readonly [key: string]: string };
 
 interface RawAgentRecord {
   id: string;
@@ -22,6 +25,7 @@ interface RawAgentRecord {
   temperature: number | null;
   isDefault: boolean;
   source?: unknown;
+  skills?: unknown;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -42,6 +46,7 @@ interface AgentDelegate {
       temperature?: number | null;
       isDefault?: boolean;
       source?: JsonSource;
+      skills?: JsonSkill[];
     };
     update: {
       name: string;
@@ -54,6 +59,7 @@ interface AgentDelegate {
       temperature?: number | null;
       isDefault?: boolean;
       source?: JsonSource;
+      skills?: JsonSkill[];
       updatedAt?: Date;
     };
   }): Promise<RawAgentRecord>;
@@ -91,6 +97,7 @@ export class PrismaAgentRepository implements AgentRepository {
       temperature: record.temperature,
       isDefault: record.isDefault,
       source: parseAgentSource(record.source),
+      skills: parseAgentSkills(record.skills),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
@@ -113,6 +120,7 @@ export class PrismaAgentRepository implements AgentRepository {
         temperature: agent.temperature,
         isDefault: agent.isDefault,
         ...(agent.source ? { source: { ...agent.source } } : {}),
+        skills: agent.skills.map((skill) => ({ ...skill })),
       },
       update: {
         name: agent.name,
@@ -125,6 +133,7 @@ export class PrismaAgentRepository implements AgentRepository {
         temperature: agent.temperature,
         isDefault: agent.isDefault,
         ...(agent.source ? { source: { ...agent.source } } : {}),
+        skills: agent.skills.map((skill) => ({ ...skill })),
         updatedAt: new Date(),
       },
     });

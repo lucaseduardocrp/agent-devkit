@@ -383,6 +383,56 @@ const cases: Record<string, [unknown, string]> = {
   ],
   release_notes_prepare: [{ title: 'R', itemIds: ['50086'] }, 'GET /pbi/items/50086'],
   release_notes_export_markdown: [{ releaseNoteId: 'rn1' }, 'GET /release-notes/rn1/export'],
+  integration_list_collections: [{}, 'GET /integration-tests/collections'],
+  integration_get_collection: [{ collectionId: 'c1' }, 'GET /integration-tests/collections/c1'],
+  integration_save_collection: [
+    { collection: { name: 'API' } },
+    'POST /integration-tests/collections',
+  ],
+  integration_delete_collection: [
+    { collectionId: 'c1' },
+    'DELETE /integration-tests/collections/c1',
+  ],
+  integration_import: [{ content: '{}' }, 'POST /integration-tests/collections/import'],
+  integration_export: [
+    { collectionId: 'c1', format: 'bruno' },
+    'GET /integration-tests/collections/c1/export',
+  ],
+  integration_list_environments: [{}, 'GET /integration-tests/environments'],
+  integration_save_environment: [
+    { environmentId: 'e1', name: 'Staging' },
+    'PUT /integration-tests/environments/e1',
+  ],
+  integration_delete_environment: [
+    { environmentId: 'e1' },
+    'DELETE /integration-tests/environments/e1',
+  ],
+  integration_prepare_generation: [
+    { instructions: 'Orders API' },
+    'POST /integration-tests/generate/prepare',
+  ],
+  integration_generate: [{ instructions: 'Orders API' }, 'POST /integration-tests/generate'],
+  integration_run: [{ collectionId: 'c1', target: 'local' }, 'POST /integration-tests/runs'],
+  integration_list_runs: [{}, 'GET /integration-tests/runs'],
+  integration_get_run: [{ runId: 'r1' }, 'GET /integration-tests/runs/r1'],
+  integration_cancel_run: [{ runId: 'r1' }, 'POST /integration-tests/runs/r1/cancel'],
+  integration_delete_run: [{ runId: 'r1' }, 'DELETE /integration-tests/runs/r1'],
+  load_profiles: [{}, 'GET /load-tests/profiles'],
+  load_list_scenarios: [{}, 'GET /load-tests/scenarios'],
+  load_get_scenario: [{ scenarioId: 's1' }, 'GET /load-tests/scenarios/s1'],
+  load_save_scenario: [
+    { scenarioId: 's1', scenario: { name: 'Peak' } },
+    'PUT /load-tests/scenarios/s1',
+  ],
+  load_delete_scenario: [{ scenarioId: 's1' }, 'DELETE /load-tests/scenarios/s1'],
+  load_export_k6: [{ scenarioId: 's1' }, 'GET /load-tests/scenarios/s1/k6'],
+  load_prepare_generation: [{ collectionId: 'c1' }, 'POST /load-tests/generate/prepare'],
+  load_generate: [{ collectionId: 'c1' }, 'POST /load-tests/generate'],
+  load_run: [{ scenarioId: 's1', authorized: true }, 'POST /load-tests/runs'],
+  load_list_runs: [{ scenarioId: 's1' }, 'GET /load-tests/runs'],
+  load_get_run: [{ runId: 'r1' }, 'GET /load-tests/runs/r1'],
+  load_cancel_run: [{ runId: 'r1' }, 'POST /load-tests/runs/r1/cancel'],
+  load_delete_run: [{ runId: 'r1' }, 'DELETE /load-tests/runs/r1'],
 };
 // design_prepare without projectId only lists systems when one is requested; give it a project.
 cases['design_prepare'] = [

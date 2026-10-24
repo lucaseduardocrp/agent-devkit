@@ -5,11 +5,26 @@ import type { RequestContextResolver } from './compatibility-routes.js';
 import { requireAuth } from './auth-middleware.js';
 import { ApplicationError } from '../../shared/errors.js';
 import { parseBody } from './validation.js';
-import type { AgentRole } from '../../modules/agents/domain/agent-entity.js';
+import {
+  MAX_AGENT_SKILLS,
+  type AgentRole,
+  type AgentSkill,
+} from '../../modules/agents/domain/agent-entity.js';
 import type { HubAgentService } from '../../modules/hub/application/hub-agent-service.js';
 import { registerHubAgentRoutes } from './hub-agents-routes.js';
 
 const agentRoleEnum = z.enum(['QA', 'DOCUMENTATION', 'REFACTOR', 'CUSTOM']);
+
+/** ADK Hub skill names; the server reads each SKILL.md from the hub. */
+const skillNames = z
+  .array(
+    z
+      .string()
+      .trim()
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Use the hub skill name, e.g. test-design.')
+      .max(64),
+  )
+  .max(MAX_AGENT_SKILLS);
 
 const createAgentSchema = z.object({
   name: z.string().trim().min(1, 'Nome do agente é obrigatório.').max(100),
@@ -21,6 +36,7 @@ const createAgentSchema = z.object({
   model: z.string().trim().optional(),
   temperature: z.number().min(0).max(2).optional(),
   isDefault: z.boolean().optional(),
+  skills: skillNames.optional(),
 });
 
 const updateAgentSchema = z.object({
@@ -33,6 +49,10 @@ const updateAgentSchema = z.object({
   model: z.string().trim().optional(),
   temperature: z.number().min(0).max(2).optional(),
   isDefault: z.boolean().optional(),
+  /** The full list of skills the agent uses; the ones it already has keep their copy. */
+  skills: skillNames.optional(),
+  /** Skills to read again from the hub, to bring them to the current version. */
+  refreshSkills: skillNames.optional(),
 });
 
 const executeAgentSchema = z.object({
@@ -74,6 +94,8 @@ const agentWorkflowSchema = z.object({
           'design',
           'e2e',
           'releasenotes',
+          'integrationtests',
+          'loadtests',
           'audit',
           'workspaces',
         ]),
@@ -134,6 +156,23 @@ export function createAgentsRouter(
   // Before /agents/:id, so /agents/hub is not read as an agent id.
   if (hubAgents) registerHubAgentRoutes(router, hubAgents, resolveWorkspaceId);
 
+  // Skills come from the ADK Hub: without it, an agent can only keep the skills it has.
+  const resolveSkills = async (
+    names: readonly string[],
+    current: readonly AgentSkill[] = [],
+    refresh: readonly string[] = [],
+  ): Promise<AgentSkill[]> => {
+    if (hubAgents) return hubAgents.resolveSkills(names, current, refresh);
+    if (refresh.length === 0 && names.every((name) => current.some((s) => s.name === name))) {
+      return names.map((name) => current.find((skill) => skill.name === name)!);
+    }
+    throw new ApplicationError(
+      'HUB_UNAVAILABLE',
+      'Skills come from the ADK Hub, which this server does not use.',
+      503,
+    );
+  };
+
   router.get('/agents', requireAuth, async (req, res, next) => {
     try {
       const workspaceId = resolveWorkspaceId(req);
@@ -189,8 +228,11 @@ export function createAgentsRouter(
   router.post('/agents', requireAuth, async (req, res, next) => {
     try {
       const workspaceId = resolveWorkspaceId(req);
-      const body = parseBody(createAgentSchema, req);
-      const created = await agentService.createAgent(workspaceId, body);
+      const { skills, ...body } = parseBody(createAgentSchema, req);
+      const created = await agentService.createAgent(workspaceId, {
+        ...body,
+        ...(skills ? { skills: await resolveSkills(skills) } : {}),
+      });
       res.status(201).json({ agent: created.toJSON() });
     } catch (err) {
       next(err);
@@ -212,8 +254,20 @@ export function createAgentsRouter(
     try {
       const workspaceId = resolveWorkspaceId(req);
       const agentId = req.params['id'] as string;
-      const body = parseBody(updateAgentSchema, req);
-      const updated = await agentService.updateAgent(workspaceId, agentId, body);
+      const { skills, refreshSkills, ...body } = parseBody(updateAgentSchema, req);
+      let resolved: AgentSkill[] | undefined;
+      if (skills || refreshSkills) {
+        const current = (await agentService.getAgent(workspaceId, agentId)).skills;
+        resolved = await resolveSkills(
+          skills ?? current.map((skill) => skill.name),
+          current,
+          refreshSkills,
+        );
+      }
+      const updated = await agentService.updateAgent(workspaceId, agentId, {
+        ...body,
+        ...(resolved ? { skills: resolved } : {}),
+      });
       res.status(200).json({ agent: updated.toJSON() });
     } catch (err) {
       next(err);

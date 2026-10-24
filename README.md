@@ -102,6 +102,11 @@ tools) in [apps/Mcp/README.md](apps/Mcp/README.md).
 - **Design**: design systems and prototype projects.
 - **E2E Automation**: Playwright runs on ADK workers or on your own computer, with videos,
   screenshots and test-management reporting.
+- **Integration Tests**: API request collections with assertions and chained variables, generated
+  by AI from test plans, Brain, specs and PBIs or imported from Postman, Insomnia and OpenAPI;
+  exported to Postman, Insomnia and Bruno.
+- **Overload Tests**: load, stress, spike, soak and breakpoint tests with latency percentiles,
+  throughput, error rate and thresholds; exported to k6.
 - **Release notes**, **audit history**, **workspaces**, **permission groups** and **integrations**.
 - **ADK Hub** — community and official skills and plugins for your assistant, installed with
   `devkit skills install <name>` and `devkit plugins install <name>`. The catalog lives in its own

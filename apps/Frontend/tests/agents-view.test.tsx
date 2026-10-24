@@ -299,6 +299,98 @@ describe('AgentModal', () => {
     expect(restricted.queryByText(help)).not.toBeInTheDocument();
   });
 
+  it('attaches hub skills and asks for the update of an outdated copy', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const hubSkill = (name: string, version: string, revision: string) => ({
+      name,
+      description: `${name} description`,
+      category: 'qa',
+      version,
+      author: 'ADK',
+      tier: 'official' as const,
+      revision,
+    });
+    const loadHubSkills = vi.fn(() =>
+      Promise.resolve([
+        hubSkill('test-design', '1.1.0', 'b'.repeat(64)),
+        hubSkill('edge-hunter', '1.0.0', 'c'.repeat(64)),
+      ]),
+    );
+    const agent: CustomAgentDto = {
+      ...mockAgents[0]!,
+      model: 'gemini-2.5-flash',
+      skills: [
+        {
+          name: 'test-design',
+          description: 'test-design description',
+          version: '1.0.0',
+          revision: 'a'.repeat(64),
+        },
+      ],
+    };
+    const { getByRole, getByText } = render(
+      <AgentModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSave={onSave}
+        initialData={agent}
+        availableLlmModels={availableLlmModels}
+        loadHubSkills={loadHubSkills}
+      />,
+    );
+
+    expect(getByText('test-design')).toBeInTheDocument();
+    fireEvent.click(await waitFor(() => getByRole('button', { name: 'Atualizar para 1.1.0' })));
+    expect(getByRole('button', { name: 'Atualiza ao salvar' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    const add = getByRole('combobox', { name: 'Skills' }) as HTMLSelectElement;
+    expect([...add.options].map((option) => option.value)).toEqual(['', 'edge-hunter']);
+    fireEvent.change(add, { target: { value: 'edge-hunter' } });
+    expect(getByRole('button', { name: 'Remover a skill edge-hunter' })).toBeInTheDocument();
+
+    fireEvent.click(getByRole('button', { name: 'Atualizar Agente' }));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skills: ['test-design', 'edge-hunter'],
+          refreshSkills: ['test-design'],
+        }),
+      );
+    });
+  });
+
+  it('removes a skill and says when the hub cannot be read', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const agent: CustomAgentDto = {
+      ...mockAgents[0]!,
+      skills: [
+        { name: 'test-design', description: '', version: '1.0.0', revision: 'a'.repeat(64) },
+      ],
+    };
+    const { getByRole, getByText } = render(
+      <AgentModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSave={onSave}
+        initialData={agent}
+        availableLlmModels={availableLlmModels}
+        loadHubSkills={() => Promise.reject(new Error('offline'))}
+      />,
+    );
+    await waitFor(() =>
+      expect(
+        getByText('Não foi possível carregar as skills do ADK Hub agora.'),
+      ).toBeInTheDocument(),
+    );
+    fireEvent.click(getByRole('button', { name: 'Remover a skill test-design' }));
+    fireEvent.click(getByRole('button', { name: 'Atualizar Agente' }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ skills: [] })),
+    );
+  });
+
   it('creates an agent without a model or an AI integration for MCP use', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const { getByRole, getByLabelText } = render(
