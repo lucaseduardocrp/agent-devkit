@@ -3,6 +3,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import type { AddressInfo } from 'node:net';
 
 function localOrigin(value: string): string {
   let url: URL;
@@ -81,6 +82,7 @@ function validToken(actual: string | undefined, expected: string): boolean {
 export function createLocalGateway(
   frontend: string,
   token: { clientId: string; clientSecret: string },
+  timeoutMs = 30_000,
 ): Server {
   const base = loopbackUrl(frontend);
   if (!base) throw new Error('Gateway frontend must be a loopback HTTP service.');
@@ -92,7 +94,8 @@ export function createLocalGateway(
       outgoing.writeHead(403).end();
       return;
     }
-    const requestUrl = incoming.url ?? '/';
+    // Requests a server receives always carry a URL.
+    const requestUrl = String(incoming.url);
     let destination: URL;
     try {
       if (requestUrl.startsWith(LOCAL_ROUTE)) {
@@ -129,11 +132,16 @@ export function createLocalGateway(
       outgoing.writeHead(400).end();
       return;
     }
-    forwardLocalRequest(incoming, outgoing, destination);
+    forwardLocalRequest(incoming, outgoing, destination, timeoutMs);
   });
 }
 
-function forwardLocalRequest(incoming: IncomingMessage, outgoing: ServerResponse, url: URL): void {
+function forwardLocalRequest(
+  incoming: IncomingMessage,
+  outgoing: ServerResponse,
+  url: URL,
+  timeoutMs: number,
+): void {
   const headers = Object.fromEntries(
     Object.entries(incoming.headers).filter(([name]) => !HOP_HEADERS.has(name.toLowerCase())),
   );
@@ -142,7 +150,7 @@ function forwardLocalRequest(incoming: IncomingMessage, outgoing: ServerResponse
     {
       method: incoming.method,
       headers: { ...headers, host: url.host },
-      timeout: 30_000,
+      timeout: timeoutMs,
       // Loopback development APIs commonly use locally trusted certificates.
       ...(url.protocol === 'https:' ? { rejectUnauthorized: false } : {}),
     },
@@ -150,7 +158,8 @@ function forwardLocalRequest(incoming: IncomingMessage, outgoing: ServerResponse
       const responseHeaders = Object.fromEntries(
         Object.entries(response.headers).filter(([name]) => !HOP_HEADERS.has(name.toLowerCase())),
       );
-      outgoing.writeHead(response.statusCode ?? 502, responseHeaders);
+      // Responses of an HTTP client request always carry a status code.
+      outgoing.writeHead(Number(response.statusCode), responseHeaders);
       response.pipe(outgoing);
     },
   );
@@ -228,9 +237,8 @@ export class CloudflareTunnelManager {
         gateway.listen(0, '127.0.0.1', resolve);
       });
       if (generation !== this.generation) throw new Error('Tunnel stopped.');
-      const address = gateway.address();
-      if (!address || typeof address === 'string') throw new Error('Gateway port unavailable.');
-      const tunnel = await this.launch(`http://127.0.0.1:${address.port}`);
+      const { port } = gateway.address() as AddressInfo;
+      const tunnel = await this.launch(`http://127.0.0.1:${port}`);
       if (generation !== this.generation) throw new Error('Tunnel stopped.');
       const info = {
         ...tunnel,
@@ -243,7 +251,8 @@ export class CloudflareTunnelManager {
     } catch (error) {
       if (gateway.listening) gateway.close();
       if (this.gateway === gateway) this.gateway = undefined;
-      if (generation === this.generation && this.target === origin) this.target = undefined;
+      // A newer start or a stop owns the target once the generation moved on.
+      if (generation === this.generation) this.target = undefined;
       throw error;
     }
   }

@@ -137,7 +137,7 @@ describe('TestSuiteTree extra paths', () => {
         onCreateRequestHandled={onCreateRequestHandled}
       />,
     );
-    expect(view.getByRole<HTMLInputElement>('textbox').value).toBe('');
+    expect((view.getByRole('textbox') as HTMLInputElement).value).toBe('');
     expect(onCreateRequestHandled).toHaveBeenCalledTimes(1);
   });
 });

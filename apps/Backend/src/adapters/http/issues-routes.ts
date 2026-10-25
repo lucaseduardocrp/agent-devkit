@@ -369,7 +369,7 @@ export function createIssuesRouter(
             const state = stateByIssue.get(issue.id);
             return {
               issue,
-              runs: (runsByIssue.get(issue.id) ?? []).map((run) => ({
+              runs: runsByIssue.get(issue.id)!.map((run) => ({
                 id: run.id,
                 agentId: run.agentId,
                 status: run.status,

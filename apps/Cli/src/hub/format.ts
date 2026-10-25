@@ -9,13 +9,6 @@ import type { InstallRecord, McpServerConfig } from './install.js';
 
 export type HubClient = 'claude' | 'codex' | 'agents';
 
-const TIER_LABELS: Record<string, string> = {
-  'built-in': 'built-in',
-  official: 'official',
-  verified: 'verified',
-  community: 'community',
-};
-
 function truncate(text: string, width: number): string {
   return text.length > width ? `${text.slice(0, width - 1).trimEnd()}…` : text;
 }
@@ -38,8 +31,7 @@ export function formatList(
     const mark = installed.some((record) => record.kind === kind && record.name === item.name)
       ? '✓'
       : ' ';
-    const tier = TIER_LABELS[item.tier] ?? item.tier;
-    return `${mark} ${item.name.padEnd(width)}  ${tier.padEnd(9)}  ${truncate(categoryLabel(index, kind, item.category), 16).padEnd(16)}  ${truncate(item.description, 70)}`;
+    return `${mark} ${item.name.padEnd(width)}  ${item.tier.padEnd(9)}  ${truncate(categoryLabel(index, kind, item.category), 16).padEnd(16)}  ${truncate(item.description, 70)}`;
   });
   return [
     ...lines,
@@ -55,7 +47,7 @@ export function formatInfo(index: HubIndex, kind: HubKind, item: HubSkill | HubP
     '',
     item.description,
     '',
-    `Tier         ${TIER_LABELS[item.tier] ?? item.tier}`,
+    `Tier         ${item.tier}`,
     `Category     ${categoryLabel(index, kind, item.category)}`,
     `License      ${item.license}`,
   ];

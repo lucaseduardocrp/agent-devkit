@@ -20,7 +20,7 @@ describe('local tunnel bridge', () => {
       status: vi.fn(() => undefined),
       stop: vi.fn(),
     };
-    server = createLocalTunnelBridge(ORIGIN, tunnel, 0);
+    server = createLocalTunnelBridge(ORIGIN, tunnel);
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
     const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
     const rejected = await fetch(`${url}/tunnel`, {

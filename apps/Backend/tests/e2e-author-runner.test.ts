@@ -6,6 +6,7 @@ import {
   MAX_E2E_TESTS,
   parseJsonObject,
 } from '../src/modules/e2e/application/e2e-author.js';
+import { EMPTY_AGENT_WORKFLOW } from '../src/modules/agents/domain/agent-workflow.js';
 import request from 'supertest';
 import express from 'express';
 import { createE2eRouter } from '../src/adapters/http/e2e-routes.js';
@@ -70,6 +71,7 @@ function author(text: string | Error, options: { provider?: boolean; fallback?: 
   const llm = { provider: 'fake', complete, stream: vi.fn() } as unknown as LlmPort;
   const agents = {
     getAgent: vi.fn().mockResolvedValue({ instructions: 'You are QA.', model: 'm1' }),
+    getWorkflow: vi.fn().mockResolvedValue(EMPTY_AGENT_WORKFLOW),
   } as unknown as AgentService;
   const providers = {
     resolveLlmProvider: vi.fn().mockResolvedValue(options.provider === false ? null : llm),
@@ -206,7 +208,10 @@ describe('AgentE2eAuthor', () => {
       author(new Error('HTTP 429 Too Many Requests')).author.plan({ creation, snapshot: null }),
     ).rejects.toMatchObject({ code: 'LLM_RATE_LIMITED' });
     const noProviders = new AgentE2eAuthor({
-      agents: { getAgent: vi.fn().mockResolvedValue({ instructions: 'x', model: null }) } as never,
+      agents: {
+        getAgent: vi.fn().mockResolvedValue({ instructions: 'x', model: null }),
+        getWorkflow: vi.fn().mockResolvedValue(EMPTY_AGENT_WORKFLOW),
+      } as never,
     });
     await expect(noProviders.plan({ creation, snapshot: null })).rejects.toMatchObject({
       code: 'PROVIDER_NOT_AVAILABLE',

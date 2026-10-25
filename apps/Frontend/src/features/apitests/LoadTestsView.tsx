@@ -40,6 +40,9 @@ export interface LoadTestsViewProps {
 
 type Tab = 'plan' | 'runs';
 const snapshot = (draft: LoadScenarioInput | null) => JSON.stringify(draft);
+/** Every request of a collection, each with the same weight. */
+const everyRequest = (collection: ApiCollection) =>
+  flattenItems(collection.items).map(({ request }) => ({ requestId: request.id, weight: 1 }));
 
 export function LoadTestsView({
   apiClient = defaultApiClient,
@@ -63,12 +66,14 @@ export function LoadTestsView({
   const [starting, setStarting] = useState(false);
   const [showGenerate, setShowGenerate] = useState(false);
   const [naming, setNaming] = useState<'new' | 'rename' | 'duplicate' | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  // The id of the scenario waiting for the delete confirmation.
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // True until the scenarios, collections and environments are listed.
   const [loading, setLoading] = useState(true);
-  // Picking another collection (or creating a scenario) selects all of its requests once loaded.
-  const selectAllOnLoad = useRef(false);
+  // Picking another collection (or creating a scenario) selects all of its requests once loaded:
+  // the id of that collection, so a late answer for a collection left behind changes nothing.
+  const selectAllOnLoad = useRef<string | null>(null);
 
   const fail = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
   const dirty = draft !== null && snapshot(draft) !== saved;
@@ -105,19 +110,9 @@ export function LoadTestsView({
       .getApiCollection(draft.collectionId)
       .then((loaded) => {
         setCollection(loaded);
-        if (selectAllOnLoad.current) {
-          selectAllOnLoad.current = false;
-          setDraft((current) =>
-            current && current.collectionId === loaded.id
-              ? {
-                  ...current,
-                  requests: flattenItems(loaded.items).map(({ request }) => ({
-                    requestId: request.id,
-                    weight: 1,
-                  })),
-                }
-              : current,
-          );
+        if (selectAllOnLoad.current === loaded.id) {
+          selectAllOnLoad.current = null;
+          setDraft((current) => current && { ...current, requests: everyRequest(loaded) });
         }
       })
       .catch(fail);
@@ -138,9 +133,11 @@ export function LoadTestsView({
     return () => window.clearInterval(timer);
   }, [apiClient, run]);
 
-  const select = async (scenario: LoadScenario) => {
-    if (dirty && !window.confirm(t('apiTests.discardChanges'))) return;
+  /** Opens `scenario`; false when the user kept unsaved changes instead. */
+  const select = async (scenario: LoadScenario): Promise<boolean> => {
+    if (dirty && !window.confirm(t('apiTests.discardChanges'))) return false;
     const { id: _id, updatedAt: _updatedAt, ...input } = scenario;
+    selectAllOnLoad.current = null;
     setSelectedId(scenario.id);
     setDraft(input);
     setSaved(snapshot(input));
@@ -153,28 +150,28 @@ export function LoadTestsView({
     } catch (err) {
       fail(err);
     }
+    return true;
   };
 
   const createScenario = (name: string) => {
-    const collectionId = collections[0]?.id ?? '';
-    selectAllOnLoad.current = true;
+    const created = emptyScenario(name, collections[0]?.id);
+    selectAllOnLoad.current = created.collectionId;
     setCollection(null);
     setSelectedId(null);
-    setDraft(emptyScenario(name, collectionId));
+    setDraft(created);
     setSaved('null');
     setRuns([]);
     setRun(null);
     setTab('plan');
   };
 
-  const applyProfile = async (profile: LoadProfileType) => {
-    if (!draft) return;
-    if (profile === 'custom') return setDraft({ ...draft, profile });
+  const applyProfile = async (current: LoadScenarioInput, profile: LoadProfileType) => {
+    if (profile === 'custom') return setDraft({ ...current, profile });
     try {
       const profiles = await apiClient.getLoadProfiles(preset.vus, preset.durationSec);
       const chosen = profiles.find((item) => item.profile === profile);
       setDraft({
-        ...draft,
+        ...current,
         profile,
         ...(chosen ? { stages: chosen.stages, thresholds: chosen.thresholds } : {}),
       });
@@ -216,11 +213,10 @@ export function LoadTestsView({
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const remove = async () => {
-    setConfirmDelete(false);
-    if (!selectedId) return;
+  const remove = async (id: string) => {
+    setConfirmDelete(null);
     try {
-      await apiClient.deleteLoadScenario(selectedId);
+      await apiClient.deleteLoadScenario(id);
       setSelectedId(null);
       setDraft(null);
       setSaved('null');
@@ -230,10 +226,9 @@ export function LoadTestsView({
     }
   };
 
-  const exportK6 = async () => {
-    if (!selectedId) return;
+  const exportK6 = async (id: string) => {
     try {
-      const file = await apiClient.exportLoadScenarioK6(selectedId);
+      const file = await apiClient.exportLoadScenarioK6(id);
       downloadBlob(new Blob([file.body], { type: 'text/javascript' }), file.fileName);
     } catch (err) {
       fail(err);
@@ -248,13 +243,12 @@ export function LoadTestsView({
     setShowRun(true);
   };
 
-  const start = async () => {
-    if (!selectedId) return;
+  const start = async (scenarioId: string) => {
     setStarting(true);
     setError(null);
     try {
       const started = await apiClient.startLoadRun({
-        scenarioId: selectedId,
+        scenarioId,
         target,
         authorized: true,
       });
@@ -348,7 +342,13 @@ export function LoadTestsView({
               options={collections.map((item) => ({ value: item.id, label: item.name }))}
               onChange={(collectionId) => {
                 if (collectionId === draft.collectionId) return;
-                selectAllOnLoad.current = true;
+                // Back to the collection already loaded: nothing is fetched, so select it now.
+                if (collection?.id === collectionId) {
+                  selectAllOnLoad.current = null;
+                  setDraft({ ...draft, collectionId, requests: everyRequest(collection) });
+                  return;
+                }
+                selectAllOnLoad.current = collectionId;
                 setDraft({ ...draft, collectionId, requests: [] });
               }}
               data-testid="scenario-collection"
@@ -381,7 +381,7 @@ export function LoadTestsView({
               icon={<i className="ti ti-file-export" aria-hidden="true" />}
               label={t('apiTests.exportK6')}
               title={t('apiTests.exportK6')}
-              onClick={() => void exportK6()}
+              onClick={() => void exportK6(selectedId)}
               data-testid="export-k6"
             />
           )}
@@ -425,7 +425,7 @@ export function LoadTestsView({
                 readOnly={isReadOnly}
                 onChange={setDraft}
                 onPreset={setPreset}
-                onApplyProfile={(profile) => void applyProfile(profile)}
+                onApplyProfile={(profile) => void applyProfile(draft, profile)}
               />
             </div>
           ) : (
@@ -556,7 +556,9 @@ export function LoadTestsView({
                     <Button
                       variant="ghost"
                       role="menuitem"
-                      onClick={() => void select(scenario).then(() => setNaming('duplicate'))}
+                      onClick={() =>
+                        void select(scenario).then((opened) => opened && setNaming('duplicate'))
+                      }
                     >
                       <i className="ti ti-copy" aria-hidden="true" />
                       {t('apiTests.loadUi.duplicate')}
@@ -565,7 +567,11 @@ export function LoadTestsView({
                       variant="ghost"
                       role="menuitem"
                       data-destructive
-                      onClick={() => void select(scenario).then(() => setConfirmDelete(true))}
+                      onClick={() =>
+                        void select(scenario).then(
+                          (opened) => opened && setConfirmDelete(scenario.id),
+                        )
+                      }
                     >
                       <i className="ti ti-trash" aria-hidden="true" />
                       {t('apiTests.delete')}
@@ -631,7 +637,7 @@ export function LoadTestsView({
           scenario={draft}
           target={target}
           starting={starting}
-          onStart={() => void start()}
+          onStart={() => selectedId && void start(selectedId)}
           onClose={() => setShowRun(false)}
         />
       )}
@@ -667,14 +673,14 @@ export function LoadTestsView({
         onClose={() => setNaming(null)}
       />
       <ConfirmationDialog
-        open={confirmDelete}
+        open={confirmDelete !== null}
         title={t('apiTests.loadUi.deleteScenario')}
         description={t('apiTests.deleteScenarioConfirm', { name: selectedName })}
         confirmLabel={t('apiTests.delete')}
         cancelLabel={t('common.cancel')}
         destructive
-        onCancel={() => setConfirmDelete(false)}
-        onConfirm={() => void remove()}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => confirmDelete && void remove(confirmDelete)}
       />
       <GenerateDialog
         open={showGenerate}

@@ -85,9 +85,12 @@ export function ResizableSidebar({
         });
     };
     const stopResizing = () => {
+      // A second end event before the listeners are removed (pointerup then pointercancel)
+      // must not apply the drag again from its starting width.
+      const released = latest.current;
+      if (released === null) return;
       window.cancelAnimationFrame(frame.current);
       frame.current = 0;
-      const released = latest.current ?? dragStart.current.width;
       latest.current = null;
       setDragWidth(null);
       if (collapsible && released < minWidth - COLLAPSE_SLACK) {
@@ -139,11 +142,9 @@ export function ResizableSidebar({
     setWidth(step);
   };
 
-  const shownWidth = isResizing
-    ? (latest.current ?? dragWidth ?? width)
-    : collapsed
-      ? collapsedWidth
-      : width;
+  // While dragging, `latest` always holds the pointer's width: it is set on pointer down and
+  // cleared only together with the drag itself.
+  const shownWidth = isResizing ? latest.current! : collapsed ? collapsedWidth : width;
 
   return (
     <aside

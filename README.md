@@ -1,5 +1,9 @@
 # ADK — Agent DevKit
 
+[![CI](https://github.com/lucaseduardocrp/agent-devkit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lucaseduardocrp/agent-devkit/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/lucaseduardocrp/agent-devkit/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/lucaseduardocrp/agent-devkit/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/lucaseduardocrp/agent-devkit/badge)](https://scorecard.dev/viewer/?uri=github.com/lucaseduardocrp/agent-devkit)
+
 ADK is a QA and product-delivery platform driven by AI assistants. It brings together a knowledge
 base, specifications, test plans, agents, design prototypes and E2E automation in shared
 workspaces, and exposes all of it to Claude, Codex and other assistants through an MCP server.
@@ -201,17 +205,20 @@ npm run verify
 | `npm run prisma:migrate:dev` | `apps/Backend` | Create and apply a new migration     |
 | `npm run parity`             | `apps/Mcp`     | Check MCP tools against API routes   |
 
-CI runs `verify` and `build` for the MCP server and the CLI on every pull request that touches
-them, checks the setup wizard and the Compose stack, and
-[cli-release.yml](.github/workflows/cli-release.yml) publishes `@agent-devkit/cli`, with the MCP
-server embedded, to npm.
+[CI](.github/workflows/ci.yml) runs `verify` and `build` for every app, the setup wizard tests
+and the backend integration tests (PostgreSQL) on every pull request, with 100% coverage required
+in all of them. CodeQL, dependency review and OpenSSF Scorecard watch security; Dependabot keeps
+dependencies up to date. [self-hosting-ci.yml](.github/workflows/self-hosting-ci.yml) starts the
+Compose stack, and [cli-release.yml](.github/workflows/cli-release.yml) publishes
+`@agent-devkit/cli`, with the MCP server embedded, to npm. The rules for `main` live in
+[.github/rulesets](.github/rulesets) and are applied with `scripts/github-settings.sh`.
 
 ## Contributing
 
-ADK is developed by its author only and does not accept pull requests. Bug reports are welcome
-as issues; see [CONTRIBUTING.md](CONTRIBUTING.md). Skills and plugins for the
-[ADK Hub](https://github.com/lucaseduardocrp/agent-devkit-hub) go to its own repository, which
-welcomes pull requests.
+Pull requests are welcome: they need passing linters, 100% test coverage and the maintainer's
+review; anyone can comment on them. See [CONTRIBUTING.md](CONTRIBUTING.md). Skills and plugins
+for the [ADK Hub](https://github.com/lucaseduardocrp/agent-devkit-hub) go to its own repository.
+Security issues are reported privately, see [SECURITY.md](SECURITY.md).
 
 ## License
 

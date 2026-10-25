@@ -1163,15 +1163,16 @@ export function E2eConfigForm({
 
       {!creationId && canImportCases && (
         <Section title={t('e2e.sourceTitle')} hint={t('e2e.sourceHint')} required>
-          <Select
-            aria-label={t('e2e.sourceTitle')}
+          <Segmented
+            label={t('e2e.sourceTitle')}
             value={form.source}
-            onChange={(event) => update('source', event.target.value as typeof form.source)}
-          >
-            <option value="prd">{t('e2e.sourcePrd')}</option>
-            <option value="cases">{t('e2e.sourceCases')}</option>
-            <option value="saved">{t('e2e.sourceSaved')}</option>
-          </Select>
+            options={[
+              { value: 'prd', label: t('e2e.sourcePrd') },
+              { value: 'cases', label: t('e2e.sourceCases') },
+              { value: 'saved', label: t('e2e.sourceSaved') },
+            ]}
+            onChange={(source) => update('source', source)}
+          />
           {form.source === 'cases' && (
             <E2eCasePicker
               apiClient={apiClient}
@@ -1195,85 +1196,88 @@ export function E2eConfigForm({
 
       {form.source === 'prd' && (
         <Section title={t('e2e.prdTitle')} hint={t('e2e.prdHint')} required>
-        <div
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-          data-testid="e2e-prd-dropzone"
-        >
-          <Button
-            variant="ghost"
-            className={cn(
-              'flex h-auto w-full flex-col gap-2 rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--surface-2)] py-8 font-normal',
-              dragging && 'border-[var(--fill-accent)]',
-              errors.has('prd') && 'border-red-500/60',
-            )}
-            onClick={() => prdInput.current?.click()}
+          <div
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            data-testid="e2e-prd-dropzone"
           >
-            <i className="ti ti-folder-open text-4xl text-[var(--text-muted)]" aria-hidden="true" />
-            <span className="text-sm text-[var(--text-primary)]">{t('e2e.prdSelect')}</span>
-            <span className="text-xs text-[var(--text-muted)]">{t('e2e.prdFormats')}</span>
-          </Button>
-        </div>
-        <Input
-          ref={prdInput}
-          type="file"
-          multiple
-          accept={PRD_ACCEPT}
-          className="hidden"
-          data-testid="e2e-prd-input"
-          onChange={onPrdChange}
-        />
-        <p className="text-sm text-[var(--text-secondary)]">{t('e2e.prdDraftHint')}</p>
-        {fileError && (
-          <p className="text-xs text-red-400" role="alert">
-            {fileError}
-          </p>
-        )}
-        {form.files.length > 0 && (
-          <div className="flex flex-col gap-2">
-            <h4 className="text-sm font-semibold text-[var(--text-primary)]">
-              {t('e2e.uploadedFiles')}
-            </h4>
-            <ul className="flex flex-col gap-1.5">
-              {form.files.map((file) => (
-                <li
-                  key={file.name}
-                  className="flex items-center gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-primary)]"
-                >
-                  <i className="ti ti-file-text text-[var(--text-muted)]" aria-hidden="true" />
-                  <span className="min-w-0 flex-1 truncate">{file.name}</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={t('e2e.removeFile', { name: file.name })}
-                    onClick={() =>
-                      update(
-                        'files',
-                        form.files.filter((item) => item.name !== file.name),
-                      )
-                    }
-                  >
-                    <i className="ti ti-x" aria-hidden="true" />
-                  </Button>
-                </li>
-              ))}
-            </ul>
+            <Button
+              variant="ghost"
+              className={cn(
+                'flex h-auto w-full flex-col gap-2 rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--surface-2)] py-8 font-normal',
+                dragging && 'border-[var(--fill-accent)]',
+                errors.has('prd') && 'border-red-500/60',
+              )}
+              onClick={() => prdInput.current?.click()}
+            >
+              <i
+                className="ti ti-folder-open text-4xl text-[var(--text-muted)]"
+                aria-hidden="true"
+              />
+              <span className="text-sm text-[var(--text-primary)]">{t('e2e.prdSelect')}</span>
+              <span className="text-xs text-[var(--text-muted)]">{t('e2e.prdFormats')}</span>
+            </Button>
           </div>
-        )}
-        <Row label={t('e2e.prdPaste')}>
-          <Textarea
-            aria-label={t('e2e.prdPaste')}
-            value={form.prdText}
-            onChange={(event) => update('prdText', event.target.value)}
-            placeholder={t('e2e.prdPlaceholder')}
-            rows={6}
+          <Input
+            ref={prdInput}
+            type="file"
+            multiple
+            accept={PRD_ACCEPT}
+            className="hidden"
+            data-testid="e2e-prd-input"
+            onChange={onPrdChange}
           />
-        </Row>
-        {fieldError('prd', 'e2e.validationPrd')}
+          <p className="text-sm text-[var(--text-secondary)]">{t('e2e.prdDraftHint')}</p>
+          {fileError && (
+            <p className="text-xs text-red-400" role="alert">
+              {fileError}
+            </p>
+          )}
+          {form.files.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <h4 className="text-sm font-semibold text-[var(--text-primary)]">
+                {t('e2e.uploadedFiles')}
+              </h4>
+              <ul className="flex flex-col gap-1.5">
+                {form.files.map((file) => (
+                  <li
+                    key={file.name}
+                    className="flex items-center gap-2 rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text-primary)]"
+                  >
+                    <i className="ti ti-file-text text-[var(--text-muted)]" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t('e2e.removeFile', { name: file.name })}
+                      onClick={() =>
+                        update(
+                          'files',
+                          form.files.filter((item) => item.name !== file.name),
+                        )
+                      }
+                    >
+                      <i className="ti ti-x" aria-hidden="true" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <Row label={t('e2e.prdPaste')}>
+            <Textarea
+              aria-label={t('e2e.prdPaste')}
+              value={form.prdText}
+              onChange={(event) => update('prdText', event.target.value)}
+              placeholder={t('e2e.prdPlaceholder')}
+              rows={6}
+            />
+          </Row>
+          {fieldError('prd', 'e2e.validationPrd')}
         </Section>
       )}
 

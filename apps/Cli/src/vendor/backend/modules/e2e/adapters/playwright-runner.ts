@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { APIResponse } from 'playwright';
+import { chromiumHostArgs, hostAccessFetch } from '../../../shared/host-access.js';
 import type { E2eMode } from '../domain/e2e-mode.js';
 import {
   accessHeaders,
@@ -67,7 +68,9 @@ interface BrowserLike {
   close(): Promise<void>;
 }
 export interface PlaywrightModule {
-  readonly chromium: { launch(options: { headless: boolean }): Promise<BrowserLike> };
+  readonly chromium: {
+    launch(options: { headless: boolean; args?: string[] }): Promise<BrowserLike>;
+  };
 }
 
 export interface PlaywrightE2eRunnerOptions {
@@ -79,6 +82,11 @@ export interface PlaywrightE2eRunnerOptions {
   readonly fetcher?: typeof fetch;
   readonly executor?: ProcessExecutor;
   readonly loadPlaywright?: () => Promise<PlaywrightModule>;
+  /**
+   * Host access of a local install: `localhost` targets open on the user's computer through this
+   * alias, keeping their localhost origin (see shared/host-access.ts).
+   */
+  readonly hostAlias?: string | null;
 }
 
 const MAX_LOG = 60_000;
@@ -107,15 +115,19 @@ export class PlaywrightE2eRunner implements E2eRunner {
   private readonly fetcher: typeof fetch;
   private readonly executor: ProcessExecutor;
   private readonly loadPlaywright: () => Promise<PlaywrightModule>;
+  /** Extra Chromium arguments: the host resolver rules of host access, when on. */
+  private readonly browserArgs: string[];
 
   constructor(options: PlaywrightE2eRunnerOptions = {}) {
     this.packageRoot = options.packageRoot ?? process.cwd();
     this.workspaceRoot = options.workspaceRoot ?? path.join(this.packageRoot, '.e2e-workspaces');
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.maxPages = options.maxPages ?? 5;
-    this.fetcher = options.fetcher ?? fetch;
+    this.fetcher =
+      options.fetcher ?? (options.hostAlias ? hostAccessFetch(options.hostAlias) : fetch);
     this.executor = options.executor ?? runProcess;
     this.loadPlaywright = options.loadPlaywright ?? (() => import('playwright'));
+    this.browserArgs = chromiumHostArgs(options.hostAlias ?? null);
   }
 
   async explore(input: {
@@ -173,7 +185,12 @@ export class PlaywrightE2eRunner implements E2eRunner {
   ): Promise<E2eSnapshot> {
     let browser: BrowserLike;
     try {
-      browser = await (await this.loadPlaywright()).chromium.launch({ headless: true });
+      browser = await (
+        await this.loadPlaywright()
+      ).chromium.launch({
+        headless: true,
+        ...(this.browserArgs.length ? { args: this.browserArgs } : {}),
+      });
     } catch (error) {
       throw browserError(error);
     }
@@ -287,6 +304,7 @@ export class PlaywrightE2eRunner implements E2eRunner {
           input.locale,
           Boolean(input.accessToken),
           Boolean(input.localOrigin),
+          this.browserArgs,
         ),
         'utf8',
       );
@@ -420,6 +438,7 @@ export function runnerConfig(
   locale: string,
   protectedByAccess = false,
   localBrowserOrigin = false,
+  browserArgs: readonly string[] = [],
 ): string {
   return `export default {
   testDir: './tests',
@@ -442,7 +461,7 @@ export function runnerConfig(
     actionTimeout: 15000,
     navigationTimeout: 30000,
     // Paces every browser action so the recording shows each step of the flow.
-    launchOptions: { slowMo: ${SLOW_MO_MS} },
+    launchOptions: { slowMo: ${SLOW_MO_MS}${browserArgs.length ? `, args: ${JSON.stringify(browserArgs)}` : ''} },
   },
 };
 `;

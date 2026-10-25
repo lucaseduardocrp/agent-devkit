@@ -384,6 +384,7 @@ const cases: Record<string, [unknown, string]> = {
   release_notes_prepare: [{ title: 'R', itemIds: ['50086'] }, 'GET /pbi/items/50086'],
   release_notes_export_markdown: [{ releaseNoteId: 'rn1' }, 'GET /release-notes/rn1/export'],
   integration_list_collections: [{}, 'GET /integration-tests/collections'],
+  integration_list_dynamic_values: [{}, 'GET /integration-tests/dynamic-values'],
   integration_get_collection: [{ collectionId: 'c1' }, 'GET /integration-tests/collections/c1'],
   integration_save_collection: [
     { collection: { name: 'API' } },

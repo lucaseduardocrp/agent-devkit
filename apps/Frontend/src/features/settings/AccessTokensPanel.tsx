@@ -172,7 +172,11 @@ export function AccessTokensPanel({ apiClient }: AccessTokensPanelProps) {
           </code>
           <div className="flex items-center justify-between gap-2">
             <span className="text-muted">{t('settings.tokenMcpHint')}</span>
-            <Button type="button" size="sm" variant="secondary" onClick={() => void handleCopy(createdSecret)}
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => void handleCopy(createdSecret)}
             >
               {t('settings.copyToken')}
             </Button>

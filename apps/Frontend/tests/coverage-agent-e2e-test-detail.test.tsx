@@ -60,9 +60,7 @@ function setup(test: Dto) {
     getE2eScript: vi.fn(),
     pushE2eScript: vi.fn(),
   };
-  render(
-    <E2eTestDetail apiClient={client as unknown as ApiClient} testId="t1" onBack={vi.fn()} />,
-  );
+  render(<E2eTestDetail apiClient={client as unknown as ApiClient} testId="t1" onBack={vi.fn()} />);
   return client;
 }
 

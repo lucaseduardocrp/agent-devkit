@@ -231,10 +231,11 @@ function AppContent({
     allows(access.modules[module], operation);
   const readOnly = (module: PermissionModule) => !can(module, 'edit');
   // A tab the member may not view (e.g. after switching workspace) falls back to the first
-  // visible one, so hidden modules are never rendered.
+  // visible one, so hidden modules are never rendered. Settings closes the order and is always
+  // visible, so a tab is always found.
   const currentTab = canSeeTab(activeTab, can)
     ? activeTab
-    : (NAV_TAB_ORDER.find((tab) => canSeeTab(tab, can)) ?? 'settings');
+    : NAV_TAB_ORDER.find((tab) => canSeeTab(tab, can))!;
   if (authStatus === 'checking') {
     return (
       <main
@@ -272,13 +273,11 @@ function AppContent({
         activeTab={currentTab}
         onSelectTab={setActiveTab}
         inboxUnreadCount={inboxUnreadCount}
-        userName={currentUser ? currentUser.name || currentUser.email : undefined}
-        userEmail={currentUser?.email}
+        userName={currentUser.name || currentUser.email}
+        userEmail={currentUser.email}
         userRole={activeMembership?.member.role}
-        userInitials={
-          currentUser ? getUserInitials(currentUser.name, currentUser.email) : undefined
-        }
-        isAuthenticated={Boolean(currentUser)}
+        userInitials={getUserInitials(currentUser.name, currentUser.email)}
+        isAuthenticated
         onLogout={handleLogout}
         workspaces={workspaces}
         activeWorkspaceId={activeWorkspaceId}
@@ -411,7 +410,7 @@ function AppContent({
           <SettingsView
             apiClient={apiClient}
             activeMembership={activeMembership}
-            currentUserId={currentUser?.id}
+            currentUserId={currentUser.id}
             onDeleteWorkspace={handleDeleteWorkspace}
             onWorkspaceRenamed={(renamed) =>
               setWorkspaces((current) =>

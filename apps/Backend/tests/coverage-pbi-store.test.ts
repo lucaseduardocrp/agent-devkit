@@ -193,6 +193,7 @@ describe('PrismaPbiStore', () => {
         kind: 'pbi',
         title: 'New',
         description: '',
+        attachments: [],
         status: 'backlog',
         position: 1234,
         sourceData: {},

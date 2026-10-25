@@ -155,16 +155,16 @@ export function VariableInput({
     }));
   };
 
-  const choose = (suggestion: VariableSuggestion) => {
-    const element = input.current;
-    if (!element || !menu) return;
+  /** Only called from an open menu, so the input is mounted. */
+  const choose = ({ start }: Menu, suggestion: VariableSuggestion) => {
+    const element = input.current!;
     const caret = element.selectionStart ?? value.length;
     // Completing inside an existing token replaces the rest of it.
     const after = restOfToken(value.slice(caret));
     const inserted = `{{${suggestion.name}}}`;
-    onValueChange(value.slice(0, menu.start) + inserted + after);
+    onValueChange(value.slice(0, start) + inserted + after);
     setMenu(null);
-    const position = menu.start + inserted.length;
+    const position = start + inserted.length;
     window.requestAnimationFrame(() => {
       element.focus();
       element.setSelectionRange(position, position);
@@ -206,7 +206,7 @@ export function VariableInput({
             }
             if (event.key === 'Enter' || event.key === 'Tab') {
               event.preventDefault();
-              choose(menu.items[menu.index]!);
+              choose(menu, menu.items[menu.index]!);
               return;
             }
             if (event.key === 'Escape') {
@@ -268,7 +268,7 @@ export function VariableInput({
           index={menu.index}
           left={menu.left}
           top={menu.top}
-          onChoose={choose}
+          onChoose={(suggestion) => choose(menu, suggestion)}
           onHover={(index) => setMenu({ ...menu, index })}
         />
       )}

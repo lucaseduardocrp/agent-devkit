@@ -134,7 +134,7 @@ function requestFile(request: ApiRequestSpec, seq: number): string {
       'vars:post-response',
       request.captures.map(
         (capture) =>
-          `${capture.variable}: ${target({ source: capture.source === 'status' ? 'status' : capture.source, path: capture.path })}`,
+          `${capture.variable}: ${target({ source: capture.source, path: capture.path })}`,
       ),
     ),
   );
@@ -143,7 +143,7 @@ function requestFile(request: ApiRequestSpec, seq: number): string {
   return parts.filter(Boolean).join('\n');
 }
 
-export function environmentFile(variables: readonly Variable[]): string {
+function environmentFile(variables: readonly Variable[]): string {
   const enabled = variables.filter((variable) => variable.enabled !== false);
   const plain = enabled.filter((variable) => !variable.secret);
   const secret = enabled.filter((variable) => variable.secret);

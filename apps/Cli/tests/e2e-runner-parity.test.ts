@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { RUNNER_FILES } from '../scripts/sync-e2e-runner.mjs';
 
-const BACKEND = join(import.meta.dirname, '..', '..', 'Backend', 'src', 'modules', 'e2e');
-const VENDOR = join(import.meta.dirname, '..', 'src', 'vendor', 'e2e');
+const BACKEND = join(import.meta.dirname, '..', '..', 'Backend', 'src');
+const VENDOR = join(import.meta.dirname, '..', 'src', 'vendor', 'backend');
 const read = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
 
 /** The local runner must execute specs exactly like the ADK workers do. */

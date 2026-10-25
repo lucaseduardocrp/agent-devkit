@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z, ZodError } from 'zod';
 import { describe, expect, it, vi } from 'vitest';
+import { signInForClient } from '../src/api/credentials.js';
 import { AdkApiError, buildUrl, HttpAdkClient, segment } from '../src/api/http-client.js';
 import { definePrompt } from '../src/core/prompt.js';
 import { ToolRegistry } from '../src/core/registry.js';
@@ -75,6 +76,31 @@ describe('HttpAdkClient', () => {
     expect(fetcher.mock.calls[0]![1].headers).not.toHaveProperty('authorization');
   });
 
+  it('uploads raw bodies, uses the global fetch by default and reads untyped bodies', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(new Uint8Array([104, 105])));
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const client = new HttpAdkClient({
+        baseUrl: 'http://api',
+        timeoutMs: 1000,
+        credentials: () => ({}),
+      });
+      const data = new Uint8Array([1, 2, 3]);
+      expect(
+        await client.request({
+          method: 'PUT',
+          path: '/file',
+          rawBody: { data, contentType: 'image/png' },
+        }),
+      ).toBe('hi');
+      const [, init] = fetcher.mock.calls[0]!;
+      expect(init.headers['content-type']).toBe('image/png');
+      expect(init.body).toEqual(data);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('maps API errors, plain-text errors, timeouts and network failures', async () => {
     const make = (fetcher: typeof fetch) =>
       new HttpAdkClient({
@@ -127,6 +153,38 @@ describe('HttpAdkClient', () => {
   });
 });
 
+describe('signInForClient', () => {
+  const login = { user: { id: 'u1', email: 'a@b.c', name: 'A' }, token: 's', expiresAt: 'x' };
+  const signIn = (tokenStatus: number) =>
+    signInForClient(
+      {
+        apiUrl: 'http://api',
+        timeoutMs: 1000,
+        fetch: vi.fn((url: string) =>
+          Promise.resolve(
+            String(url).endsWith('/auth/login')
+              ? response(200, login)
+              : response(tokenStatus, { code: 'NOPE', message: 'No tokens.' }),
+          ),
+        ) as unknown as typeof fetch,
+      },
+      { email: 'a@b.c', password: 'p', tokenName: 'cli' },
+    );
+
+  it('keeps the session when the API cannot issue access tokens', async () => {
+    expect(await signIn(404)).toEqual({
+      token: 's',
+      user: login.user,
+      expiresAt: 'x',
+      kind: 'session',
+    });
+  });
+
+  it('rethrows other token failures', async () => {
+    await expect(signIn(500)).rejects.toMatchObject({ status: 500, code: 'NOPE' });
+  });
+});
+
 describe('Session', () => {
   it('prefers stored credentials for the same API and falls back to defaults', async () => {
     const store = new MemorySessionStore();
@@ -160,6 +218,7 @@ describe('Session', () => {
     const store = new FileSessionStore(path);
     expect(await store.read()).toEqual({});
     await store.write({ token: 't' });
+    expect(await store.read()).toEqual({ token: 't' });
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ token: 't' });
     if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o600);
     await store.clear();
@@ -168,6 +227,8 @@ describe('Session', () => {
     await new FileSessionStore(join(dir, 'x.json')).write({});
     const { writeFile } = await import('node:fs/promises');
     await writeFile(join(dir, 'x.json'), '"string"');
+    expect(await invalid.read()).toEqual({});
+    await writeFile(join(dir, 'x.json'), 'null');
     expect(await invalid.read()).toEqual({});
   });
 });
@@ -191,6 +252,7 @@ describe('tools, prompts and registry', () => {
 
   it('validates names, parses input and annotates execution modes', async () => {
     expect(() => tool('Bad-Name')).toThrow('Invalid MCP tool name');
+    expect(tool('brain_a').parseInput(undefined)).toEqual({ value: 'x' });
     expect(await tool('brain_a').execute(undefined, {} as never)).toEqual({
       kind: 'json',
       data: { value: 'x' },
@@ -403,6 +465,6 @@ describe('configuration', () => {
   it('rejects unknown toolsets and invalid values', () => {
     expect(() => parseToolsets('brain,unknown')).toThrow('Unknown toolset(s): unknown');
     expect(parseToolsets(undefined)).toEqual([]);
-    expect(() => loadConfig({ ADK_API_URL: 'not a url' })).toThrow();
+    expect(() => loadConfig({ ADK_API_URL: 'not a url' })).toThrow(/ADK_API_URL: /);
   });
 });

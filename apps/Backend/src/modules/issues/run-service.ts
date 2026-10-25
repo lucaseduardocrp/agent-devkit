@@ -47,6 +47,20 @@ function priorStepContext(results: readonly WorkflowRunStepResult[]): string {
     .join('\n\n');
 }
 
+/** Tokens reported by the workflow steps; null when no step reported usage. */
+function workflowUsage(results: readonly WorkflowRunStepResult[]) {
+  const usage = results.flatMap((result) =>
+    result.inputTokens !== undefined && result.outputTokens !== undefined
+      ? [{ input: result.inputTokens, output: result.outputTokens }]
+      : [],
+  );
+  if (!usage.length) return { inputTokens: null, outputTokens: null };
+  return {
+    inputTokens: usage.reduce((sum, item) => sum + item.input, 0),
+    outputTokens: usage.reduce((sum, item) => sum + item.output, 0),
+  };
+}
+
 export interface UsageInput {
   tool: string;
   provider: string;
@@ -258,14 +272,17 @@ export class RunService {
       if (item) {
         const all = await this.pbiItems.list(workspaceId);
         const children = new Set<string>();
-        const collectChildren = (parentId: string) => {
+        const lines: string[] = [];
+        // Imported hierarchies can be cyclic, so every descendant is visited once.
+        const collectChildren = (parentId: string, depth: number) => {
           for (const child of all.filter((candidate) => candidate.parentId === parentId)) {
             if (children.has(child.id)) continue;
             children.add(child.id);
-            collectChildren(child.id);
+            lines.push(`${'  '.repeat(depth)}- ${child.title}: ${child.description}`);
+            collectChildren(child.id, depth + 1);
           }
         };
-        collectChildren(item.id);
+        collectChildren(item.id, 0);
         imageAttachments.push(...(item.attachments ?? []));
         imageAttachments.push(...inlineImageAttachments(item.description, 'pbi'));
         for (const child of all) {
@@ -275,14 +292,7 @@ export class RunService {
             ...inlineImageAttachments(child.description, 'pbi'),
           );
         }
-        const visit = (parentId: string, depth: number): string[] =>
-          all
-            .filter((child) => child.parentId === parentId)
-            .flatMap((child) => [
-              `${'  '.repeat(depth)}- ${child.title}: ${child.description}`,
-              ...visit(child.id, depth + 1),
-            ]);
-        pbiContext = `\n\nCurrent PBI context:\n${item.title}: ${item.description}\n${visit(item.id, 0).join('\n')}`;
+        pbiContext = `\n\nCurrent PBI context:\n${item.title}: ${item.description}\n${lines.join('\n')}`;
       }
     }
     const imageContext = imageAttachments.length
@@ -482,14 +492,10 @@ export class RunService {
           question: questionResult.output || 'O agente precisa de uma informação para continuar.',
           answer: undefined,
         };
-        const usageResults = state.results.filter(
-          (item) => item.kind !== 'answer' && item.inputTokens !== undefined,
-        );
         await this.store.progress(run.workspaceId, run.id, state, workflowOutput(state.results), {
           provider: result.provider,
           model: result.model ?? null,
-          inputTokens: usageResults.reduce((sum, item) => sum + (item.inputTokens ?? 0), 0),
-          outputTokens: usageResults.reduce((sum, item) => sum + (item.outputTokens ?? 0), 0),
+          ...workflowUsage(state.results),
           costMicros: state.allStepsPriced ? state.totalCostMicros : null,
         });
         await this.pauseForUser(run, state, 'waiting_input');
@@ -504,21 +510,10 @@ export class RunService {
         question: undefined,
         answer: undefined,
       };
-      const usageResults = state.results.filter(
-        (item) => item.kind !== 'answer' && item.inputTokens !== undefined,
-      );
-      const lastResult = [...state.results]
-        .reverse()
-        .find((item) => item.kind === undefined || item.kind === 'result');
       await this.store.progress(run.workspaceId, run.id, state, workflowOutput(state.results), {
-        provider: lastResult?.provider,
-        model: lastResult?.model ?? null,
-        inputTokens: usageResults.length
-          ? usageResults.reduce((sum, item) => sum + (item.inputTokens ?? 0), 0)
-          : null,
-        outputTokens: usageResults.length
-          ? usageResults.reduce((sum, item) => sum + (item.outputTokens ?? 0), 0)
-          : null,
+        provider: result.provider,
+        model: result.model ?? null,
+        ...workflowUsage(state.results),
         costMicros: state.allStepsPriced ? state.totalCostMicros : null,
       });
       const mustReview = step.reviewRequired === true || state.autonomy === 'supervised';
@@ -582,11 +577,6 @@ export class RunService {
     const last = state.results
       .filter((result) => result.kind === undefined || result.kind === 'result')
       .at(-1);
-    const usageResults = state.results.filter(
-      (result) => result.kind !== 'answer' && result.inputTokens !== undefined,
-    );
-    const inputTokens = usageResults.reduce((sum, result) => sum + (result.inputTokens ?? 0), 0);
-    const outputTokens = usageResults.reduce((sum, result) => sum + (result.outputTokens ?? 0), 0);
     const finished = await this.store.finish(
       run.workspaceId,
       run.id,
@@ -595,8 +585,7 @@ export class RunService {
         output: workflowOutput(state.results),
         provider: last?.provider ?? 'unknown',
         model: last?.model ?? null,
-        inputTokens: usageResults.length ? inputTokens : null,
-        outputTokens: usageResults.length ? outputTokens : null,
+        ...workflowUsage(state.results),
         costMicros: state.allStepsPriced ? state.totalCostMicros : null,
         workflowState: state,
       },
@@ -636,38 +625,34 @@ export class RunService {
       return finished;
     }
 
-    if (input.action !== 'approve' && !input.answer?.trim())
-      throw new ApplicationError('WORKFLOW_ANSWER_REQUIRED', 'A response is required.', 400);
-    const answer = input.answer?.trim();
-    const answerEvent: WorkflowRunStepResult | undefined =
-      input.action !== 'approve' && answer
-        ? {
-            stepId:
-              state.steps[
-                input.action === 'revise'
-                  ? Math.max(0, state.currentStepIndex - 1)
-                  : state.currentStepIndex
-              ]?.id ?? 'workflow',
+    let nextState = state;
+    if (input.action !== 'approve') {
+      const answer = input.answer?.trim();
+      if (!answer)
+        throw new ApplicationError('WORKFLOW_ANSWER_REQUIRED', 'A response is required.', 400);
+      // A revision reruns the step under review; an answer reruns the step that asked.
+      const stepIndex =
+        input.action === 'revise'
+          ? Math.max(0, state.currentStepIndex - 1)
+          : state.currentStepIndex;
+      nextState = {
+        ...state,
+        answer,
+        question: undefined,
+        currentStepIndex: stepIndex,
+        results: [
+          ...state.results,
+          {
+            stepId: state.steps[stepIndex]!.id,
             name: input.action === 'revise' ? 'Pedido de revisão' : 'Resposta do usuário',
             agentId: run.actorId,
             output: answer,
             provider: 'user',
             kind: 'answer',
-          }
-        : undefined;
-    const nextState: WorkflowRunState =
-      input.action !== 'approve'
-        ? {
-            ...state,
-            answer,
-            question: undefined,
-            currentStepIndex:
-              input.action === 'revise'
-                ? Math.max(0, state.currentStepIndex - 1)
-                : state.currentStepIndex,
-            results: answerEvent ? [...state.results, answerEvent] : state.results,
-          }
-        : state;
+          },
+        ],
+      };
+    }
     const resumed = await this.store.resume(
       workspaceId,
       runId,

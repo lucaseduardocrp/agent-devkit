@@ -397,12 +397,12 @@ export function TestPlansView({
   };
   /* v8 ignore stop */
 
-  const handleDeleteSuite = async () => {
-    if (!apiClient || !suiteToDelete) return;
+  // Suites (and so this dialog) only exist with a client; the dialog passes its own suite.
+  const handleDeleteSuite = async (suite: TestSuiteDto) => {
     setIsDeletingSuite(true);
     setDeleteSuiteError(null);
     try {
-      await apiClient.deleteTestSuite(suiteToDelete.id);
+      await apiClient!.deleteTestSuite(suite.id);
       await loadTestSuites();
       await loadSavedPlans();
       setSuiteToDelete(null);
@@ -581,11 +581,8 @@ export function TestPlansView({
   };
 
   const handleSaveTestCase = async (updatedCase: TestCase) => {
-    if (!generatedCases) return;
-    const known = generatedCases.some((tc) => tc.id === updatedCase.id);
-    const next = known
-      ? generatedCases.map((tc) => (tc.id === updatedCase.id ? updatedCase : tc))
-      : [...generatedCases, updatedCase];
+    // The editor only opens on a case already in the list (adding one inserts it first).
+    const next = generatedCases!.map((tc) => (tc.id === updatedCase.id ? updatedCase : tc));
     setGeneratedCases(next);
     setEditingTestCase(null);
     // A saved Test Plan keeps the change at once, like PBIs and issues.
@@ -594,12 +591,13 @@ export function TestPlansView({
 
   const openCase = (plan: SavedTestPlanDto, index: number) => {
     openSavedPlan(plan);
-    setEditingTestCase(toTestCases(plan.plans)[index] ?? null);
+    // The tree only offers indexes of the plan's own cases.
+    setEditingTestCase(toTestCases(plan.plans)[index]!);
   };
 
+  // Only rendered cases offer deletion, so the list is always loaded here.
   const handleDeleteTestCase = (testCaseId: string) => {
-    if (!generatedCases) return;
-    setGeneratedCases(generatedCases.filter((tc) => tc.id !== testCaseId));
+    setGeneratedCases(generatedCases!.filter((tc) => tc.id !== testCaseId));
   };
 
   const handleAddTestCase = () => {
@@ -934,8 +932,9 @@ export function TestPlansView({
               onCreatePlan={
                 canEdit
                   ? (suiteId) => {
-                      setSelectedSuiteId(suiteId);
+                      // Clearing first: handleClear also resets the suite being preselected.
                       handleClear();
+                      setSelectedSuiteId(suiteId);
                       setActiveTab('create');
                     }
                   : undefined
@@ -1004,29 +1003,9 @@ export function TestPlansView({
                     {t('common.retry')}
                   </Button>
                 </div>
-              ) : savedPlans.length === 0 ? (
-                <div className="p-8 text-center space-y-3">
-                  <i
-                    className="ti ti-folder-off text-3xl text-muted block mx-auto"
-                    aria-hidden="true"
-                  />
-                  <p className="text-sm text-muted">{t('runtime.noSavedTestPlan')}</p>
-                  {canEdit && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        handleClear();
-                        setActiveTab('create');
-                      }}
-                      data-testid="btn-empty-create-plan"
-                    >
-                      {t('testplans.createNewPlan')}
-                    </Button>
-                  )}
-                </div>
               ) : (
+                /* The section only renders without an error when a plan sits outside a suite,
+                   so the list is never empty here (the tree shows the empty state). */
                 <div className="grid gap-2 sm:grid-cols-2">
                   {savedPlans
                     .filter((plan) => !plan.suiteId)
@@ -1810,7 +1789,7 @@ export function TestPlansView({
               <Button
                 type="button"
                 variant="destructive"
-                onClick={() => void handleDeleteSuite()}
+                onClick={() => void handleDeleteSuite(suiteToDelete)}
                 disabled={isDeletingSuite || deleteSuiteConfirmText !== suiteToDelete.name}
                 isLoading={isDeletingSuite}
                 data-testid="confirm-delete-suite-btn"

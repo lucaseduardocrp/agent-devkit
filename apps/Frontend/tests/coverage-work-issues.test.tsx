@@ -520,6 +520,7 @@ describe('WorkView issue composer', () => {
         priority: 'urgent',
         assigneeAgentId: 'agent-a',
         assigneeUserId: 'user-b',
+        attachments: [],
       }),
     );
     expect(onOpenIssues).toHaveBeenCalled();
@@ -662,6 +663,7 @@ describe('WorkView issue detail', () => {
       expect(spies.updateIssue).toHaveBeenCalledWith('issue-1', {
         title: 'Renamed',
         description: 'New body',
+        attachments: [],
       }),
     );
     const edit = await within(dialog).findByRole('button', { name: 'Editar' });

@@ -58,21 +58,24 @@ const catalog: HubAgentCatalogDto = {
   ],
 };
 
-function setup() {
+function setup(
+  hub: HubAgentCatalogDto = catalog,
+  installed: (body: { name?: string; plugin?: string }) => unknown[] = (body) => [
+    { id: 'new', name: body.name ?? 'all', source: { version: '1.0.0' } },
+  ],
+  updated: unknown = { id: 'a1', name: 'QA test designer', source: { version: '1.1.0' } },
+) {
   const requests: ApiRequest[] = [];
   const api: AdkApi = {
     request: vi.fn((request: ApiRequest) => {
       requests.push(request);
-      if (request.path === '/agents/hub') return Promise.resolve(catalog);
+      if (request.path === '/agents/hub') return Promise.resolve(hub);
       if (request.path === '/agents/hub/install') {
-        const body = request.body as { name?: string; plugin?: string };
         return Promise.resolve({
-          agents: [{ id: 'new', name: body.name ?? 'all', source: { version: '1.0.0' } }],
+          agents: installed(request.body as { name?: string; plugin?: string }),
         });
       }
-      return Promise.resolve({
-        agent: { id: 'a1', name: 'QA test designer', source: { version: '1.1.0' } },
-      });
+      return Promise.resolve({ agent: updated });
     }) as AdkApi['request'],
   };
   const said: string[] = [];
@@ -140,5 +143,52 @@ describe('devkit agents', () => {
     await expect(runAgentsCommand(['update', 'ghost'], {}, context)).rejects.toThrow(
       /Not in the ADK Hub: ghost/,
     );
+  });
+
+  it('explains an empty hub and lists plugins without a version by commit', async () => {
+    const empty = setup({ ...catalog, agents: [], plugins: [] });
+    await runAgentsCommand(['search'], {}, empty.context);
+    expect(empty.said).toEqual(['The ADK Hub has no agents yet.']);
+
+    const plugin = catalog.plugins[0]!;
+    const unversioned = setup({
+      ...catalog,
+      agents: [],
+      plugins: [
+        { ...plugin, version: undefined, agents: [{ name: 'jira-triager', status: 'available' }] },
+      ],
+    });
+    await runAgentsCommand([], {}, unversioned.context);
+    const text = unversioned.said.join('\n');
+    expect(text).toContain(`Plugin jira-qa (Jira QA, acme · community · ${'a'.repeat(12)})`);
+    expect(text).toContain('  jira-triager');
+    await expect(
+      runAgentsCommand(['update', 'jira-qa/jira-triager'], {}, unversioned.context),
+    ).rejects.toThrow(/Not installed in this workspace: jira-qa\/jira-triager/);
+  });
+
+  it('reports installs and updates as JSON or when nothing changed', async () => {
+    const json = setup();
+    await runAgentsCommand(['install', 'technical-writer'], { json: true }, json.context);
+    await runAgentsCommand(['update'], { json: true }, json.context);
+    expect(json.printed.map((line) => JSON.parse(line) as unknown)).toEqual([
+      [{ id: 'new', name: 'technical-writer', source: { version: '1.0.0' } }],
+      [{ id: 'a1', name: 'QA test designer', source: { version: '1.1.0' } }],
+    ]);
+
+    const nothing = setup(catalog, () => []);
+    await runAgentsCommand(['install'], { plugin: 'jira-qa' }, nothing.context);
+    expect(nothing.said).toEqual(['Every agent of jira-qa is already installed.']);
+
+    const unversioned = setup(catalog, () => [{ id: 'x', name: 'local-copy' }], {
+      id: 'a1',
+      name: 'QA test designer',
+    });
+    await runAgentsCommand(['install', 'local-copy'], {}, unversioned.context);
+    await runAgentsCommand(['update'], {}, unversioned.context);
+    expect(unversioned.said).toEqual([
+      'Installed "local-copy" () in the workspace. Find it on the Agents page.',
+      'Updated "QA test designer" to the hub version.',
+    ]);
   });
 });

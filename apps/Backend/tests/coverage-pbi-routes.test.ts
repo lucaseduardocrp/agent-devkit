@@ -195,10 +195,10 @@ describe('PBI routes (coverage)', () => {
     const service = fakeService();
     const app = build({ service });
     expect((await request(app).post('/pbi/pull').expect(200)).body.items).toHaveLength(1);
-    expect(service.pull).toHaveBeenLastCalledWith('ws');
+    expect(service.pull).toHaveBeenLastCalledWith('ws', true, undefined);
     const summary = await request(app).post('/pbi/pull?summaryOnly=true').expect(200);
     expect(summary.body).toEqual({ results: [] });
-    expect(service.pull).toHaveBeenLastCalledWith('ws', false);
+    expect(service.pull).toHaveBeenLastCalledWith('ws', false, undefined);
   });
 
   it('forwards service failures of every route to the error handler', async () => {

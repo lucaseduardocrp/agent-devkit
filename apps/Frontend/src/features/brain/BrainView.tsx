@@ -528,10 +528,9 @@ export function BrainView({
     setEditingDoc(doc);
     setEditTitle(doc.title);
     setEditContent(stripLeadingTitleHeading(doc.content ?? '', doc.title));
-    setEditAttachments(doc.pageId === activeDoc?.pageId ? docAttachments : []);
+    // Only the open document is edited, so its loaded attachments are the ones to edit.
+    setEditAttachments(docAttachments);
     setEditAttachmentsChanged(false);
-    if (doc.pageId !== activeDoc?.pageId)
-      void apiClient?.getDocumentAttachments(doc.pageId).then(setEditAttachments, () => undefined);
     setEditPreview(false);
     setSaveError(null);
     setWikilinkQuery(null);
@@ -735,14 +734,13 @@ export function BrainView({
                     newParentPageId,
                   )
                 : await apiClient.createKnowledgeDocument(trimmedTitle, files.content)
-              : editingDoc
-                ? await apiClient.updateKnowledgeDocument(
-                    editingDoc.pageId,
-                    trimmedTitle,
-                    files.content,
-                  )
-                : null;
-          if (saved && editAttachmentsChanged)
+              : // Saving is only offered from the editor, so a document is being edited.
+                await apiClient.updateKnowledgeDocument(
+                  editingDoc!.pageId,
+                  trimmedTitle,
+                  files.content,
+                );
+          if (editAttachmentsChanged)
             setDocAttachments(
               await apiClient.saveDocumentAttachments(saved.pageId, files.attachments),
             );
@@ -1722,7 +1720,7 @@ export function BrainView({
                                   className="sr-only"
                                   data-testid="input-document-image"
                                   onChange={(event) => {
-                                    const files = [...(event.currentTarget.files ?? [])];
+                                    const files = [...event.currentTarget.files!];
                                     event.currentTarget.value = '';
                                     if (editorRef.current)
                                       editorImages.insertFiles(editorRef.current, files);

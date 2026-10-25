@@ -65,7 +65,7 @@ describe('AgentModal extra paths', () => {
         availableLlmModels={[geminiModel]}
       />,
     );
-    expect(view.getByLabelText<HTMLSelectElement>('Modelo LLM').value).toBe('');
+    expect((view.getByLabelText('Modelo LLM') as HTMLSelectElement).value).toBe('');
     fireEvent.change(view.getByLabelText('Agente principal'), { target: { value: 'agent-doc' } });
     fireEvent.click(view.getByRole('button', { name: 'Atualizar Agente' }));
     await waitFor(() =>
@@ -79,7 +79,7 @@ describe('AgentModal extra paths', () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const view = render(<AgentModal isOpen onClose={vi.fn()} onSave={onSave} />);
     fireEvent.click(view.getByText('Especialista em QA & BDD'));
-    expect(view.getByLabelText<HTMLSelectElement>('Modelo LLM').value).toBe('');
+    expect((view.getByLabelText('Modelo LLM') as HTMLSelectElement).value).toBe('');
     fireEvent.click(view.getByRole('button', { name: 'Criar Agente' }));
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ role: 'QA', model: '' })),
@@ -172,9 +172,7 @@ describe('AgentsView extra paths', () => {
     await waitFor(() => expect(view.getByTestId('agent-card-qa-engineer')).toBeInTheDocument());
     // The map reloads the agents; the selected QA agent is no longer among them.
     fireEvent.click(view.getByTestId('tab-map'));
-    await waitFor(() =>
-      expect(view.getByTestId('topology-agent-agent-doc')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(view.getByTestId('topology-agent-agent-doc')).toBeInTheDocument());
     fireEvent.click(view.getByTestId('tab-playground'));
     fireEvent.change(view.getByTestId('playground-prompt-input'), {
       target: { value: 'Run it' },

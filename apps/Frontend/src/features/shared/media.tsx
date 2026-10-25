@@ -98,9 +98,12 @@ async function commitDrafts<T>(
   value: T,
 ): Promise<{ value: T; uploaded: Attachment[] }> {
   const uploaded: Attachment[] = [];
-  let text = JSON.stringify(value) ?? '';
+  const ids = draftIds(value);
+  // Nothing to upload; also keeps values JSON cannot represent (e.g. undefined) intact.
+  if (!ids.length) return { value, uploaded };
+  let text = JSON.stringify(value);
   try {
-    for (const id of draftIds(value)) {
+    for (const id of ids) {
       const draft = drafts.get(id);
       if (!draft) throw new Error('A pasted file is no longer available; add it again.');
       const stored = await apiClient.uploadAttachment(scope, draft.file);
@@ -277,7 +280,7 @@ export function resolveInlineImages(root: HTMLElement, apiClient: ApiClient): vo
           image.src = url;
         },
         () => {
-          image.alt ||= original.split('/').pop() ?? '';
+          image.alt ||= original.slice(original.lastIndexOf('/') + 1);
           image.classList.add('opacity-40');
         },
       );
@@ -362,7 +365,7 @@ export function useMarkdownImageInput(
       );
       setState({ error: null });
     } catch (reason) {
-      setState({ error: reason instanceof Error ? reason.message : String(reason) });
+      setState({ error: (reason as Error).message });
     }
   };
   return {
@@ -427,7 +430,7 @@ export function useRichTextImageInput(
       place(draftImages(scope, files), at ?? currentRange(root));
       setState({ error: null });
     } catch (reason) {
-      setState({ error: reason instanceof Error ? reason.message : String(reason) });
+      setState({ error: (reason as Error).message });
     }
   };
   return {

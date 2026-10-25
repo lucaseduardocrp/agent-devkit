@@ -245,10 +245,12 @@ describe('E2eService saved test cases', () => {
       );
     const testManagement = resolverFor({ listCases } as Partial<TestManagementProvider>);
     const savedCases = {
-      listSavedCases: vi.fn().mockResolvedValue([
-        savedCase('a', { provider: 'azure_devops', caseId: '11', planId: 'p1', suiteId: 's1' }),
-        savedCase('b', { provider: 'azure_devops', caseId: '22', planId: 'p2', suiteId: 's1' }),
-      ]),
+      listSavedCases: vi
+        .fn()
+        .mockResolvedValue([
+          savedCase('a', { provider: 'azure_devops', caseId: '11', planId: 'p1', suiteId: 's1' }),
+          savedCase('b', { provider: 'azure_devops', caseId: '22', planId: 'p2', suiteId: 's1' }),
+        ]),
     };
     const { service, store } = setup({ testManagement, savedCases });
     const created = await service.create(context, hostRun);
@@ -314,9 +316,9 @@ describe('E2eService saved test cases', () => {
     expect(await titles(failing)).toEqual(expected);
     expect(failing.resolveTestManagementProvider).toHaveBeenCalledWith('ws', 'azure_devops');
     const listCases = vi.fn().mockRejectedValue(new Error('timeout'));
-    expect(
-      await titles(resolverFor({ listCases } as Partial<TestManagementProvider>)),
-    ).toEqual(expected);
+    expect(await titles(resolverFor({ listCases } as Partial<TestManagementProvider>))).toEqual(
+      expected,
+    );
     expect(listCases).toHaveBeenCalledWith({ planId: 'p1' });
   });
 

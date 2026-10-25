@@ -71,12 +71,12 @@ export function EnvironmentsPane({
     }
   };
 
-  const remove = async () => {
-    if (!selectedId) return;
+  // Only offered while an environment is selected.
+  const remove = async (id: string) => {
     setConfirmDelete(false);
     try {
-      await apiClient.deleteApiEnvironment(selectedId);
-      if (activeId === selectedId) onActivate('');
+      await apiClient.deleteApiEnvironment(id);
+      if (activeId === id) onActivate('');
       setSelectedId(null);
       await onChanged();
     } catch (err) {
@@ -219,7 +219,7 @@ export function EnvironmentsPane({
         cancelLabel={t('common.cancel')}
         destructive
         onCancel={() => setConfirmDelete(false)}
-        onConfirm={() => void remove()}
+        onConfirm={() => void remove(selectedId!)}
       />
     </section>
   );

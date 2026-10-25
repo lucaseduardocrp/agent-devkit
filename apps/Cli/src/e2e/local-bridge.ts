@@ -1,3 +1,4 @@
+import type { AddressInfo } from 'node:net';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { CloudflareTunnelManager } from './cloudflare-tunnel.js';
 
@@ -10,7 +11,6 @@ export function createLocalTunnelBridge(
     CloudflareTunnelManager,
     'start' | 'stop' | 'status'
   > = new CloudflareTunnelManager(),
-  port = LOCAL_BRIDGE_PORT,
 ): Server {
   const origin = new URL(allowedOrigin);
   if (origin.protocol !== 'https:' && origin.hostname !== 'localhost')
@@ -26,7 +26,8 @@ export function createLocalTunnelBridge(
   });
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const host = request.headers.host;
-    const activePort = (server.address() as { port: number } | null)?.port ?? port;
+    // Requests arrive only while the server listens, so it has a port.
+    const activePort = (server.address() as AddressInfo).port;
     if (host !== `127.0.0.1:${activePort}`) {
       response.writeHead(403).end();
       return;

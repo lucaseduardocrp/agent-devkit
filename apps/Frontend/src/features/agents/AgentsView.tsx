@@ -478,8 +478,8 @@ export function AgentsView({
 
   const moveWorkflowStep = (index: number, offset: -1 | 1) => {
     setWorkflow((current) => {
+      // The move buttons are disabled on the first and last step, so the target is always in range.
       const target = index + offset;
-      if (target < 0 || target >= current.steps.length) return current;
       const steps = [...current.steps];
       [steps[index], steps[target]] = [steps[target]!, steps[index]!];
       return { ...current, steps };

@@ -15,9 +15,9 @@ export const SERVER_NAME = 'adk';
 
 export function packageVersion(): string {
   const manifest = JSON.parse(readFileSync(join(packageRoot(), 'package.json'), 'utf8')) as {
-    version?: string;
+    version: string;
   };
-  return manifest.version ?? '0.0.0';
+  return manifest.version;
 }
 
 export const SERVER_INSTRUCTIONS = `ADK MCP server: Brain (knowledge base), Specs, Test Plans, Agents, Design prototypes, E2E Automation, Workspaces and Integrations.

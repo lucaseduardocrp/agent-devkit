@@ -47,7 +47,7 @@ describe('issues, inbox and dashboard routes', () => {
       .expect(200);
     expect(
       (await request(app).get(`/issues/${created.body.issue.id}`).set(headers)).body.issue.status,
-    ).toBe('in_review');
+    ).toBe('done');
 
     const updated = await request(app)
       .patch(`/issues/${created.body.issue.id}`)
@@ -174,7 +174,7 @@ describe('issues, inbox and dashboard routes', () => {
     const id = created.body.issue.id as string;
     await vi.waitFor(async () => {
       const response = await request(app).get('/runs').query({ issueId: id });
-      expect(response.body.runs[0]?.status).toBe('succeeded');
+      expect(response.body.runs[0]?.status).toBe('waiting_review');
     });
     const costs = await request(app).get('/costs').expect(200);
     expect(costs.body).toMatchObject({
@@ -186,7 +186,7 @@ describe('issues, inbox and dashboard routes', () => {
     });
     const dashboard = await request(app).get('/dashboard').expect(200);
     expect(dashboard.body).toMatchObject({
-      activeRuns: 0,
+      activeRuns: 1, // the run waits for final review
       costs: {
         monthSpendMicros: 400,
         totalInputTokens: 100,

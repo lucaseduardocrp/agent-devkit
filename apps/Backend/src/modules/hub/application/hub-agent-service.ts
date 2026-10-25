@@ -76,7 +76,7 @@ interface AgentDefinition {
   readonly name: string;
   readonly description: string;
   readonly instructions: string;
-  readonly role?: CustomAgent['role'];
+  readonly role: CustomAgent['role'];
   readonly temperature?: number;
   readonly source: AgentSource;
   /** Hub skills the agent file asks for (`skills: a, b` in its front matter). */
@@ -382,7 +382,7 @@ export class HubAgentService {
       slug: definition.slug,
       description: definition.description,
       instructions: definition.instructions,
-      ...(definition.role ? { role: definition.role } : {}),
+      role: definition.role,
       ...(definition.temperature !== undefined ? { temperature: definition.temperature } : {}),
       source: definition.source,
       skills: definition.resolvedSkills,

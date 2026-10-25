@@ -120,7 +120,6 @@ export function AttachmentPanel({
   const full = attachments.length >= MAX_ATTACHMENTS;
 
   const addUrl = () => {
-    if (!onChange) return;
     if (full) {
       setError(c.limit);
       return;
@@ -131,7 +130,7 @@ export function AttachmentPanel({
       const name = decodeURIComponent(
         parsed.pathname.split('/').filter(Boolean).at(-1) || parsed.hostname,
       );
-      onChange([
+      onChange?.([
         ...attachments,
         {
           id: crypto.randomUUID(),
@@ -330,7 +329,7 @@ export function AttachmentPanel({
                 multiple
                 disabled={full}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  const files = [...(event.currentTarget.files ?? [])];
+                  const files = [...(event.currentTarget.files as FileList)];
                   event.currentTarget.value = '';
                   addFiles(files);
                 }}

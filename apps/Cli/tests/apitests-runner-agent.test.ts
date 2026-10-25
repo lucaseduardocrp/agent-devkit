@@ -9,6 +9,10 @@ import {
 } from '../src/apitests/runner-agent.js';
 import type { RunPayload } from '../src/vendor/apitests/types.js';
 
+/** A rejection that is not an Error instance (e.g. thrown by code in another realm). */
+const notAnError = (text: string): Error =>
+  Object.assign({ name: 'Fault', message: '' }, { toString: () => text });
+
 let base = '';
 let server: http.Server;
 
@@ -155,5 +159,111 @@ describe('devkit runner for API tests', () => {
     });
     await agent.serve({ signal: controller.signal });
     expect(events).toEqual([{ type: 'offline', message: 'ECONNREFUSED', retryInMs: 2_000 }]);
+  });
+});
+
+describe('devkit runner for API tests: serving and edge cases', () => {
+  it('passes the abort signal and custom fetch to the run and keeps heartbeating while running', async () => {
+    const { api, calls } = fakeApi(integration('{{base}}/slow'));
+    const fetcher = vi.fn((input: string | URL | Request, init?: RequestInit) =>
+      fetch(input, init),
+    );
+    const agent = new ApiTestRunnerAgent({ api, identity, heartbeatMs: 20, fetch: fetcher });
+    await agent.poll({ waitSeconds: 0, signal: new AbortController().signal });
+    expect(fetcher).toHaveBeenCalled();
+    expect(calls.filter((call) => call.path.endsWith('/heartbeat')).length).toBeGreaterThan(1);
+    expect(calls.at(-1)?.body).toMatchObject({ result: { total: 1 } });
+  });
+
+  it('serves runs, resets the backoff after success and stops on auth errors', async () => {
+    let call = 0;
+    const events: ApiRunnerEvent[] = [];
+    const sleep = vi.fn(() => Promise.resolve());
+    const agent = new ApiTestRunnerAgent({
+      api: {
+        request: () => {
+          call += 1;
+          if (call <= 2) return Promise.reject(notAnError('socket hang up'));
+          if (call === 3) return Promise.resolve({ run: null });
+          if (call === 4) return Promise.reject(new Error('reset'));
+          return Promise.reject(Object.assign(new Error('Unauthorized'), { status: 401 }));
+        },
+      } as ApiTestRunnerAgentOptions['api'],
+      identity,
+      sleep,
+      onEvent: (event) => events.push(event),
+    });
+    await expect(agent.serve()).rejects.toThrow('Unauthorized');
+    expect(events).toEqual([
+      { type: 'offline', message: 'socket hang up', retryInMs: 2_000 },
+      { type: 'offline', message: 'socket hang up', retryInMs: 4_000 },
+      { type: 'offline', message: 'reset', retryInMs: 2_000 },
+    ]);
+  });
+
+  it('waits with the default sleep until the backoff ends or the signal aborts', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const events: ApiRunnerEvent[] = [];
+      let calls = 0;
+      const agent = new ApiTestRunnerAgent({
+        api: {
+          request: () => {
+            calls += 1;
+            return Promise.reject(new Error('offline'));
+          },
+        } as ApiTestRunnerAgentOptions['api'],
+        identity,
+        onEvent: (event) => events.push(event),
+      });
+      const serving = agent.serve({ signal: controller.signal });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(calls).toBe(2);
+      controller.abort();
+      await serving;
+      expect(events.map((event) => event.type)).toEqual(['offline', 'offline']);
+
+      // A signal aborted before the wait starts ends it at once.
+      const fresh = new AbortController();
+      const aborted = new ApiTestRunnerAgent({
+        api: {
+          request: () => {
+            fresh.abort();
+            return Promise.reject(new Error('offline'));
+          },
+        } as ApiTestRunnerAgentOptions['api'],
+        identity,
+      });
+      await aborted.serve({ signal: fresh.signal });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('describes claims, errors and outages', () => {
+    const run = { id: 'r', kind: 'integration' as const, name: 'Smoke' };
+    expect(formatApiRunnerEvent({ type: 'claimed', run })).toBe(
+      '[devkit] API tests "Smoke" started on this computer.',
+    );
+    expect(
+      formatApiRunnerEvent({
+        type: 'finished',
+        run,
+        saved: true,
+        outcome: { status: 'error', error: 'Bad URL', result: null },
+      }),
+    ).toBe('[devkit] API tests "Smoke" error: Bad URL.');
+    expect(
+      formatApiRunnerEvent({
+        type: 'finished',
+        run,
+        saved: true,
+        outcome: { status: 'failed', error: null, result: null },
+      }),
+    ).toBe('[devkit] API tests "Smoke" failed.');
+    expect(formatApiRunnerEvent({ type: 'offline', message: 'down', retryInMs: 4_400 })).toBe(
+      '[devkit] ADK is unreachable (down); retrying API test runs in 4 s.',
+    );
   });
 });

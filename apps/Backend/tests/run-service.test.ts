@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { InMemoryIssueStore } from '../src/modules/issues/issue-store.js';
 import { InMemoryRunStore } from '../src/modules/issues/run-store.js';
 import { RunService } from '../src/modules/issues/run-service.js';
-import type { AgentService } from '../src/modules/agents/application/agent-service.js';
+import { fakeRunAgents } from './helpers/fake-run-agents.js';
 
 const workspaceId = 'workspace-a';
 const context = { requestId: 'test', workspaceId, ownerId: 'owner-a', actorId: 'user-a' };
@@ -18,10 +18,10 @@ function setup(
 ) {
   const issues = new InMemoryIssueStore();
   const store = new InMemoryRunStore();
-  const agents = {
-    getAgent: vi.fn().mockResolvedValue({ id: agentId }),
-    executeAgent,
-  } as unknown as AgentService;
+  const agents = fakeRunAgents(executeAgent, {
+    agent: { id: agentId, name: 'Agent' },
+    workflow: { finalReview: false },
+  });
   const runs = new RunService(store, issues, agents);
   const createIssue = (title: string) =>
     issues.create(workspaceId, 'user-a', { title, assigneeAgentId: agentId });
@@ -46,12 +46,12 @@ describe('agent issue runs', () => {
     const result = await runs.get(workspaceId, queued.id);
     expect(executeAgent).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
-      output: 'Completed work',
+      output: '## Agent\n\nCompleted work',
       inputTokens: 1000,
       outputTokens: 500,
       costMicros: 6000,
     });
-    expect((await issues.get(workspaceId, issue.id))?.status).toBe('in_review');
+    expect((await issues.get(workspaceId, issue.id))?.status).toBe('done');
     expect((await runs.costs(workspaceId)).monthSpendMicros).toBe(6000);
     expect(await runs.costs(workspaceId)).toMatchObject({
       totalInputTokens: 1000,
@@ -121,10 +121,14 @@ describe('agent issue runs', () => {
     expect(
       (await runs.completeHost(workspaceId, host.id, { output: 'Reviewed in MCP' })).status,
     ).toBe('succeeded');
-    expect((await issues.get(workspaceId, issue.id))?.status).toBe('in_review');
+    expect((await issues.get(workspaceId, issue.id))?.status).toBe('done');
     await expect(runs.checkout(workspaceId, host.id)).rejects.toMatchObject({
       code: 'INVALID_RUN_STATE',
     });
+    await expect(runs.create(issue.id, context, 'host')).rejects.toMatchObject({
+      code: 'ISSUE_CLOSED',
+    });
+    await issues.update(workspaceId, issue.id, { status: 'todo' });
     const next = await runs.create(issue.id, context, 'host');
     expect((await runs.cancel(workspaceId, next.id)).status).toBe('cancelled');
     expect((await issues.get(workspaceId, issue.id))?.status).toBe('todo');
@@ -177,7 +181,7 @@ describe('agent issue runs', () => {
     expect(prompt).toContain('Carry out the requested work when possible.');
     expect((await issues.comments(issue.id)).at(-1)).toMatchObject({
       authorId: agentId,
-      body: 'I updated the checklist and need approval.',
+      body: '## Agent\n\nI updated the checklist and need approval.',
     });
     expect((await runs.get(workspaceId, initial.id)).status).toBe('succeeded');
   });

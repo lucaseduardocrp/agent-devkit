@@ -114,7 +114,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv): McpConfig {
   const parsed = environmentSchema.safeParse(environment);
   if (!parsed.success) {
     const problems = parsed.error.issues.map(
-      (issue) => `${issue.path.join('.') || 'environment'}: ${issue.message}`,
+      (issue) => `${issue.path.join('.')}: ${issue.message}`,
     );
     throw new Error(`Invalid configuration:\n  - ${problems.join('\n  - ')}`);
   }

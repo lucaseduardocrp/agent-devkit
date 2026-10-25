@@ -121,7 +121,7 @@ function previewDocument(files: readonly DesignFileDto[], emptyPreview: string):
     },
   );
   const unreferencedStyles = stylesheets
-    .filter((file) => !html.includes(file.name.split(/[\\/]/).at(-1) ?? file.name))
+    .filter((file) => !html.includes(file.name.split(/[\\/]/).at(-1)!))
     .map((file) => `<style>\n${file.content}\n</style>`)
     .join('\n');
   const unreferencedScripts = scripts
@@ -336,7 +336,6 @@ export function DesignView({
     </div>
   );
   const create = async () => {
-    if (!title.trim() || !prompt.trim() || !agentId) return;
     setPending(true);
     try {
       const project = await runActivity(
@@ -366,8 +365,7 @@ export function DesignView({
       setPending(false);
     }
   };
-  const chat = async () => {
-    if (!selected || (!message.trim() && !chatImages.length)) return;
+  const chat = async (selected: DesignProjectDto) => {
     const content = message.trim() || t('design.imageMessage');
     setPending(true);
     try {
@@ -414,8 +412,7 @@ export function DesignView({
         file.name === activeFile?.name ? { ...file, content } : file,
       ),
     });
-  const saveCode = async () => {
-    if (!selected) return;
+  const saveCode = async (selected: DesignProjectDto) => {
     setPending(true);
     try {
       replaceProject(
@@ -434,8 +431,7 @@ export function DesignView({
       setPending(false);
     }
   };
-  const pullProject = async () => {
-    if (!selected) return;
+  const pullProject = async (selected: DesignProjectDto) => {
     setPending(true);
     try {
       replaceProject(
@@ -455,7 +451,6 @@ export function DesignView({
     }
   };
   const saveSystem = async () => {
-    if (!systemName.trim() || !systemContent.trim()) return;
     setPending(true);
     try {
       const saved = await runActivity(
@@ -482,7 +477,6 @@ export function DesignView({
     }
   };
   const generateSystem = async () => {
-    if (!systemPrompt.trim() || !agentId) return;
     setPending(true);
     setIsGeneratingSystem(true);
     try {
@@ -521,12 +515,11 @@ export function DesignView({
       setPending(false);
     }
   };
-  const deleteSystem = async () => {
-    if (!editingSystemId) return;
+  const deleteSystem = async (systemId: string) => {
     setPending(true);
     try {
-      await apiClient.deleteDesignSystem(editingSystemId, provider);
-      setSystems((current) => current.filter((item) => item.id !== editingSystemId));
+      await apiClient.deleteDesignSystem(systemId, provider);
+      setSystems((current) => current.filter((item) => item.id !== systemId));
       setEditingSystemId(undefined);
       setSystemName('');
       setSystemContent('');
@@ -535,8 +528,7 @@ export function DesignView({
       setPending(false);
     }
   };
-  const exportProject = () => {
-    if (!selected) return;
+  const exportProject = (selected: DesignProjectDto) => {
     download(
       `${selected.title.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.html`,
       previewDocument(selected.files, t('design.noPreview')),
@@ -786,7 +778,7 @@ export function DesignView({
                       <Button
                         variant="destructive"
                         disabled={pending}
-                        onClick={() => void deleteSystem()}
+                        onClick={() => void deleteSystem(editingSystemId)}
                       >
                         {t('common.delete')}
                       </Button>
@@ -974,11 +966,11 @@ export function DesignView({
                   size="sm"
                   variant="outline"
                   disabled={pending}
-                  onClick={() => void pullProject()}
+                  onClick={() => void pullProject(selected)}
                 >
                   <i className="ti ti-download" aria-hidden="true" /> Pull
                 </Button>
-                <Button size="sm" variant="outline" onClick={exportProject}>
+                <Button size="sm" variant="outline" onClick={() => exportProject(selected)}>
                   <i className="ti ti-download" aria-hidden="true" /> {t('design.export')}
                 </Button>
                 <Button
@@ -1045,7 +1037,7 @@ export function DesignView({
                           size="sm"
                           disabled={pending}
                           isLoading={pending}
-                          onClick={() => void saveCode()}
+                          onClick={() => void saveCode(selected)}
                         >
                           Push
                         </Button>
@@ -1164,7 +1156,7 @@ export function DesignView({
                   className="w-full"
                   disabled={pending || (!message.trim() && !chatImages.length)}
                   isLoading={pending}
-                  onClick={() => void chat()}
+                  onClick={() => void chat(selected)}
                 >
                   <i className="ti ti-send" aria-hidden="true" /> {t('design.send')}
                 </Button>
@@ -1176,40 +1168,41 @@ export function DesignView({
       {toast && (
         <Toast message={toast.message} variant={toast.variant} onDismiss={() => setToast(null)} />
       )}
-      <ConfirmationDialog
-        open={Boolean(deleteTarget)}
-        title={t('design.deletePrototype')}
-        description={t('design.deletePrototypeDescription', { title: deleteTarget?.title ?? '' })}
-        confirmLabel={t('common.delete')}
-        cancelLabel={t('common.cancel')}
-        destructive
-        isLoading={pending}
-        onCancel={() => setDeleteTarget(null)}
-        onConfirm={() => {
-          const target = deleteTarget;
-          if (!target) return;
-          setPending(true);
-          void runActivity(
-            { kind: 'push', title: t('design.deletingPrototype', { title: target.title }) },
-            () => apiClient.deleteDesignProject(target.id, target.provider),
-          )
-            .then(() => {
-              setProjects((all) =>
-                all.filter((item) => item.id !== target.id || item.provider !== target.provider),
-              );
-              setSelected(null);
-              setDeleteTarget(null);
-              setToast({ message: t('design.prototypeDeleted'), variant: 'success' });
-            })
-            .catch((error: unknown) =>
-              setToast({
-                message: error instanceof Error ? error.message : t('design.deleteFailed'),
-                variant: 'error',
-              }),
+      {deleteTarget && (
+        <ConfirmationDialog
+          open
+          title={t('design.deletePrototype')}
+          description={t('design.deletePrototypeDescription', { title: deleteTarget.title })}
+          confirmLabel={t('common.delete')}
+          cancelLabel={t('common.cancel')}
+          destructive
+          isLoading={pending}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            const target = deleteTarget;
+            setPending(true);
+            void runActivity(
+              { kind: 'push', title: t('design.deletingPrototype', { title: target.title }) },
+              () => apiClient.deleteDesignProject(target.id, target.provider),
             )
-            .finally(() => setPending(false));
-        }}
-      />
+              .then(() => {
+                setProjects((all) =>
+                  all.filter((item) => item.id !== target.id || item.provider !== target.provider),
+                );
+                setSelected(null);
+                setDeleteTarget(null);
+                setToast({ message: t('design.prototypeDeleted'), variant: 'success' });
+              })
+              .catch((error: unknown) =>
+                setToast({
+                  message: error instanceof Error ? error.message : t('design.deleteFailed'),
+                  variant: 'error',
+                }),
+              )
+              .finally(() => setPending(false));
+          }}
+        />
+      )}
     </div>
   );
 }

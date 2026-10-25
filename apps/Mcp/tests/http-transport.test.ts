@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { connect as connectSocket, type AddressInfo } from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -282,6 +282,90 @@ describe('HTTP transport', () => {
     await client.close();
   });
 
+  it('trusts the proxy when configured and rejects requests without a Host header', async () => {
+    const { url, port } = await listen({ ADK_MCP_TRUST_PROXY: 'true' });
+    expect((await fetch(`${url}/healthz`)).status).toBe(200);
+    // HTTP/1.0 allows omitting Host; the DNS-rebinding guard must still refuse it.
+    const status = await new Promise<string>((resolve, reject) => {
+      const socket = connectSocket(port, '127.0.0.1', () =>
+        socket.write('GET /mcp HTTP/1.0\r\n\r\n'),
+      );
+      let reply = '';
+      socket.on('data', (chunk) => (reply += String(chunk)));
+      socket.on('end', () => resolve(reply.split('\r\n')[0]!));
+      socket.on('error', reject);
+    });
+    expect(status).toContain('403');
+  });
+
+  it('asks for initialization when a POST has no body', async () => {
+    const { url } = await listen();
+    const response = await fetch(`${url}/mcp`, { method: 'POST', headers: mcpHeaders });
+    expect(response.status).toBe(400);
+  });
+
+  it('expires idle sessions into recoverable ones and forgets them after a day', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'Date'] });
+    try {
+      const { url } = await listen({}, { sessionTtlMs: 1000 });
+      const created = await fetch(`${url}/mcp`, {
+        method: 'POST',
+        headers: { ...mcpHeaders, authorization: 'Bearer user-token' },
+        body: JSON.stringify(initialize),
+      });
+      const sessionId = created.headers.get('mcp-session-id')!;
+      await created.text();
+      const list = (token: string) =>
+        fetch(`${url}/mcp`, {
+          method: 'POST',
+          headers: {
+            ...mcpHeaders,
+            authorization: `Bearer ${token}`,
+            'mcp-session-id': sessionId,
+            'mcp-protocol-version': '2025-06-18',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
+        });
+
+      vi.setSystemTime(Date.now() + 5_000);
+      vi.advanceTimersByTime(60_000);
+      const recovered = await list('user-token');
+      expect(recovered.status).toBe(200);
+      expect(recovered.headers.get('mcp-session-id')).toBeNull();
+      await recovered.text();
+      expect((await list('other-token')).status).toBe(403);
+
+      vi.setSystemTime(Date.now() + 25 * 60 * 60_000);
+      vi.advanceTimersByTime(60_000);
+      const reused = await list('other-token');
+      expect(reused.status).toBe(200);
+      await reused.text();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('evicts the oldest recovered session when the cap is reached', async () => {
+    const { url } = await listen({}, { maxSessions: 1 });
+    const list = (sessionId: string, token: string) =>
+      fetch(`${url}/mcp`, {
+        method: 'POST',
+        headers: {
+          ...mcpHeaders,
+          authorization: `Bearer ${token}`,
+          'mcp-session-id': sessionId,
+          'mcp-protocol-version': '2025-06-18',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
+      });
+    await (await list('first', 'user-token')).text();
+    expect((await list('first', 'other-token')).status).toBe(403);
+    await (await list('second', 'user-token')).text();
+    const reclaimed = await list('first', 'other-token');
+    expect(reclaimed.status).toBe(200);
+    await reclaimed.text();
+  });
+
   it('answers 502 when ADK cannot verify a token', async () => {
     const { url } = await listen({}, {}, true);
     const response = await fetch(`${url}/mcp`, {
@@ -457,6 +541,32 @@ describe('OAuth for remote connectors', () => {
     expect(refresh.status).toBe(400);
   });
 
+  it('rejects login posts without a form, for unknown clients or unregistered redirects', async () => {
+    const { url } = await oauthServer();
+    const noForm = await fetch(`${url}/oauth/login`, { method: 'POST', redirect: 'manual' });
+    expect(noForm.status).toBe(400);
+    const sealer = new Sealer(SECRET, 'oauth-request');
+    const forged = (clientId: string, redirectUri: string) =>
+      login(url, {
+        request: sealer.seal({ clientId, redirectUri, codeChallenge: 'c' }),
+        token: 'adk_pat_manual',
+      });
+    expect((await forged('unknown-client', CALLBACK)).status).toBe(400);
+    const clientId = await register(url);
+    expect((await forged(clientId, 'https://evil.test/callback')).status).toBe(400);
+  });
+
+  it('names clients registered without a name generically', async () => {
+    const { url } = await oauthServer();
+    const response = await fetch(`${url}/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ redirect_uris: [CALLBACK], token_endpoint_auth_method: 'none' }),
+    });
+    const { client_id: clientId } = (await response.json()) as { client_id: string };
+    expect((await authorizePage(url, clientId)).html).toContain('An MCP client');
+  });
+
   it('shows a retry page when ADK is unreachable during login', async () => {
     const { url } = await oauthServer(true);
     const clientId = await register(url);
@@ -521,7 +631,39 @@ describe('OAuth building blocks', () => {
     await expect(
       provider.exchangeAuthorizationCode(client, sealed, undefined, 'https://evil'),
     ).rejects.toThrow('redirect_uri does not match');
+    await expect(provider.exchangeAuthorizationCode(client, 'bad')).rejects.toThrow(
+      'Invalid or expired',
+    );
     await expect(provider.exchangeRefreshToken()).rejects.toThrow('Refresh tokens are not issued');
+  });
+
+  it('rejects reused codes until their nonce is forgotten', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const provider = new AdkOAuthProvider(SECRET, { apiUrl: API, timeoutMs: 1000 });
+      const client = provider.clientsStore.registerClient({ redirect_uris: [CALLBACK] });
+      const code = (nonce: string) =>
+        new Sealer(SECRET, 'oauth-code').seal({
+          token: 't',
+          client: createHash('sha256').update(client.client_id).digest('hex'),
+          challenge: 'c',
+          redirectUri: CALLBACK,
+          expiresAt: null,
+          nonce,
+        });
+      const first = code('n1');
+      await provider.exchangeAuthorizationCode(client, first);
+      await expect(provider.exchangeAuthorizationCode(client, first)).rejects.toThrow(
+        'already used',
+      );
+      vi.setSystemTime(Date.now() + 61_000);
+      await provider.exchangeAuthorizationCode(client, code('n2'));
+      await expect(provider.exchangeAuthorizationCode(client, first)).resolves.toMatchObject({
+        access_token: 't',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('caches token verification and rethrows transient failures', async () => {

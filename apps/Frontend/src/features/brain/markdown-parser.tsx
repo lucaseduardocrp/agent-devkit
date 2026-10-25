@@ -118,13 +118,12 @@ export function renderInlineContent(
     } else if (token.startsWith('![')) {
       // `![alt](url "title")`; Azure wikis also append a size such as ` =500x`.
       const imageMatch = /^!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+[^)]*)?\)$/.exec(token);
-      const src = imageMatch?.[2] ?? '';
       parts.push(
-        isSafeImageSource(src) ? (
+        imageMatch && isSafeImageSource(imageMatch[2]!) ? (
           <MediaImage
             key={key}
-            src={src}
-            alt={imageMatch?.[1] ?? ''}
+            src={imageMatch[2]!}
+            alt={imageMatch[1]}
             className="my-2 inline-block max-h-120 max-w-full rounded-md border border-[#2a2a2e]"
           />
         ) : (
