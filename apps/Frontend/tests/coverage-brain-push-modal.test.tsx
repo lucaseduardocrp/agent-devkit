@@ -260,11 +260,13 @@ describe('BrainPushModal issue trackers', () => {
 
   it('sends a Jira parent ID and issue type, and shows custom push errors', async () => {
     const onPush = vi.fn().mockResolvedValue({ success: false, error: 'Jira rejected' });
-    const { view } = setup({
+    const { view, getDestinations } = setup({
       providers: [{ providerId: 'jira', name: 'Jira', settings: { projectKey: 'QA' } }],
       onPush,
     });
     expect(await view.findByText('Projeto configurado: QA')).toBeInTheDocument();
+    // The provider effect clears the fields before loading destinations; type only after it ran.
+    await waitFor(() => expect(getDestinations).toHaveBeenCalledWith('jira'));
     expect(
       view.getByText('Nenhum destino encontrado. Você pode informar o caminho ou ID abaixo.'),
     ).toBeInTheDocument();
