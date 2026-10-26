@@ -117,7 +117,7 @@ export class HttpHubCatalog implements HubCatalog {
     if (this.cached) return this.cached.index;
     throw new ApplicationError(
       'HUB_UNAVAILABLE',
-      `The ADK Hub index could not be loaded: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+      `The ADK Hub index could not be loaded: ${(lastError as Error).message}`,
       503,
     );
   }

@@ -41,7 +41,10 @@ const collection: CollectionInput = {
         { key: 'q', value: '{{$randomFullName}}' },
         { key: 'skip', value: '1', enabled: false },
       ],
-      body: { mode: 'json', content: '{"a":"{{$randomFullName}}","id":"{{$guid}}","x":"{{$nope}}"}' },
+      body: {
+        mode: 'json',
+        content: '{"a":"{{$randomFullName}}","id":"{{$guid}}","x":"{{$nope}}"}',
+      },
       assertions: [
         { id: '1', source: 'status', operator: 'eq', expected: '200' },
         { id: '2', source: 'duration', operator: 'lt', expected: '500' },
@@ -65,7 +68,12 @@ const collection: CollectionInput = {
         { variable: 'jj', source: 'json' },
       ],
     }),
-    request({ id: 'xml', name: 'Xml', body: { mode: 'xml', content: '<a/>' }, auth: { type: 'none' } }),
+    request({
+      id: 'xml',
+      name: 'Xml',
+      body: { mode: 'xml', content: '<a/>' },
+      auth: { type: 'none' },
+    }),
     request({
       id: 'text',
       name: 'Text',

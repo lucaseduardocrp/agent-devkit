@@ -36,8 +36,9 @@ describe('hostAccessFetch connections', () => {
     const fetcher = hostAccessFetch('host.alias');
     const other = await fetcher(`http://api.example.test:${port}/a`);
     expect(await other.text()).toBe('GET /a');
+    // Node's global Request, which undici's fetch would reject as is.
     const whole = await fetcher(
-      new Request(`http://localhost:${port}/b`, { method: 'POST', body: 'x' }),
+      new Request(`http://127.0.0.1:${port}/b`, { method: 'POST', body: 'x' }),
     );
     expect(await whole.text()).toBe('POST /b');
     expect(looked).toEqual(['api.example.test', 'host.alias']);

@@ -41,21 +41,18 @@ describe('exportBruno edge cases', () => {
   });
 
   it('writes environments with secret and disabled variables', () => {
-    const files = exportBruno(
-      { name: 'Env', variables: [], auth: { type: 'none' }, items: [] },
-      [
-        {
-          name: 'dev',
-          variables: [
-            { key: 'host', value: 'h' },
-            { key: 'off', value: 'x', enabled: false },
-            { key: 'token', value: 'secret', secret: true },
-          ],
-        },
-        { name: 'only-secret', variables: [{ key: 'k', value: 'v', secret: true }] },
-        { name: 'plain', variables: [{ key: 'p', value: '1' }] },
-      ],
-    );
+    const files = exportBruno({ name: 'Env', variables: [], auth: { type: 'none' }, items: [] }, [
+      {
+        name: 'dev',
+        variables: [
+          { key: 'host', value: 'h' },
+          { key: 'off', value: 'x', enabled: false },
+          { key: 'token', value: 'secret', secret: true },
+        ],
+      },
+      { name: 'only-secret', variables: [{ key: 'k', value: 'v', secret: true }] },
+      { name: 'plain', variables: [{ key: 'p', value: '1' }] },
+    ]);
     expect(fileOf(files, 'Env/environments/dev.bru')).toBe(
       'vars {\n  host: h\n}\n\nvars:secret [\n  token\n]\n',
     );

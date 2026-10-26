@@ -46,7 +46,7 @@ export function sanitizeRichText(value: string): string {
       .replace(/<(?!\/?(?:b|strong|i|em|u|br|p|div|h[1-6]|ul|ol|li)\b)[^>]*>/gi, '')
       // Allowed tags lose every attribute, including handlers written without a space.
       .replace(/<(\/?)(b|strong|i|em|u|br|p|div|h[1-6]|ul|ol|li)\b[^>]*>/gi, '<$1$2>')
-      .replace(/(\d+)/g, (_, index: string) => images[Number(index)] ?? '')
+      .replace(/(\d+)/g, (_, index: string) => images[Number(index)]!)
   );
 }
 

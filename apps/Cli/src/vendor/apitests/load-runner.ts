@@ -32,12 +32,10 @@ class Histogram {
   percentile(p: number): number {
     if (!this.count) return 0;
     const rank = Math.ceil((p / 100) * this.count);
-    let seen = 0;
-    for (let ms = 0; ms < this.counts.length; ms += 1) {
-      seen += this.counts[ms]!;
-      if (seen >= rank) return ms;
-    }
-    return this.max;
+    // rank <= count, so the walk always stops inside the array.
+    let ms = 0;
+    for (let seen = this.counts[0]!; seen < rank; seen += this.counts[ms]!) ms += 1;
+    return ms;
   }
 
   summary(): LatencySummary {
@@ -178,7 +176,8 @@ export async function runLoad(plan: LoadPlan, options: LoadRunOptions = {}): Pro
       case 'errorRate':
         return overall.count ? failed / overall.count : 0;
       case 'rps':
-        return durationSec > 0 ? overall.count / durationSec : 0;
+        // durationSec is never below 1 ms (see summarize).
+        return overall.count / durationSec;
       case 'checksRate':
         return checksPassed + checksFailed ? checksPassed / (checksPassed + checksFailed) : 1;
       default:

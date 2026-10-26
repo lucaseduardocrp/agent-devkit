@@ -19,7 +19,10 @@ const request = (id: string): ApiRequestSpec => ({
 const plan = (overrides: Partial<LoadPlan> = {}): LoadPlan => ({
   requests: [{ request: request('a'), auth: { type: 'none' }, weight: 1 }],
   variables: [],
-  stages: [{ durationSec: 60, targetVus: 2 }],
+  stages: [
+    { durationSec: 0.001, targetVus: 2 },
+    { durationSec: 60, targetVus: 2 },
+  ],
   thinkTimeMs: 1,
   thresholds: [],
   ...overrides,
@@ -82,7 +85,7 @@ describe('runLoad edges', () => {
           },
         ],
         thresholds: [
-          { metric: 'rps', operator: 'gt', value: 0, abortOnFail: true },
+          { metric: 'rps', operator: 'gt', value: 0 },
           { metric: 'errorRate', operator: 'lt', value: 0.5, abortOnFail: true },
           { metric: 'checksRate', operator: 'gte', value: 1 },
           { metric: 'p50', operator: 'lte', value: 100_000 },
@@ -128,7 +131,10 @@ describe('runLoad edges', () => {
           { request: request('a'), auth: { type: 'none' }, weight: 0 },
           { request: request('b'), auth: { type: 'none' }, weight: -1 },
         ],
-        stages: [{ durationSec: 60, targetVus: 1 }],
+        stages: [
+          { durationSec: 0.001, targetVus: 1 },
+          { durationSec: 60, targetVus: 1 },
+        ],
         thresholds: [{ metric: 'errorRate', operator: 'lt', value: 0.5 }],
       }),
       { fetch, signal: controller.signal, tickMs: 10, controlMs: 5 },
@@ -140,5 +146,23 @@ describe('runLoad edges', () => {
     // The threshold fails but does not abort the run: the cancel ended it.
     expect(summary.abortedBy).toBeUndefined();
     expect(summary.passed).toBe(false);
+  });
+
+  it('skips the think time of a request that ends after the stop', async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn(async () => {
+      controller.abort();
+      return new Response('ok');
+    });
+    const started = performance.now();
+    const summary = await runLoad(plan({ thinkTimeMs: 60_000 }), {
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      signal: controller.signal,
+      controlMs: 5,
+    });
+    // Each user that started records its one request, then stops without waiting a minute.
+    expect(summary.totalRequests).toBeGreaterThan(0);
+    expect(summary.totalRequests).toBe(fetch.mock.calls.length);
+    expect(performance.now() - started).toBeLessThan(5_000);
   });
 });

@@ -64,7 +64,10 @@ describe('importInsomnia edge cases', () => {
           url: '{{ _.host }}/a',
           headers: [{ name: 'X-On', value: 1 }, { name: 'X-Off', value: true, disabled: true }, 7],
           parameters: [{ name: 'q', value: null }],
-          body: { mimeType: 'application/x-www-form-urlencoded', params: [{ name: 'a', value: 'b' }] },
+          body: {
+            mimeType: 'application/x-www-form-urlencoded',
+            params: [{ name: 'a', value: 'b' }],
+          },
           authentication: { type: 'basic', username: 'u', password: '{{ _.p }}' },
         },
         {
@@ -230,10 +233,18 @@ describe('exportInsomnia edge cases', () => {
     expect(byName('Plain')).not.toHaveProperty('authentication');
     expect(byName('Plain')['description']).toBe('');
     expect(byName('Inherits')['authentication']).toEqual(byName('Secured')['authentication']);
-    expect(byName('Inherits')['body']).toEqual({ mimeType: 'application/xml', text: '<{{ _.x }}/>' });
+    expect(byName('Inherits')['body']).toEqual({
+      mimeType: 'application/xml',
+      text: '<{{ _.x }}/>',
+    });
     expect(byName('Inherits')['description']).toBe('');
     const header = byName('Header key');
-    expect(header['authentication']).toEqual({ type: 'apikey', key: 'K2', value: 'v', addTo: 'header' });
+    expect(header['authentication']).toEqual({
+      type: 'apikey',
+      key: 'K2',
+      value: 'v',
+      addTo: 'header',
+    });
     expect(header['body']).toEqual({ mimeType: 'text/plain', text: 't' });
     expect(header['headers']).toEqual([{ name: 'H', value: '{{ _.h }}', disabled: true }]);
     expect(header['parameters']).toEqual([{ name: 'q', value: '1', disabled: false }]);

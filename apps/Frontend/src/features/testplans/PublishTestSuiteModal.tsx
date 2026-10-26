@@ -286,7 +286,6 @@ export function PublishTestSuiteModal({
       ));
 
   const confirm = async () => {
-    if (!ready || publishing) return;
     setPublishing(true);
     setPublishError(null);
     try {

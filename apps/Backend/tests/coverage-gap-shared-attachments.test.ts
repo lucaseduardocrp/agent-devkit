@@ -147,14 +147,14 @@ describe('image helpers', () => {
       '<img src="https://cdn.test/d.png">',
       '<img src="::bad::">',
     ].join('\n');
-    expect(inlineImageAttachments(description, 'pbi').map((image) => [image.name, image.url])).toEqual(
-      [
-        ['Image in description', 'https://cdn.test/a.png'],
-        ['Single', 'https://cdn.test/b.png?a=1&b=2'],
-        ['Bare', 'https://cdn.test/c.png'],
-        ['Image in description', 'https://cdn.test/d.png'],
-      ],
-    );
+    expect(
+      inlineImageAttachments(description, 'pbi').map((image) => [image.name, image.url]),
+    ).toEqual([
+      ['Image in description', 'https://cdn.test/a.png'],
+      ['Single', 'https://cdn.test/b.png?a=1&b=2'],
+      ['Bare', 'https://cdn.test/c.png'],
+      ['Image in description', 'https://cdn.test/d.png'],
+    ]);
   });
 
   it('decodes base64 image data and rejects anything else', () => {
@@ -294,7 +294,10 @@ describe('loading images for a model', () => {
 
   it('reads stored images, deduplicated, skipping other kinds and invalid content', async () => {
     const store = new InMemoryE2eArtifactStore();
-    const ids = Array.from({ length: 6 }, (_, index) => `0000000${index}-0000-4000-8000-000000000000`);
+    const ids = Array.from(
+      { length: 6 },
+      (_, index) => `0000000${index}-0000-4000-8000-000000000000`,
+    );
     const meta = (id: string, mimeType: string, kind = 'image') =>
       store.put(attachmentMetaKey('ws', id), Buffer.from(JSON.stringify({ id, kind, mimeType })));
     await meta(ids[0]!, 'image/png');

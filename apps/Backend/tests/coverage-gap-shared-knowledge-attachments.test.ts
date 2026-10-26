@@ -76,9 +76,9 @@ describe('Brain page attachments', () => {
       .send({ attachments: [external] });
     expect(saved.status).toBe(200);
     expect(saved.body.attachments).toEqual([external]);
-    expect((await request(app).get('/knowledge/documents/p1/attachments')).body.attachments).toEqual(
-      [external],
-    );
+    expect(
+      (await request(app).get('/knowledge/documents/p1/attachments')).body.attachments,
+    ).toEqual([external]);
     // The page text references the pending upload, so saving claims it for the page.
     const meta = JSON.parse((await store.get(attachmentMetaKey('ws-k', FILE)))!.toString('utf8'));
     expect(meta).toMatchObject({ status: 'committed', owner: 'brain:p1' });

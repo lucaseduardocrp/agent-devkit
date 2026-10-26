@@ -41,7 +41,7 @@ const okFetch = (delayMs = 0): typeof fetch =>
   vi.fn(async () => {
     if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
     return new Response('ok', { status: 200 });
-  }) as unknown as typeof fetch;
+  });
 
 afterEach(() => {
   lookup.mockReset();
@@ -51,14 +51,17 @@ describe('collection runner edges', () => {
   const collection: CollectionSpec = {
     name: 'C',
     variables: [],
-    auth: { type: 'bearer', token: 'root' },
+    auth: { type: 'inherit' },
     items: [
       {
         id: 'f1',
         type: 'folder',
         name: 'Inherits',
         auth: { type: 'inherit' },
-        items: [request('r1'), request('r2', { auth: { type: 'basic', username: 'u', password: 'p' } })],
+        items: [
+          request('r1'),
+          request('r2', { auth: { type: 'basic', username: 'u', password: 'p' } }),
+        ],
       },
       { id: 'f2', type: 'folder', name: 'No auth field', items: [request('r3')] },
     ],
@@ -66,9 +69,9 @@ describe('collection runner edges', () => {
 
   it('resolves auth through folders and the collection', () => {
     expect(selectRequests(collection).map((entry) => [entry.request.id, entry.auth.type])).toEqual([
-      ['r1', 'bearer'],
+      ['r1', 'none'],
       ['r2', 'basic'],
-      ['r3', 'bearer'],
+      ['r3', 'none'],
     ]);
     expect(selectRequests(collection, ['r2', 'f2']).map((entry) => entry.request.id)).toEqual([
       'r2',
@@ -155,14 +158,17 @@ describe('executeRun', () => {
 
   it('runs a load plan and reports the failing status', async () => {
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 120);
+    setTimeout(() => controller.abort(), 1_100);
     const payload: RunPayload = {
       kind: 'load',
       maxVus: 1,
       plan: {
         requests: [{ request: request('a'), auth: { type: 'none' }, weight: 1 }],
         variables: [],
-        stages: [{ durationSec: 60, targetVus: 5 }],
+        stages: [
+          { durationSec: 0.001, targetVus: 5 },
+          { durationSec: 60, targetVus: 5 },
+        ],
         thinkTimeMs: 5,
         thresholds: [{ metric: 'rps', operator: 'gt', value: 1_000_000 }],
       },
@@ -197,27 +203,23 @@ describe('executeRun', () => {
       error: 'A load test needs at least one request.',
     });
 
-    const odd = await executeRun(integration([request('a')]), {
-      fetch: okFetch(),
-      report: async () => 'running',
-      guard: async () => undefined,
-      // A hook that throws something that is not an Error.
-      ...{},
-    }).then(async () =>
-      executeRun(
-        {
-          ...integration([]),
-          collection: {
-            name: 'C',
-            variables: [],
-            auth: { type: 'none' },
-            get items(): never {
-              throw 'broken collection';
-            },
+    // A collection that throws something that is not an Error.
+    const odd = await executeRun(
+      {
+        kind: 'integration',
+        environment: [],
+        itemIds: [],
+        bail: false,
+        collection: {
+          name: 'C',
+          variables: [],
+          auth: { type: 'none' },
+          get items(): never {
+            throw 'broken collection';
           },
         },
-        { report: async () => 'running' },
-      ),
+      },
+      { report: async () => 'running' },
     );
     expect(odd).toMatchObject({ status: 'error', error: 'broken collection' });
   });
@@ -243,7 +245,13 @@ describe('target guard', () => {
     for (const address of ['10.0.0.1', '172.16.0.1', '172.31.9.9', '192.168.1.1', '100.64.0.1']) {
       expect(isPrivateAddress(address)).toBe(true);
     }
-    for (const address of ['172.15.0.1', '172.32.0.1', '192.169.0.1', '100.63.0.1', '100.128.0.1']) {
+    for (const address of [
+      '172.15.0.1',
+      '172.32.0.1',
+      '192.169.0.1',
+      '100.63.0.1',
+      '100.128.0.1',
+    ]) {
       expect(isPrivateAddress(address)).toBe(false);
     }
     expect(isPrivateAddress('fd00::1')).toBe(true);
@@ -267,7 +275,7 @@ describe('target guard', () => {
     ]);
     await expect(guard(new URL('https://intranet.test/'))).rejects.toMatchObject({
       code: 'API_TEST_TARGET_LOCAL',
-      status: 400,
+      statusCode: 400,
     });
     lookup.mockResolvedValue([{ address: '127.0.0.1', family: 4 }]);
     await expect(guard(new URL('https://sneaky.test/'))).rejects.toThrow(/devkit runner/);

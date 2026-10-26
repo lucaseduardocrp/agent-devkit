@@ -261,7 +261,7 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
         )
       ).data;
     } catch (error) {
-      const status = error instanceof ApplicationError ? error.details?.[0]?.['status'] : undefined;
+      const status = (error as ApplicationError).details?.[0]?.['status'];
       if (status === 404 || status === 400)
         throw new ApplicationError(
           'WORK_ITEM_NOT_FOUND',

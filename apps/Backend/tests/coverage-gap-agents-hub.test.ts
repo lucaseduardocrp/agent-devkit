@@ -304,7 +304,7 @@ describe('HttpHubCatalog', () => {
     });
   });
 
-  it('refuses indexes it cannot read and reports non-Error failures', async () => {
+  it('refuses indexes it cannot read and reports fetch failures', async () => {
     const unreadable = new HttpHubCatalog({
       indexUrl: 'https://mirror.test/index.json',
       fetch: fetcher({
@@ -318,11 +318,12 @@ describe('HttpHubCatalog', () => {
     const odd = new HttpHubCatalog({
       indexUrl: 'https://mirror.test/index.json',
       fetch: vi.fn(() => {
-        // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw 'boom';
       }) as unknown as typeof fetch,
     });
-    await expect(odd.index()).rejects.toMatchObject({ code: 'HUB_UNAVAILABLE' });
+    await expect(odd.index()).rejects.toThrow(
+      'Could not reach https://mirror.test/index.json: boom',
+    );
   });
 
   it('maps missing, failing and oversized files to errors', async () => {

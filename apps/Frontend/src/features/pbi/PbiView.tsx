@@ -368,7 +368,7 @@ function formatDescription(value: string): string {
   const decoded =
     typeof DOMParser === 'undefined'
       ? value
-      : new DOMParser().parseFromString(value, 'text/html').body.textContent!;
+      : new DOMParser().parseFromString(value, 'text/html').body.textContent;
   const html = renderToStaticMarkup(
     <>
       {parseMarkdownBlocks(decoded).map((block, index) => {

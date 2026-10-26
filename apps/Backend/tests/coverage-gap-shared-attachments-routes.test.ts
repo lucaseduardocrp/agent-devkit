@@ -122,7 +122,9 @@ describe('attachment upload and download edges', () => {
   });
 
   it('rejects empty and oversized uploads, and stores files of anonymous actors', async () => {
-    const { app, store } = build({ context: { requestId: 'r', ownerId: 'ws-1', workspaceId: 'ws-1' } });
+    const { app, store } = build({
+      context: { requestId: 'r', ownerId: 'ws-1', workspaceId: 'ws-1' },
+    });
     expect((await request(app).post('/attachments/files?scope=issue&name=a.png')).status).toBe(400);
     const big = Buffer.concat([PNG, Buffer.alloc(10 * 1024 * 1024)]);
     const tooLarge = await request(app)
@@ -173,14 +175,16 @@ describe('attachment proxy edges', () => {
   });
 
   it('follows redirects without credentials and names files from the best source', async () => {
-    const fetcher = vi.fn(async (url: URL) => {
+    const fetcher = vi.fn(async (url: URL, _init?: RequestInit) => {
       if (url.hostname === '13.107.42.20')
         return new Response(null, { status: 302, headers: { location: 'https://8.8.8.8/signed' } });
       return new Response(PNG, {
         headers: { 'content-disposition': `inline; filename*=UTF-8''r%C3%A9sum%C3%A9.png` },
       });
     });
-    const response = await request(build({ fetcher: fetcher as never }).app).get(proxy(`${host}/a`));
+    const response = await request(build({ fetcher: fetcher as never }).app).get(
+      proxy(`${host}/a`),
+    );
     expect(response.status).toBe(200);
     expect(response.headers['content-disposition']).toContain("UTF-8''r%C3%A9sum%C3%A9.png");
     expect(fetcher.mock.calls[1]![1]).toMatchObject({ headers: {} });
@@ -214,13 +218,14 @@ describe('attachment proxy edges', () => {
     const status = async (fetcher: (url: URL) => Promise<Response>) =>
       (await request(build({ fetcher: fetcher as never }).app).get(proxy(`${host}/a`))).body.code;
     expect(
-      await status(async () =>
-        new Response(null, { status: 302, headers: { location: 'https://10.0.0.1/a' } }),
+      await status(
+        async () =>
+          new Response(null, { status: 302, headers: { location: 'https://10.0.0.1/a' } }),
       ),
     ).toBe('ATTACHMENT_UNAVAILABLE');
     expect(
-      await status(async () =>
-        new Response(null, { status: 301, headers: { location: `${host}/again` } }),
+      await status(
+        async () => new Response(null, { status: 301, headers: { location: `${host}/again` } }),
       ),
     ).toBe('ATTACHMENT_UNAVAILABLE');
     expect(await status(async () => new Response(null, { status: 304 }))).toBe(
@@ -230,8 +235,8 @@ describe('attachment proxy edges', () => {
       'ATTACHMENT_UNAVAILABLE',
     );
     expect(
-      await status(async () =>
-        new Response(PNG, { headers: { 'content-length': String(200 * 1024 * 1024) } }),
+      await status(
+        async () => new Response(PNG, { headers: { 'content-length': String(200 * 1024 * 1024) } }),
       ),
     ).toBe('ATTACHMENT_UNAVAILABLE');
     const huge = () =>
