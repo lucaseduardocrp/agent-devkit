@@ -43,14 +43,17 @@ jobs:
           cache: npm
           cache-dependency-path: apps/*/package-lock.json
       # The CLI's tests and typecheck read the MCP sources; its build compiles and embeds apps/Mcp.
-      - if: matrix.app == 'Cli'
+      # The backend's tests run the CLI's local E2E runner and the MCP client against the API.
+      - if: matrix.app == 'Cli' || matrix.app == 'Backend'
         run: npm ci
         working-directory: apps/Mcp
-      # The backend's tests and typecheck run the CLI's local E2E runner against the backend's.
       - if: matrix.app == 'Backend'
         run: npm ci
         working-directory: apps/Cli
       - run: npm ci
+      # The backend's E2E runner tests drive a real Chromium.
+      - if: matrix.app == 'Backend'
+        run: npx playwright install --with-deps chromium
       # Formatting, linters, typecheck and tests with the 100% coverage thresholds of vitest.config.ts.
       - run: npm run verify
       - run: npm run build
