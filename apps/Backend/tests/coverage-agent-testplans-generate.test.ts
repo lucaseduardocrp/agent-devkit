@@ -38,6 +38,20 @@ describe('extractFlowStepsFromPrompt free-form English requirements', () => {
     });
     expect(steps[3]?.action).toBe('Check the result and data displayed after processing.');
   });
+
+  it('drops questions and fragments and keeps the generic expectation for other actions', () => {
+    const steps = extractFlowStepsFromPrompt(
+      '- Clicar no botão salvar\n- Salvou?\n- Ok;\n- Isso funciona mesmo?',
+    );
+    expect(steps).toEqual([
+      {
+        order: 1,
+        action: 'Clicar no botão salvar',
+        expectedResult:
+          'Etapa realizada com sucesso e resultado validado de acordo com o esperado.',
+      },
+    ]);
+  });
 });
 
 describe('AiKnowledgeTestPlanGenerator rejects unusable model steps', () => {

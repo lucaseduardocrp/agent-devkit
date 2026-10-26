@@ -6,7 +6,7 @@ import { Input } from '../../components/ui/input.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Select } from '../../components/ui/select.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
-import { AGENT_TEMPLATES } from './agent-templates.js';
+import { AGENT_TEMPLATES, type AgentTemplate } from './agent-templates.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { usePermissions } from '../workspaces/permissions.js';
 import { AgentSkillsField } from './AgentSkillsField.js';
@@ -123,10 +123,7 @@ export function AgentModal({
 
   if (!isOpen) return null;
 
-  const handleApplyTemplate = (templateId: string) => {
-    const tpl = AGENT_TEMPLATES.find((t) => t.id === templateId);
-    /* v8 ignore next */
-    if (!tpl) return;
+  const handleApplyTemplate = (tpl: AgentTemplate) => {
     setName(t(tpl.nameKey));
     setDescription(t(tpl.descriptionKey));
     setInstructions(tpl.instructions);
@@ -236,7 +233,7 @@ export function AgentModal({
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => handleApplyTemplate(template.id)}
+                      onClick={() => handleApplyTemplate(template)}
                       className="text-xs"
                     >
                       {t(template.nameKey)}

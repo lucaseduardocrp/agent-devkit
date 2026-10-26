@@ -162,7 +162,11 @@ describe('Workspace Repositories', () => {
           }),
           findMany: vi.fn().mockImplementation((args) => {
             if (args.where.userId === 'u-1') {
-              return Promise.resolve([mockMemberRecord]);
+              // A membership read without its workspace is skipped.
+              return Promise.resolve([
+                mockMemberRecord,
+                { ...mockMemberRecord, id: 'm-3', workspace: undefined },
+              ]);
             }
             if (args.where.workspaceId === 'ws-1') {
               return Promise.resolve([
@@ -216,6 +220,10 @@ describe('Workspace Repositories', () => {
         permissions: { canManageIntegrations: false },
       });
       expect(updated.role).toBe('MEMBER');
+      await repo.updateMember('m-1', {});
+      expect(mockClient.workspaceMemberRecord.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ data: {} }),
+      );
 
       // deleteMember
       await repo.deleteMember('m-1');

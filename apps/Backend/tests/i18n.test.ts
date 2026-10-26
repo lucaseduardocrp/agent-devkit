@@ -43,6 +43,7 @@ describe('i18n shared module', () => {
     expect(resolveLocale('en-US;q=0,pt-BR;q=0.5')).toBe('pt-BR');
     expect(resolveLocale('en-US;q=0.4,pt-BR;q=0.9')).toBe('pt-BR');
     expect(resolveLocale('unknown')).toBe('pt-BR');
+    expect(resolveLocale('en-US;q=abc,pt-BR;q=0.5')).toBe('en-US');
   });
 
   it('translates known error codes into pt-BR', () => {

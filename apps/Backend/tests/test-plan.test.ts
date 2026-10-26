@@ -438,6 +438,16 @@ Possível falha na composição dos dados da exportação detalhada.`;
     expect(resultCustom.metadata?.platform).toBeUndefined();
     expect(resultCustom.metadata?.areaPath).toBeUndefined();
     expect(resultCustom.metadata?.assignedTo).toBeUndefined();
+
+    // Without matching pages, the model gets only the requirement.
+    vi.mocked(mockSearch.search).mockResolvedValueOnce([]);
+    await aiGen.generate(
+      { prompt: 'Requisito sem documentação' },
+      { requestId: 'req-3', ownerId: 'user-1' },
+    );
+    const lastPrompt = String(vi.mocked(mockLlm.complete).mock.lastCall?.[0].prompt);
+    expect(lastPrompt).toContain('Requisito sem documentação');
+    expect(lastPrompt).not.toContain('Base de Conhecimento');
   });
 
   it('falls back to deterministic generator when no LLM is resolved or LLM fails', async () => {

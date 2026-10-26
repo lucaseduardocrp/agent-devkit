@@ -756,7 +756,7 @@ describe('E2eService', () => {
   });
 
   it('marks interrupted runs as failed on recovery', async () => {
-    const { service, store } = setup();
+    const { service, store, queue } = setup();
     const creation = await store.createCreation({
       workspaceId: 'ws',
       ownerId: 'ws',
@@ -787,7 +787,12 @@ describe('E2eService', () => {
     ]);
     const [done] = await store.listTests('ws', creation.id);
     await store.updateTest('ws', done!.id, { status: 'passed' });
+    // A run whose job is still held by a worker is left running.
+    const held = await store.createCreation({ ...(await store.getCreation('ws', creation.id))! });
+    await store.updateCreation('ws', held.id, { status: 'running' });
+    vi.spyOn(queue, 'hasActive').mockImplementation(async (_ws, id) => id === held.id);
     await service.recover(0);
+    expect((await store.getCreation('ws', held.id))?.status).toBe('running');
     const detail = await service.get('ws', creation.id);
     expect(detail).toMatchObject({
       status: 'failed',

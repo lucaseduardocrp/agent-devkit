@@ -166,3 +166,21 @@ describe('runLoad edges', () => {
     expect(performance.now() - started).toBeLessThan(5_000);
   });
 });
+
+describe('runLoad without think time', () => {
+  it('loops straight into the next request and survives a failing tick listener', async () => {
+    const fetch = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      return new Response('ok', { status: 200 });
+    });
+    const onTick = vi.fn(async () => {
+      throw new Error('listener down');
+    });
+    const summary = await runLoad(
+      plan({ thinkTimeMs: 0, stages: [{ durationSec: 0.05, targetVus: 1 }] }),
+      { fetch: fetch as unknown as typeof globalThis.fetch, onTick, tickMs: 10, controlMs: 5 },
+    );
+    expect(summary.totalRequests).toBeGreaterThan(1);
+    expect(onTick).toHaveBeenCalled();
+  });
+});

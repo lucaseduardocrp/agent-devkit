@@ -123,6 +123,21 @@ describe('tunnel manager edges', () => {
     expect(tunnel.status()).toBeUndefined();
   });
 
+  it('gives up when cloudflared prints no URL within 45 seconds', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { factory } = fakeProcess();
+      const tunnel = new CloudflareTunnelManager('cloudflared', factory);
+      const started = tunnel.start('http://localhost:5173');
+      const outcome = expect(started).rejects.toThrow('did not provide a URL within 45 seconds');
+      await vi.advanceTimersByTimeAsync(45_000);
+      await outcome;
+      expect(tunnel.status()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('closes the fullstack gateway when cloudflared cannot start', async () => {
     const { child, factory } = fakeProcess();
     const tunnel = new CloudflareTunnelManager('cloudflared', factory);

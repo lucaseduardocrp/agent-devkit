@@ -660,13 +660,16 @@ export function LoadTestsView({
         confirmLabel={naming === 'rename' ? t('apiTests.ui.rename') : t('apiTests.ui.create')}
         onSubmit={(name) => {
           if (naming === 'new') createScenario(name);
-          else if (naming === 'rename' && draft) setDraft({ ...draft, name });
-          else if (naming === 'duplicate' && draft) {
-            setSelectedId(null);
-            setDraft({ ...draft, name });
-            setSaved('null');
-            setRuns([]);
-            setRun(null);
+          else {
+            // Renaming and duplicating are offered only for an open scenario, and the modal
+            // dialog keeps it open until it closes.
+            setDraft({ ...draft!, name });
+            if (naming === 'duplicate') {
+              setSelectedId(null);
+              setSaved('null');
+              setRuns([]);
+              setRun(null);
+            }
           }
           setNaming(null);
         }}

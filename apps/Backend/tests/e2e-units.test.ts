@@ -266,6 +266,36 @@ describe('InMemoryE2eStore', () => {
     expect(await store.deleteCreation('ws', creation.id)).toBe(true);
     expect(await store.listTests('ws')).toEqual([]);
   });
+
+  it('lists the most recently modified creation first', async () => {
+    const store = new InMemoryE2eStore();
+    const older = await store.createCreation(newCreation);
+    const newer = await store.createCreation(newCreation);
+    await store.updateCreation('ws', newer.id, { status: 'running' });
+    await store.updateCreation('ws', older.id, { status: 'running' });
+    vi.useFakeTimers({ now: Date.now() + 1000, toFake: ['Date'] });
+    try {
+      const [test] = await store.replaceTests(older, [
+        { title: 't', description: 'd', priority: 'high', steps: ['s'] },
+      ]);
+      await store.updateTest('ws', test!.id, { status: 'passed' });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await store.listCreations('ws')).map((item) => item.id)).toEqual([older.id, newer.id]);
+  });
+
+  it('updates tests whose creation is not kept by the store', async () => {
+    const store = new InMemoryE2eStore();
+    const detached = { ...(await store.createCreation(newCreation)), id: 'detached' };
+    const [test] = await store.replaceTests(detached, [
+      { title: 't', description: 'd', priority: 'high', steps: ['s'] },
+    ]);
+    expect(await store.updateTest('ws', test!.id, { status: 'passed' })).toMatchObject({
+      status: 'passed',
+    });
+    expect(await store.getCreation('ws', 'detached')).toBeNull();
+  });
 });
 
 describe('PrismaE2eStore', () => {

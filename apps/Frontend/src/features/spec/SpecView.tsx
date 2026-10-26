@@ -78,11 +78,15 @@ export function SpecView({
   const [specs, setSpecs] = useState<readonly SpecificationDto[]>([]);
   const [agents, setAgents] = useState<readonly CustomAgentDto[]>([]);
   const [editingTemplateId, setEditingTemplateId] = useState<string>();
+  const editingTemplate = templates.find((item) => item.id === editingTemplateId);
   const [templateName, setTemplateName] = useState(() => t('spec.defaultTemplate'));
   const [templateSections, setTemplateSections] =
     useState<readonly SpecTemplateSectionDto[]>(defaultSections);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedSpec, setSelectedSpec] = useState<SpecificationDto | null>(null);
+  // Read after awaits: the person may open another Spec while a request is pending.
+  const selectedSpecRef = useRef(selectedSpec);
+  selectedSpecRef.current = selectedSpec;
   const [title, setTitle] = useState(() => t('spec.defaultSpecificationTitle'));
   const [sections, setSections] = useState<SpecificationDto['sections']>(
     emptySections(defaultSections),
@@ -399,7 +403,7 @@ export function SpecView({
         }
         return all.filter((item) => !removed.has(item.id));
       });
-      if (selectedSpec?.id === specification.id) newSpec();
+      if (selectedSpecRef.current?.id === specification.id) newSpec();
       setSpecToDelete(null);
       reportSuccess(t('spec.specificationDeleted'));
     } catch (value) {
@@ -571,10 +575,9 @@ export function SpecView({
             setTemplateName={setTemplateName}
             setTemplateSections={setTemplateSections}
             saveTemplate={() => void saveTemplate()}
-            requestDeleteTemplate={() => {
-              const template = templates.find((item) => item.id === editingTemplateId);
-              if (template) setTemplateToDelete(template);
-            }}
+            requestDeleteTemplate={
+              editingTemplate ? () => setTemplateToDelete(editingTemplate) : undefined
+            }
           />
         )}
       </main>
@@ -916,7 +919,8 @@ interface SettingsPageProps {
       | ((current: readonly SpecTemplateSectionDto[]) => readonly SpecTemplateSectionDto[]),
   ): void;
   saveTemplate(): void;
-  requestDeleteTemplate(): void;
+  /** Present while a saved template is open for editing. */
+  requestDeleteTemplate?: () => void;
 }
 
 function SettingsPage(props: SettingsPageProps) {
@@ -934,12 +938,12 @@ function SettingsPage(props: SettingsPageProps) {
           {props.canManageTemplates && (
             <ActionsMenu key={props.editingTemplateId ?? 'new-template'}>
               {props.historyControl}
-              {props.editingTemplateId && (
+              {props.requestDeleteTemplate && (
                 <Button
                   variant="destructive"
                   disabled={props.pending || props.isEditing}
                   data-destructive
-                  onClick={() => props.requestDeleteTemplate()}
+                  onClick={props.requestDeleteTemplate}
                 >
                   {props.t('spec.deleteTemplate')}
                 </Button>
@@ -967,6 +971,7 @@ function SettingsPage(props: SettingsPageProps) {
                 onChange={(event) => {
                   const template = props.templates.find((item) => item.id === event.target.value);
                   if (template) props.editTemplate(template);
+                  else props.newTemplate();
                 }}
               >
                 <option value="">{props.t('spec.newTemplate')}</option>

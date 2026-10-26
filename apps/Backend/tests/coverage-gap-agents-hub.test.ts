@@ -353,3 +353,18 @@ describe('HttpHubCatalog', () => {
     );
   });
 });
+
+describe('HubAgentService skill copies', () => {
+  it('keeps the copies an agent already has without reading the hub', async () => {
+    const { service, catalog } = setup();
+    const copy = {
+      name: 'test-design',
+      description: 'Kept copy.',
+      instructions: 'Keep me.',
+      version: '0.1.0',
+      revision: 'kept',
+    };
+    expect(await service.resolveSkills(['test-design', 'test-design'], [copy])).toEqual([copy]);
+    expect(catalog.index).not.toHaveBeenCalled();
+  });
+});

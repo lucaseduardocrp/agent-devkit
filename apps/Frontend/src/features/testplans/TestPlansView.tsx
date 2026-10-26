@@ -522,27 +522,24 @@ export function TestPlansView({
     setIsSavingPlan(true);
     setErrorMessage(null);
     try {
-      if (apiClient) {
-        const updated = await apiClient.updateSavedTestPlan(selectedSavedId, {
-          title: savedTitle || 'Test Plan',
-          plans: cases.map((item) => ({
-            title: item.title,
-            description: item.scenario,
-            steps: item.steps ? [...item.steps] : [],
-            // Keeping the ID lets the history follow each case across edits.
-            ...(item.caseId ? { metadata: { caseId: item.caseId } } : {}),
-          })),
-          suiteId: selectedSuiteId || null,
-        });
-        setSavedPlans((current) =>
-          current.map((plan) => (plan.id === updated.id ? updated : plan)),
-        );
-        setTreePlans((current) =>
-          current ? current.map((plan) => (plan.id === updated.id ? updated : plan)) : current,
-        );
-        // New cases get their IDs from the API.
-        setGeneratedCases(toTestCases(updated.plans));
-      }
+      // Only saved plans (loaded through the client) can be selected.
+      const updated = await apiClient!.updateSavedTestPlan(selectedSavedId, {
+        title: savedTitle || 'Test Plan',
+        plans: cases.map((item) => ({
+          title: item.title,
+          description: item.scenario,
+          steps: item.steps ? [...item.steps] : [],
+          // Keeping the ID lets the history follow each case across edits.
+          ...(item.caseId ? { metadata: { caseId: item.caseId } } : {}),
+        })),
+        suiteId: selectedSuiteId || null,
+      });
+      setSavedPlans((current) => current.map((plan) => (plan.id === updated.id ? updated : plan)));
+      setTreePlans((current) =>
+        current ? current.map((plan) => (plan.id === updated.id ? updated : plan)) : current,
+      );
+      // New cases get their IDs from the API.
+      setGeneratedCases(toTestCases(updated.plans));
       showTemporarySuccess(t('testplans.changesSaved'));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : t('testplans.saveChangesFailed'));
@@ -555,9 +552,8 @@ export function TestPlansView({
     setIsDeletingPlan(true);
     setDeleteError(null);
     try {
-      if (apiClient) {
-        await apiClient.deleteSavedTestPlan(planId);
-      }
+      // Saved plans (and so this dialog) only exist with a client.
+      await apiClient!.deleteSavedTestPlan(planId);
       const nextPage =
         savedPlans.length === 1 && savedPlansPage > 1 ? savedPlansPage - 1 : savedPlansPage;
       setSavedPlansTotal((current) => Math.max(0, current - 1));
@@ -682,16 +678,15 @@ export function TestPlansView({
     setIsDownloading(true);
     setErrorMessage(null);
     try {
-      let availablePlans = savedPlans;
-      if (apiClient) {
-        const firstPage = await apiClient.getSavedTestPlans(1, 50);
-        const remainingPages = await Promise.all(
-          Array.from({ length: Math.max(0, firstPage.totalPages - 1) }, (_, index) =>
-            apiClient.getSavedTestPlans(index + 2, 50),
-          ),
-        );
-        availablePlans = [firstPage, ...remainingPages].flatMap((page) => page.items);
-      }
+      // Suites (and so their export) only exist with a client.
+      const client = apiClient!;
+      const firstPage = await client.getSavedTestPlans(1, 50);
+      const remainingPages = await Promise.all(
+        Array.from({ length: Math.max(0, firstPage.totalPages - 1) }, (_, index) =>
+          client.getSavedTestPlans(index + 2, 50),
+        ),
+      );
+      const availablePlans = [firstPage, ...remainingPages].flatMap((page) => page.items);
       const suiteIds = new Set<string>([suite.id]);
       let didAddSuite = true;
       while (didAddSuite) {

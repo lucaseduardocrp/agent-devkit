@@ -29,17 +29,17 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: apps/Mcp
           persist-credentials: false
       - name: Check out the ADK Hub tools
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: lucaseduardocrp/agent-devkit-hub
           path: .hub
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - run: node .hub/tools/cli.mjs validate --adk "$GITHUB_WORKSPACE"

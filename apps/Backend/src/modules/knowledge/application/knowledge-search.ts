@@ -36,17 +36,15 @@ export class InMemoryKnowledgeSearch implements KnowledgeSearchPort {
 
       scored.sort((a, b) => b.score - a.score || a.chunk.chunkIndex - b.chunk.chunkIndex);
 
-      const topPageId = scored[0]?.chunk.pageId;
-      if (topPageId) {
-        const topPageChunks = this.chunks
-          .filter((entry) => entry.ownerId === ownerId && entry.chunk.pageId === topPageId)
-          .map((entry) => entry.chunk)
-          .sort((a, b) => a.chunkIndex - b.chunkIndex);
-        const otherChunks = scored.filter((item) => item.chunk.pageId !== topPageId);
-        return [...topPageChunks, ...otherChunks.map((item) => item.chunk)];
-      }
-
-      return scored.map((item) => item.chunk);
+      if (!scored.length) return [];
+      // The best page is returned whole, then the other matching chunks.
+      const topPageId = scored[0]!.chunk.pageId;
+      const topPageChunks = this.chunks
+        .filter((entry) => entry.ownerId === ownerId && entry.chunk.pageId === topPageId)
+        .map((entry) => entry.chunk)
+        .sort((a, b) => a.chunkIndex - b.chunkIndex);
+      const otherChunks = scored.filter((item) => item.chunk.pageId !== topPageId);
+      return [...topPageChunks, ...otherChunks.map((item) => item.chunk)];
     });
   }
 }

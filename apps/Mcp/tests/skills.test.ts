@@ -42,7 +42,9 @@ describe('packaged skills', () => {
   });
 
   it('parses frontmatter and tolerates missing folders or metadata', async () => {
-    expect(parseFrontmatter('---\nname: "a"\ndescription: b: c\n---\n# x')).toEqual({
+    expect(
+      parseFrontmatter('---\nname: "a"\ndescription: b: c\nno separator\n: orphan\n---\n# x'),
+    ).toEqual({
       name: 'a',
       description: 'b: c',
     });

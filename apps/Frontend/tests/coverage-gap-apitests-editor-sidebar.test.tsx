@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import type {
   ApiCollection,
   ApiCollectionSummary,
@@ -44,7 +44,10 @@ const summary = (id: string, name: string): ApiCollectionSummary =>
 const collection = (id: string, name: string, items: ApiCollection['items']): ApiCollection =>
   ({ id, name, items, variables: [], auth: { type: 'none' } }) as unknown as ApiCollection;
 
-function actions(): { [K in keyof SidebarActions]: ReturnType<typeof vi.fn> } {
+type ActionMocks = { [K in keyof SidebarActions]: Mock<SidebarActions[K]> };
+
+function actions(): ActionMocks {
+  // vi.fn() is untyped; each mock stands in for the matching sidebar callback.
   return {
     onToggle: vi.fn(),
     onOpenRequest: vi.fn(),
@@ -56,7 +59,7 @@ function actions(): { [K in keyof SidebarActions]: ReturnType<typeof vi.fn> } {
     onRename: vi.fn(),
     onClone: vi.fn(),
     onDelete: vi.fn(),
-  };
+  } as unknown as ActionMocks;
 }
 
 function renderSidebar(

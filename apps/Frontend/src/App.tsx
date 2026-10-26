@@ -207,24 +207,6 @@ function AppContent({
     setOwnerId(created.workspace.id);
   };
 
-  const handleDeleteWorkspace = async (workspaceId: string) => {
-    await apiClient.deleteWorkspace(workspaceId);
-    const remaining = workspaces.filter((w) => w.workspace.id !== workspaceId);
-    setWorkspaces(remaining);
-    const nextWs = remaining[0];
-    if (nextWs) {
-      setActiveWorkspace(nextWs.workspace.id);
-      apiClient.setWorkspaceId(nextWs.workspace.id);
-      setOwnerId(nextWs.workspace.id);
-    } else {
-      setActiveWorkspace(null);
-      apiClient.setWorkspaceId(null);
-      if (currentUser) {
-        setOwnerId(currentUser.id);
-      }
-    }
-  };
-
   const activeMembership = workspaces.find((w) => w.workspace.id === activeWorkspaceId);
   const access = accessFor(activeMembership);
   const can = (module: PermissionModule, operation: ModuleOperation = 'view') =>
@@ -265,6 +247,24 @@ function AppContent({
       />
     );
   }
+
+  // Defined after the session guard: the views that can delete a workspace only render for a
+  // signed-in user, so `currentUser` is known here.
+  const handleDeleteWorkspace = async (workspaceId: string) => {
+    await apiClient.deleteWorkspace(workspaceId);
+    const remaining = workspaces.filter((w) => w.workspace.id !== workspaceId);
+    setWorkspaces(remaining);
+    const nextWs = remaining[0];
+    if (nextWs) {
+      setActiveWorkspace(nextWs.workspace.id);
+      apiClient.setWorkspaceId(nextWs.workspace.id);
+      setOwnerId(nextWs.workspace.id);
+    } else {
+      setActiveWorkspace(null);
+      apiClient.setWorkspaceId(null);
+      setOwnerId(currentUser.id);
+    }
+  };
 
   return (
     <PermissionsProvider access={access}>

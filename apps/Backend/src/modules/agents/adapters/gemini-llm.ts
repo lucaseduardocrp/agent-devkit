@@ -50,6 +50,7 @@ export class GeminiLlmProvider implements LlmPort {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) controller.abort();
 
     try {
       const url = `${this.baseUrl}/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;

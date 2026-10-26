@@ -11,7 +11,6 @@ export default defineConfig({
   test: {
     exclude: [...configDefaults.exclude],
     coverage: {
-      all: true,
       // src/vendor holds the backend's Playwright runner, covered by the backend's own tests.
       exclude: [
         '**/*.d.ts',

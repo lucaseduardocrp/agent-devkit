@@ -9,7 +9,10 @@ interface CustomMatchers<R = unknown> {
 }
 
 declare module 'vitest' {
-  interface Assertion<T = any> extends CustomMatchers<T> {}
+  interface Matchers<
+    R extends void | Promise<void> = void | Promise<void>,
+    T = unknown,
+  > extends CustomMatchers<R> {}
   interface AsymmetricMatchersContaining extends CustomMatchers {}
 }
 

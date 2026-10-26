@@ -279,6 +279,26 @@ describe('integration tests API', () => {
       content: '{"nope":1}',
     });
     expect(bad.body.code).toBe('API_TEST_IMPORT_INVALID');
+
+    const withEnvironments = await call('post', '/integration-tests/collections/import').send({
+      content: JSON.stringify({
+        ...JSON.parse(
+          (await call('get', `/integration-tests/collections/${collection.id}/export?format=adk`))
+            .text,
+        ),
+        environments: [
+          { name: 'Staging', variables: [{ key: 'token', value: 'env-secret', secret: true }] },
+        ],
+      }),
+    });
+    expect(withEnvironments.status).toBe(201);
+    expect(withEnvironments.body.format).toBe('adk');
+    expect(withEnvironments.body.environments).toEqual([
+      expect.objectContaining({
+        name: 'Staging',
+        variables: [{ key: 'token', value: '', secret: true, hasValue: true }],
+      }),
+    ]);
   });
 
   it('keeps environment secrets encrypted and uses them in runs', async () => {
