@@ -15,6 +15,15 @@ updates:
       day: monday
     open-pull-requests-limit: 10
     groups:
+      # The CLI embeds the MCP server and must declare its runtime dependencies with the same
+      # ranges (tests/embedded-mcp.test.ts), so each of them is updated in both in one PR.
+      embedded-mcp:
+        group-by: dependency-name
+        patterns:
+          - '@modelcontextprotocol/sdk'
+          - express
+          - express-rate-limit
+          - zod
       npm-minor-and-patch:
         update-types: [minor, patch]
 
