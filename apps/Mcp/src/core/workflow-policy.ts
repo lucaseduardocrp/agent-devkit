@@ -54,7 +54,7 @@ async function requireUserApproval(context: ToolContext, prompt: string): Promis
       'WORKFLOW_APPROVAL_UNAVAILABLE',
       'This action needs human approval, but the connected MCP client does not support approval requests. No action was taken.',
     );
-  let approved = false;
+  let approved: boolean;
   try {
     approved = await context.requestApproval(prompt);
   } catch {

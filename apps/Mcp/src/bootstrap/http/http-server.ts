@@ -117,7 +117,7 @@ export function createHttpServer(
   app.use((req: Request, res: Response, next: NextFunction) => {
     const host = (req.headers.host ?? '').toLowerCase();
     const origin = req.headers.origin;
-    let originHost = '';
+    let originHost: string;
     try {
       originHost = origin ? new URL(origin).host.toLowerCase() : '';
     } catch {

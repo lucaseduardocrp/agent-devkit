@@ -410,7 +410,9 @@ export class HubInstaller {
       return parsed.installs ?? [];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw new Error(`Could not read ${this.lockFile}: ${(error as Error).message}`);
+      throw new Error(`Could not read ${this.lockFile}: ${(error as Error).message}`, {
+        cause: error,
+      });
     }
   }
 

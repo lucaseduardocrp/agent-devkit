@@ -5,7 +5,6 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     coverage: {
-      all: true,
       exclude: [
         '**/*.d.ts',
         '**/*.config.{js,mjs,ts}',

@@ -43,7 +43,7 @@ function setup({
   document?: KnowledgeDocumentDto;
   documents?: readonly KnowledgeDocumentDto[];
   pushing?: boolean;
-  onPush?: ReturnType<typeof vi.fn>;
+  onPush?: React.ComponentProps<typeof BrainPushModal>['onPush'];
 } = {}) {
   const client = new ApiClient();
   const getProviders = vi

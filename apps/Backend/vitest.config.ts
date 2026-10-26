@@ -7,7 +7,6 @@ export default defineConfig({
     env: { INTEGRATION_ENCRYPTION_KEY: randomBytes(32).toString('hex') },
     exclude: [...configDefaults.exclude, 'tests/integration/**', '.e2e-workspaces-*/**'],
     coverage: {
-      all: true,
       exclude: [
         '**/*.d.ts',
         '**/*.config.{js,mjs,ts}',
