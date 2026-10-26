@@ -1,7 +1,7 @@
 # On-demand E2E worker. Playwright's official image ships Node, Chromium and every system
 # library the browser needs, so the API image can stay on the small Alpine base.
 # Keep the tag in sync with the @playwright/test version in package.json.
-FROM mcr.microsoft.com/playwright:v1.63.0-noble AS build
+FROM mcr.microsoft.com/playwright:v1.64.1-noble AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --include=dev
@@ -11,7 +11,7 @@ COPY src ./src
 # Client generation validates the URL shape but does not connect during image build.
 RUN DATABASE_URL=postgresql://localhost/build npm run build
 
-FROM mcr.microsoft.com/playwright:v1.63.0-noble AS runtime
+FROM mcr.microsoft.com/playwright:v1.64.1-noble AS runtime
 ENV NODE_ENV=production \
     DATABASE_PROVIDER=postgres
 WORKDIR /app

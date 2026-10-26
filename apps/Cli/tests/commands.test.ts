@@ -99,7 +99,7 @@ describe('CLI commands', () => {
     });
     expect(JSON.parse(String(tokenCall[1]!.body)).name).toMatch(/^devkit \(/);
 
-    await logout(config, fetcher); // the revoke call fails offline but the local session is cleared
+    await logout(config, fetcher); // revokes the access token and clears the local session
     expect(await whoami(config)).toMatchObject({
       authenticated: false,
       user: null,
@@ -117,6 +117,10 @@ describe('CLI commands', () => {
       token: 'pw-token',
       expiresAt: '2026-10-01',
     });
+
+    await logout(config, fetcher); // the revoke call fails offline but the local session is cleared
+    expect(vi.mocked(fetcher).mock.calls.at(-1)![0]).toBe('http://adk.test/auth/logout');
+    expect(await whoami(config)).toMatchObject({ authenticated: false });
   });
 
   it('installs the skills into client folders', async () => {

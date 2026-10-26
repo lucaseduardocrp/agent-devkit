@@ -88,10 +88,12 @@ describe('InMemoryApiTestStore', () => {
     expect(await store.deleteScenario('w2', 's1')).toBe(false);
     expect(await store.deleteScenario('w1', 's1')).toBe(true);
 
+    await store.saveScenario(scenario('s3', 'w1', 'Soak', 'c2'));
+
     // Deleting a collection removes its scenarios, only in the owning workspace.
     expect(await store.deleteCollection('w2', 'c1')).toBe(false);
     expect(await store.deleteCollection('w1', 'c1')).toBe(true);
-    expect(await store.listScenarios('w1')).toEqual([]);
+    expect((await store.listScenarios('w1')).map((s) => s.id)).toEqual(['s3']);
   });
 
   it('filters runs, claims local runs and sweeps stale ones', async () => {

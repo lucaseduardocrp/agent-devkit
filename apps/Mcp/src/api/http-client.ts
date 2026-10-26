@@ -132,9 +132,9 @@ export class HttpAdkClient implements AdkApi {
 
     if (response.status === 204) return undefined as T;
     const contentType = response.headers.get('content-type') ?? '';
-    const payload: unknown = contentType.includes('application/json')
-      ? await response.json()
-      : await response.text();
+    const payload: unknown = await (contentType.includes('application/json')
+      ? response.json()
+      : response.text());
 
     if (!response.ok) {
       const body = (typeof payload === 'object' && payload ? payload : {}) as ApiErrorBody;

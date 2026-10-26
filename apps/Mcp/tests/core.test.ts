@@ -180,6 +180,31 @@ describe('signInForClient', () => {
     });
   });
 
+  it('still returns the access token when revoking the session fails', async () => {
+    const issued = await signInForClient(
+      {
+        apiUrl: 'http://api',
+        timeoutMs: 1000,
+        fetch: vi.fn((url: string) => {
+          const path = String(url);
+          if (path.endsWith('/auth/login')) return Promise.resolve(response(200, login));
+          if (path.endsWith('/auth/tokens'))
+            return Promise.resolve(
+              response(201, { token: 'adk_pat_x', accessToken: { expiresAt: null } }),
+            );
+          return Promise.resolve(response(500, { code: 'DOWN' }));
+        }) as unknown as typeof fetch,
+      },
+      { email: 'a@b.c', password: 'p', tokenName: 'cli' },
+    );
+    expect(issued).toEqual({
+      token: 'adk_pat_x',
+      user: login.user,
+      expiresAt: null,
+      kind: 'access-token',
+    });
+  });
+
   it('rethrows other token failures', async () => {
     await expect(signIn(500)).rejects.toMatchObject({ status: 500, code: 'NOPE' });
   });

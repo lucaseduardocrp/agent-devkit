@@ -146,11 +146,12 @@ export function TestCaseModal({
   };
 
   const format = (command: string, value?: string) => {
-    editor.current?.focus();
+    // The toolbar is rendered right above the editor, so the editor is mounted.
+    const node = editor.current!;
+    node.focus();
     if (value === undefined) document.execCommand(command, false);
     else document.execCommand(command, false, value);
-    if (editor.current)
-      setDraft({ ...draft, scenario: sanitizeRichText(editorHtml(editor.current)) });
+    setDraft({ ...draft, scenario: sanitizeRichText(editorHtml(node)) });
   };
 
   return (

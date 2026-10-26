@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IntegrationsService } from '../src/modules/integrations/application/integrations-service.js';
 import { PbiService } from '../src/modules/pbi/pbi-service.js';
+import { InMemoryPbiRelationStore } from '../src/modules/pbi/pbi-relations.js';
 import { InMemoryPbiStore, type PbiKind } from '../src/modules/pbi/pbi-store.js';
 import type {
   PbiProvider,
@@ -375,5 +376,71 @@ describe('PbiService relations summary', () => {
     const parentView = await service.relations('ws', typed.id);
     expect(parentView[0]!.item).toMatchObject({ title: 'Root', type: 'PBI' });
     expect(card.parentId).toBe(root.id);
+  });
+});
+
+describe('PbiService without audit or file storage', () => {
+  const image = (id: string) => ({
+    id,
+    name: `${id}.png`,
+    mimeType: 'image/png',
+    scope: 'pbi' as const,
+    source: 'adk' as const,
+    url: `/attachments/files/${id}`,
+  });
+
+  it('replaces provider files on a new pull and keeps files added in the ADK', async () => {
+    const pulls = [[image('provider:1')], [image('provider:2')]];
+    use(
+      fakeProvider({
+        pull: () => Promise.resolve([remote('7', { attachments: pulls.shift()! })]),
+      }),
+    );
+    const store = new InMemoryPbiStore();
+    const service = new PbiService(store, integrations([{ providerId: 'azure_devops' }]));
+    await service.pull('ws');
+    const [item] = await store.list('ws');
+    await store.update('ws', item!.id, { attachments: [...item!.attachments!, image('local')] });
+    await service.pull('ws');
+    expect((await store.get('ws', item!.id))?.attachments?.map((file) => file.id)).toEqual([
+      'local',
+      'provider:2',
+    ]);
+  });
+
+  it('removes an item without collecting its descendants', async () => {
+    const store = new InMemoryPbiStore();
+    const service = new PbiService(store, integrations([]));
+    const item = await store.create('ws', { kind: 'pbi', title: 'Root' });
+    await service.remove('ws', item.id);
+    expect(await store.get('ws', item.id)).toBeNull();
+  });
+
+  it('skips links to items that no longer exist', async () => {
+    const store = new InMemoryPbiStore();
+    const relations = new InMemoryPbiRelationStore();
+    const service = new PbiService(store, integrations([]), fetch, undefined, relations);
+    const item = await store.create('ws', { kind: 'card', title: 'Orphan', parentId: 'gone' });
+    await relations.add('ws', { sourceId: item.id, targetId: 'deleted', type: 'related' }, null);
+    expect(await service.relations('ws', item.id)).toEqual([]);
+  });
+
+  it('links an item once when it is named by its ID and by its Azure ID', async () => {
+    const store = new InMemoryPbiStore();
+    const service = new PbiService(store, integrations([]));
+    const item = await store.create('ws', { kind: 'pbi', title: 'Source' });
+    const target = await store.create('ws', { kind: 'pbi', title: 'Target' });
+    await store.link('ws', target.id, {
+      providerId: 'azure_devops',
+      externalId: '42',
+      externalUrl: null,
+      boardId: null,
+    });
+    const views = await service.addRelations('ws', item.id, 'related', [
+      target.id,
+      'azure_devops:42',
+      '42',
+    ]);
+    expect(views.filter((view) => view.item?.id === target.id)).toHaveLength(1);
   });
 });

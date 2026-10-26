@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaRunStore, InMemoryRunStore } from '../src/modules/issues/run-store.js';
-import { PrismaIssueStore, InMemoryIssueStore } from '../src/modules/issues/issue-store.js';
+import {
+  PrismaIssueStore,
+  InMemoryIssueStore,
+  type IssueStore,
+} from '../src/modules/issues/issue-store.js';
 import { PrismaAuditPersistence } from '../src/modules/audit/prisma-audit.js';
 import { EntityAuditLog, auditedIssueStore } from '../src/modules/audit/entity-audit.js';
-import type { AuditPersistence } from '../src/modules/audit/audit.js';
+import { auditRequest, type AuditPersistence } from '../src/modules/audit/audit.js';
 
 const claimInput = {
   workspaceId: 'ws',
@@ -169,6 +173,14 @@ describe('InMemoryRunStore', () => {
     await store.claim({ ...claimInput, issueId: 'issue-2', assigneeUserId: 'user-b' });
     await store.claim({ ...claimInput, workspaceId: 'other', assigneeUserId: 'user-a' });
     expect((await store.assignedTo('ws', 'user-a')).map((run) => run.id)).toEqual([mine.id]);
+    const later = (await store.claim({
+      ...claimInput,
+      issueId: 'issue-3',
+      assigneeUserId: 'user-a',
+    }))!;
+    expect((await store.assignedTo('ws', 'user-a')).map((run) => run.id).sort()).toEqual(
+      [mine.id, later.id].sort(),
+    );
   });
 
   it('ignores runs from other workspaces and finished runs', async () => {
@@ -382,6 +394,35 @@ describe('auditedIssueStore', () => {
     const persistence = { run: append } as unknown as AuditPersistence;
     const store = auditedIssueStore(new InMemoryIssueStore(), new EntityAuditLog(persistence));
     expect(await store.update('ws', 'missing', { title: 'X' })).toBeNull();
+    expect(append).not.toHaveBeenCalled();
+  });
+});
+
+describe('auditedIssueStore without an audited change', () => {
+  const setup = () => {
+    const append = vi.fn();
+    const inner = {
+      get: vi.fn(async () => null),
+      remove: vi.fn(async () => false),
+      addComment: vi.fn(async () => ({ id: 'comment' })),
+    } as unknown as IssueStore;
+    const persistence = { run: append } as unknown as AuditPersistence;
+    return { append, store: auditedIssueStore(inner, new EntityAuditLog(persistence)) };
+  };
+
+  it('does not audit removing a missing issue', async () => {
+    const { append, store } = setup();
+    expect(await store.remove('ws', 'missing')).toBe(false);
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  it('does not audit comments outside a workspace request or on missing issues', async () => {
+    const { append, store } = setup();
+    expect(await store.addComment('issue', 'actor', 'Hi')).toEqual({ id: 'comment' });
+    await auditRequest.run(
+      { context: () => ({ requestId: 'r', workspaceId: 'ws' }), operation: 'POST /comments' },
+      () => store.addComment('issue', 'actor', 'Hi'),
+    );
     expect(append).not.toHaveBeenCalled();
   });
 });

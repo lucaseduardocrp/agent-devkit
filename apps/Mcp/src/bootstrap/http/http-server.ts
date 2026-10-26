@@ -290,9 +290,8 @@ export function createHttpServer(
           sessions.set(id, { transport, session, owner, lastSeen: Date.now() });
         },
       });
-      transport.onclose = () => {
-        if (transport.sessionId) sessions.delete(transport.sessionId);
-      };
+      // Only initialized sessions are ever closed (idle sweep or DELETE), so the id is set here.
+      transport.onclose = () => sessions.delete(transport.sessionId!);
       const mcp = createMcpServer({ ...config, registry, session, skills, fetch: options.fetch });
       await mcp.connect(transport);
       await transport.handleRequest(req, res, body);

@@ -373,8 +373,8 @@ export function BrainView({
             : tab;
         }),
       );
-      /* v8 ignore next -- publishing is only available while a document tab is active */
-      setActiveTabId((prev) => published.get(prev ?? '') ?? prev);
+      // Publishing is only available while a document tab is active, so a tab is selected.
+      setActiveTabId((prev) => published.get(prev!) ?? prev);
       const updatedStats = await client.getKnowledgeStats(defaultOwnerId);
       setStats({
         documentsCount: updatedStats.documentsCount,
@@ -466,19 +466,16 @@ export function BrainView({
       return;
     }
 
-    searchTimeoutRef.current = setTimeout(() => {
+    const timer = setTimeout(() => {
       void executeSearch(searchQuery);
     }, 150);
+    searchTimeoutRef.current = timer;
 
-    return () => {
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current);
-      }
-    };
+    return () => clearTimeout(timer);
   }, [searchQuery, executeSearch]);
 
-  const handleSearch = async (event?: React.FormEvent) => {
-    if (event) event.preventDefault();
+  const handleSearch = async (event: React.FormEvent) => {
+    event.preventDefault();
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
@@ -486,9 +483,7 @@ export function BrainView({
   };
 
   const handleClearSearch = () => {
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
+    // Clearing the query runs the auto-search effect cleanup, which cancels a pending search.
     setSearchQuery('');
     setSearchResults(null);
     setSearchError(null);
@@ -747,7 +742,7 @@ export function BrainView({
           return saved;
         },
       );
-      if (savedDocument && editingDoc === 'new') {
+      if (editingDoc === 'new') {
         const newDoc = newParentPageId
           ? { ...savedDocument, parentPageId: newParentPageId }
           : savedDocument;
@@ -757,15 +752,17 @@ export function BrainView({
           type: 'success',
           message: t('brain.documentCreated', { title: newDoc.title }),
         });
-      } else if (savedDocument && editingDoc && editingDoc !== 'new') {
+      } else {
+        // Saving is only offered from the editor, so a document is being edited.
+        const editedDoc = editingDoc!;
         const updatedDoc = savedDocument;
-        setDocuments((prev) => prev.map((d) => (d.pageId === editingDoc.pageId ? updatedDoc : d)));
+        setDocuments((prev) => prev.map((d) => (d.pageId === editedDoc.pageId ? updatedDoc : d)));
         setTabs((prev) =>
           prev.map((t) =>
-            t.id === editingDoc.id ? { ...t, id: updatedDoc.id, title: updatedDoc.title } : t,
+            t.id === editedDoc.id ? { ...t, id: updatedDoc.id, title: updatedDoc.title } : t,
           ),
         );
-        if (activeTabId === editingDoc.id) {
+        if (activeTabId === editedDoc.id) {
           setActiveTabId(updatedDoc.id);
         }
         setSyncFeedback({
@@ -774,17 +771,15 @@ export function BrainView({
         });
       }
 
-      if (savedDocument) {
-        let updatedRelations = relations;
-        for (const targetPageId of pendingRelationIds) {
-          updatedRelations = await apiClient.createKnowledgeRelation(
-            savedDocument.pageId,
-            targetPageId,
-          );
-        }
-        setRelations(updatedRelations);
-        setPendingRelationIds([]);
+      let updatedRelations = relations;
+      for (const targetPageId of pendingRelationIds) {
+        updatedRelations = await apiClient.createKnowledgeRelation(
+          savedDocument.pageId,
+          targetPageId,
+        );
       }
+      setRelations(updatedRelations);
+      setPendingRelationIds([]);
 
       const updatedStats = await apiClient.getKnowledgeStats(defaultOwnerId);
       setStats({
@@ -1722,8 +1717,8 @@ export function BrainView({
                                   onChange={(event) => {
                                     const files = [...event.currentTarget.files!];
                                     event.currentTarget.value = '';
-                                    if (editorRef.current)
-                                      editorImages.insertFiles(editorRef.current, files);
+                                    // This input is rendered next to the editor textarea.
+                                    editorImages.insertFiles(editorRef.current!, files);
                                   }}
                                 />
                               </label>

@@ -93,4 +93,19 @@ describe('SmtpEmailSender', () => {
     ).rejects.toThrow('SMTP delivery timed out.');
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it('reports a transport that fails before sending', async () => {
+    sendMail.mockImplementation(() => {
+      throw new Error('transport closed');
+    });
+    const sender = new SmtpEmailSender({
+      host: 'smtp.example.com',
+      port: 587,
+      secure: false,
+      from: 'no-reply@example.com',
+    });
+    await expect(
+      sender.send({ to: 'user@example.com', subject: 'Hi', text: 'Hi', html: '<p>Hi</p>' }),
+    ).rejects.toThrow('transport closed');
+  });
 });

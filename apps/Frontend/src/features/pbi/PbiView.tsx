@@ -1094,11 +1094,9 @@ export function PbiView({
       });
   };
   /** Closing the form without saving drops what was typed, pasted and attached. */
-  const closeForm = () => {
-    if (form) {
-      const editorValue = editorHtml(descriptionEditorRef.current!);
-      discardDrafts({ ...form, description: editorValue });
-    }
+  const closeForm = (current: ItemForm) => {
+    const editorValue = editorHtml(descriptionEditorRef.current!);
+    discardDrafts({ ...current, description: editorValue });
     setForm(null);
   };
   const save = (event: FormEvent) => {
@@ -1974,7 +1972,11 @@ export function PbiView({
         </div>
       )}
 
-      <Modal open={Boolean(form)} onClose={closeForm} labelledBy="pbi-item-title">
+      <Modal
+        open={Boolean(form)}
+        onClose={form ? () => closeForm(form) : undefined}
+        labelledBy="pbi-item-title"
+      >
         {form && (
           <form
             onSubmit={save}
@@ -1990,7 +1992,7 @@ export function PbiView({
                 variant="ghost"
                 size="icon"
                 aria-label={t('common.close')}
-                onClick={closeForm}
+                onClick={() => closeForm(form)}
               >
                 <i className="ti ti-x" aria-hidden="true" />
               </Button>
@@ -2019,7 +2021,7 @@ export function PbiView({
                   resolveValue={resolveAuditValue}
                 />
               )}
-              <Button type="button" variant="ghost" onClick={closeForm}>
+              <Button type="button" variant="ghost" onClick={() => closeForm(form)}>
                 {t('common.cancel')}
               </Button>
               {!isReadOnly && (

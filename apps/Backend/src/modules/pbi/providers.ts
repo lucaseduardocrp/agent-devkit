@@ -193,12 +193,12 @@ function jiraCustomValue(value: unknown): FieldValue | undefined {
       ? entries
       : undefined;
   }
-  if (value && typeof value === 'object') {
-    const option = value as { id?: unknown; value?: unknown; accountId?: unknown };
-    const selected = option.id ?? option.accountId ?? option.value;
-    if (typeof selected === 'string' || typeof selected === 'number') return String(selected);
-  }
-  return undefined;
+  // The values come from JSON, so what is left is an option object (id, account or value).
+  const option = Object(value) as { id?: unknown; value?: unknown; accountId?: unknown };
+  const selected = option.id ?? option.accountId ?? option.value;
+  return typeof selected === 'string' || typeof selected === 'number'
+    ? String(selected)
+    : undefined;
 }
 function toPlainText(value: unknown): string {
   if (typeof value === 'string') return value;

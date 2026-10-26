@@ -821,7 +821,8 @@ describe('GitHub Projects provider', () => {
                       id: 'D1',
                       title: 'Draft',
                       subIssues: {
-                        nodes: [],
+                        // Already read under I1: it keeps its first parent.
+                        nodes: [{ id: 'S2', title: 'Sub 2 again' }],
                         pageInfo: { hasNextPage: true, endCursor: null },
                       },
                     }),

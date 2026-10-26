@@ -1,5 +1,5 @@
 # Remote/team MCP server (Streamable HTTP on /mcp). Each request carries the user's own ADK token.
-FROM node:24-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build
 
-FROM node:24-alpine AS runtime
+FROM node:26-alpine AS runtime
 ENV NODE_ENV=production \
     ADK_MCP_HTTP_HOST=0.0.0.0 \
     ADK_MCP_TRUST_PROXY=true

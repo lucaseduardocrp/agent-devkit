@@ -3,6 +3,7 @@ import { request as httpRequest } from 'node:http';
 import { connect as connectSocket, type AddressInfo } from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/bootstrap/config.js';
 import {
@@ -307,7 +308,7 @@ describe('HTTP transport', () => {
   it('expires idle sessions into recoverable ones and forgets them after a day', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'Date'] });
     try {
-      const { url } = await listen({}, { sessionTtlMs: 1000 });
+      const { url } = await listen({}, { sessionTtlMs: 90_000 });
       const created = await fetch(`${url}/mcp`, {
         method: 'POST',
         headers: { ...mcpHeaders, authorization: 'Bearer user-token' },
@@ -327,7 +328,12 @@ describe('HTTP transport', () => {
           body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
         });
 
-      vi.setSystemTime(Date.now() + 5_000);
+      vi.advanceTimersByTime(60_000);
+      const live = await list('user-token');
+      expect(live.status).toBe(200);
+      await live.text();
+
+      vi.setSystemTime(Date.now() + 60_000);
       vi.advanceTimersByTime(60_000);
       const recovered = await list('user-token');
       expect(recovered.status).toBe(200);
@@ -375,6 +381,33 @@ describe('HTTP transport', () => {
     });
     expect(response.status).toBe(502);
   });
+
+  it('does not answer twice when a request fails after the response started', async () => {
+    const { url } = await listen();
+    const failMidStream = vi
+      .spyOn(StreamableHTTPServerTransport.prototype, 'handleRequest')
+      .mockImplementationOnce(async (_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end();
+        throw new Error('stream broke');
+      });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const response = await fetch(`${url}/mcp`, {
+        method: 'POST',
+        headers: { ...mcpHeaders, authorization: 'Bearer user-token' },
+        body: JSON.stringify(initialize),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+      await vi.waitFor(() =>
+        expect(logged).toHaveBeenCalledWith('[devkit] HTTP request failed:', expect.any(Error)),
+      );
+    } finally {
+      failMidStream.mockRestore();
+      logged.mockRestore();
+    }
+  });
 });
 
 describe('OAuth for remote connectors', () => {
@@ -403,14 +436,14 @@ describe('OAuth for remote connectors', () => {
     return ((await response.json()) as { client_id: string }).client_id;
   }
 
-  async function authorizePage(url: string, clientId: string) {
+  async function authorizePage(url: string, clientId: string, state: string | null = 'xyz') {
     const query = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
       redirect_uri: CALLBACK,
       code_challenge: challengeFor(verifier),
       code_challenge_method: 'S256',
-      state: 'xyz',
+      ...(state === null ? {} : { state }),
     });
     const response = await fetch(`${url}/authorize?${query}`);
     const html = await response.text();
@@ -519,6 +552,10 @@ describe('OAuth for remote connectors', () => {
     const page = await authorizePage(url, clientId);
     const pasted = await login(url, { request: page.request, token: 'adk_pat_manual' });
     expect(pasted.status).toBe(302);
+    const stateless = await authorizePage(url, clientId, null);
+    const withoutState = await login(url, { request: stateless.request, token: 'adk_pat_manual' });
+    expect(withoutState.status).toBe(302);
+    expect(new URL(withoutState.headers.get('location')!).searchParams.has('state')).toBe(false);
     const code = new URL(pasted.headers.get('location')!).searchParams.get('code')!;
     const tokens = (await (await exchange(url, clientId, code)).json()) as Record<string, unknown>;
     expect(tokens).toMatchObject({ access_token: 'adk_pat_manual' });

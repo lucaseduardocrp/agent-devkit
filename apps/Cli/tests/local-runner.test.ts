@@ -323,6 +323,33 @@ describe('LocalRunnerAgent', () => {
     expect(slow.events.at(-1)?.type).toBe('cancelled');
   });
 
+  it('keeps running through healthy and missed heartbeats', async () => {
+    let beats = 0;
+    const { api, calls } = fakeApi({
+      'POST /e2e/runner/claim': { task: runTask() },
+      'POST /e2e/runner/tasks/task-1/heartbeat': () => {
+        beats += 1;
+        if (beats === 1) return { status: 'running' };
+        throw new Error('connection reset');
+      },
+      'PUT /e2e/runner/tasks/task-1/artifacts/video.webm': undefined,
+      'PUT /e2e/runner/tasks/task-1/artifacts/step-01.png': undefined,
+      'POST /e2e/runner/tasks/task-1/complete': undefined,
+    });
+    const passing = browser();
+    const result = await passing.run.getMockImplementation()!({} as never);
+    const local = browser({
+      run: vi.fn<LocalBrowser['run']>(async () => {
+        await vi.waitFor(() => expect(beats).toBeGreaterThanOrEqual(2));
+        return result;
+      }),
+    });
+    const { agent, events } = agentWith(api, local);
+    await agent.poll();
+    expect(events.at(-1)?.type).not.toBe('cancelled');
+    expect(calls.some((call) => call.path === '/e2e/runner/tasks/task-1/complete')).toBe(true);
+  });
+
   it('keeps serving through connection problems and stops on sign-in errors', async () => {
     let claims = 0;
     const { api } = fakeApi({

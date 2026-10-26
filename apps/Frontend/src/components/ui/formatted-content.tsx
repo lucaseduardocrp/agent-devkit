@@ -68,15 +68,15 @@ export function parseInlineTokens(text: string): readonly InlineToken[] {
       tokens.push({ type: 'bold', content: raw.slice(2, -2) });
     } else if (raw.startsWith('*') && raw.endsWith('*')) {
       tokens.push({ type: 'italic', content: raw.slice(1, -1) });
-    } else if (raw.startsWith('[') && raw.includes('](')) {
-      const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(raw);
-      if (linkMatch) {
-        tokens.push({
-          type: 'link',
-          content: linkMatch[1]!,
-          href: linkMatch[2]!,
-        });
-      }
+    } else {
+      // The only alternative left in INLINE_REGEX is `[label](href)`, and the label cannot
+      // contain `]`, so the first `](` separates the two parts.
+      const separator = raw.indexOf('](');
+      tokens.push({
+        type: 'link',
+        content: raw.slice(1, separator),
+        href: raw.slice(separator + 2, -1),
+      });
     }
 
     lastIndex = INLINE_REGEX.lastIndex;

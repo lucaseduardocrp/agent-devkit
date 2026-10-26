@@ -308,7 +308,14 @@ describe('AzureTestManagementProvider', () => {
 
   it('reads a case by id, keeping the given location', async () => {
     const answers: unknown[] = [
-      { value: [{ id: 9, fields: { 'System.Title': 'Checkout', 'Custom.Risk': 'High' } }] },
+      {
+        value: [
+          {
+            id: 9,
+            fields: { 'System.Title': 'Checkout', 'Custom.Risk': 'High', 'Custom.Tags': [] },
+          },
+        ],
+      },
       { value: [{ id: 9, fields: { 'System.Title': 'Checkout' } }] },
       { value: [] },
     ];

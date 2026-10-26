@@ -66,18 +66,18 @@ export function ResizableSidebar({
   useEffect(() => {
     if (!isResizing) return;
 
+    // Effects run after the commit attached the ref, and the <aside> is always rendered, so the
+    // element is known here; holding it keeps a late pointer event safe after the ref detaches.
+    const sidebar = sidebarRef.current!;
     const lower = collapsible ? collapsedWidth : minWidth;
     const handlePointerMove = (event: PointerEvent) => {
       const pointerDelta = event.clientX - dragStart.current.pointerX;
       const next =
         dragStart.current.width + (resizeEdge === 'right' ? pointerDelta : -pointerDelta);
-      latest.current = Math.min(
-        resolveMaxWidth(maxWidth, sidebarRef.current),
-        Math.max(lower, next),
-      );
+      latest.current = Math.min(resolveMaxWidth(maxWidth, sidebar), Math.max(lower, next));
       // The edge follows the pointer at once, without a React render; the state (which the
       // content may depend on) catches up once per frame.
-      if (sidebarRef.current) sidebarRef.current.style.width = `${latest.current}px`;
+      sidebar.style.width = `${latest.current}px`;
       if (!frame.current)
         frame.current = window.requestAnimationFrame(() => {
           frame.current = 0;

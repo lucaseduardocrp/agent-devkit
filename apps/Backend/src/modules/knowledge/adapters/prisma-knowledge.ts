@@ -309,14 +309,14 @@ export class PrismaKnowledgeSearch implements KnowledgeSearchPort {
       ]);
     }
     try {
-      const orFilters: Record<string, unknown>[] = [];
-      if (analysis.cleanedPrompt) {
-        orFilters.push({ content: { contains: analysis.cleanedPrompt, mode: 'insensitive' } });
-        orFilters.push({ source: { contains: analysis.cleanedPrompt, mode: 'insensitive' } });
-        const encoded = encodeURIComponent(analysis.cleanedPrompt);
-        if (encoded !== analysis.cleanedPrompt) {
-          orFilters.push({ source: { contains: encoded, mode: 'insensitive' } });
-        }
+      // A non-empty prompt always has a cleaned form (the prompt itself at worst).
+      const orFilters: Record<string, unknown>[] = [
+        { content: { contains: analysis.cleanedPrompt, mode: 'insensitive' } },
+        { source: { contains: analysis.cleanedPrompt, mode: 'insensitive' } },
+      ];
+      const encodedPrompt = encodeURIComponent(analysis.cleanedPrompt);
+      if (encodedPrompt !== analysis.cleanedPrompt) {
+        orFilters.push({ source: { contains: encodedPrompt, mode: 'insensitive' } });
       }
       for (const phrase of analysis.phrases) {
         orFilters.push({ content: { contains: phrase, mode: 'insensitive' } });
@@ -348,45 +348,43 @@ export class PrismaKnowledgeSearch implements KnowledgeSearchPort {
 
       scored.sort((a, b) => b.score - a.score || a.chunk.chunkIndex - b.chunk.chunkIndex);
 
-      const topPageId = scored[0]?.chunk.pageId;
-      if (topPageId) {
-        const allTopPageRecords = await this.client.knowledgeChunkRecord.findMany({
-          where: { ownerId, pageId: topPageId },
-          orderBy,
-        });
-        const topPageChunks = allTopPageRecords.map(toKnowledgeChunk);
-        const otherChunks = scored
-          .filter((item) => item.chunk.pageId !== topPageId)
-          .map((item) => item.chunk);
-        const relations = this.client.knowledgeRelationRecord
-          ? await this.client.knowledgeRelationRecord.findMany({ where: { ownerId } })
-          : [];
-        const correlatedIds = relations.flatMap((relation) =>
-          relation.sourcePageId === topPageId
-            ? [relation.targetPageId]
-            : relation.targetPageId === topPageId
-              ? [relation.sourcePageId]
-              : [],
-        );
-        const correlatedRecords = correlatedIds.length
-          ? await this.client.knowledgeChunkRecord.findMany({
-              where: { ownerId, OR: correlatedIds.map((pageId) => ({ pageId })) },
-              orderBy,
-            })
-          : [];
-        const known = new Set(
-          [...topPageChunks, ...otherChunks].map((chunk) => `${chunk.pageId}:${chunk.chunkIndex}`),
-        );
-        return [
-          ...topPageChunks,
-          ...otherChunks,
-          ...correlatedRecords
-            .map(toKnowledgeChunk)
-            .filter((chunk) => !known.has(`${chunk.pageId}:${chunk.chunkIndex}`)),
-        ];
-      }
-
-      return scored.map((item) => item.chunk);
+      if (!scored.length) return [];
+      // The best page is returned whole, then the other matches and its related pages.
+      const topPageId = scored[0]!.chunk.pageId;
+      const allTopPageRecords = await this.client.knowledgeChunkRecord.findMany({
+        where: { ownerId, pageId: topPageId },
+        orderBy,
+      });
+      const topPageChunks = allTopPageRecords.map(toKnowledgeChunk);
+      const otherChunks = scored
+        .filter((item) => item.chunk.pageId !== topPageId)
+        .map((item) => item.chunk);
+      const relations = this.client.knowledgeRelationRecord
+        ? await this.client.knowledgeRelationRecord.findMany({ where: { ownerId } })
+        : [];
+      const correlatedIds = relations.flatMap((relation) =>
+        relation.sourcePageId === topPageId
+          ? [relation.targetPageId]
+          : relation.targetPageId === topPageId
+            ? [relation.sourcePageId]
+            : [],
+      );
+      const correlatedRecords = correlatedIds.length
+        ? await this.client.knowledgeChunkRecord.findMany({
+            where: { ownerId, OR: correlatedIds.map((pageId) => ({ pageId })) },
+            orderBy,
+          })
+        : [];
+      const known = new Set(
+        [...topPageChunks, ...otherChunks].map((chunk) => `${chunk.pageId}:${chunk.chunkIndex}`),
+      );
+      return [
+        ...topPageChunks,
+        ...otherChunks,
+        ...correlatedRecords
+          .map(toKnowledgeChunk)
+          .filter((chunk) => !known.has(`${chunk.pageId}:${chunk.chunkIndex}`)),
+      ];
     } catch (error) {
       throw normalizePersistenceError(error);
     }

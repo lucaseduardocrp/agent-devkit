@@ -183,6 +183,40 @@ describe('RunService runs created before workflows', () => {
       output: null,
     });
   });
+
+  it('keeps a cancelled legacy run cancelled when the agent then fails', async () => {
+    const { runs, store, execute, run, issues } = await legacy();
+    let fail!: (error: Error) => void;
+    execute.mockImplementation(() => new Promise((_resolve, reject) => (fail = reject)));
+    await runs.recover();
+    await vi.waitFor(() => expect(execute).toHaveBeenCalled());
+    await runs.cancel(workspaceId, run.id);
+    fail(new Error('aborted by the user'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(await store.get(workspaceId, run.id)).toMatchObject({
+      status: 'cancelled',
+      error: null,
+    });
+    expect((await issues.get(workspaceId, run.issueId))?.status).not.toBe('blocked');
+  });
+
+  it('leaves the issue alone when a successful legacy run was already closed', async () => {
+    const { runs, store, execute, run, issues } = await legacy();
+    execute.mockResolvedValue({ result: 'done', provider: 'H' });
+    vi.spyOn(store, 'finish').mockResolvedValue(null);
+    await runs.recover();
+    await vi.waitFor(() => expect(store.finish).toHaveBeenCalled());
+    expect((await issues.get(workspaceId, run.issueId))?.status).not.toBe('in_review');
+  });
+
+  it('leaves the issue alone when a failed legacy run was already closed', async () => {
+    const { runs, store, execute, run, issues } = await legacy();
+    execute.mockRejectedValue(new Error('provider down'));
+    vi.spyOn(store, 'finish').mockResolvedValue(null);
+    await runs.recover();
+    await vi.waitFor(() => expect(store.finish).toHaveBeenCalled());
+    expect((await issues.get(workspaceId, run.issueId))?.status).not.toBe('blocked');
+  });
 });
 
 describe('RunService workflow interruptions', () => {

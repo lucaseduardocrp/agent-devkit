@@ -1133,7 +1133,10 @@ export class ApiClient {
   }
 
   private async fetchWithAuth(url: string, init: RequestInit = {}): Promise<Response> {
+    // The locale goes with every request; a caller's own header still wins.
     const headers: Record<string, string> = {
+      'x-locale': this.locale,
+      'Accept-Language': this.locale,
       ...(init.headers as Record<string, string> | undefined),
     };
     if (this.token && !headers['authorization']) {
@@ -1141,12 +1144,6 @@ export class ApiClient {
     }
     if (this.workspaceId && !headers['x-workspace-id']) {
       headers['x-workspace-id'] = this.workspaceId;
-    }
-    if (!headers['x-locale']) {
-      headers['x-locale'] = this.locale;
-    }
-    if (!headers['Accept-Language']) {
-      headers['Accept-Language'] = this.locale;
     }
     return this.fetcher(url, { ...init, headers });
   }

@@ -32,6 +32,7 @@ export class OllamaLlmProvider implements LlmPort {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) controller.abort();
 
     try {
       const url = `${this.baseUrl}/api/generate`;

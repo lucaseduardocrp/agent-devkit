@@ -394,6 +394,28 @@ describe('ApiTestService generation', () => {
     ).rejects.toMatchObject({ messageParams: { detail: 'invalid JSON' } });
   });
 
+  it('records the sources a generated collection was written from', async () => {
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ type: 'spec', id: 's', title: 'Checkout', text: 'POST /orders' })
+      .mockResolvedValueOnce({ type: 'brain', id: 'b', title: 'Orders', text: 'Rules' });
+    const { svc } = service({
+      sources: { load },
+      defaultLlm: llm('{"collection":{"name":"Generated","items":[]}}'),
+    });
+    const result = await svc.generate(W, U, context, {
+      kind: 'integration',
+      sources: [
+        { type: 'spec', id: 's' },
+        { type: 'brain', id: 'b' },
+      ],
+    });
+    expect(result.collection?.source).toEqual({
+      kind: 'generated',
+      detail: 'spec:Checkout, brain:Orders',
+    });
+  });
+
   it('generates and saves a load scenario, also from a bare object', async () => {
     const { svc } = service();
     const collection = await svc.saveCollection(W, U, input());
