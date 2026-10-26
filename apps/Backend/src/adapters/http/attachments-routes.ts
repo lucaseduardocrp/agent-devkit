@@ -254,8 +254,8 @@ export function createAttachmentsRouter(
         const scope = scopeSchema.parse(request.query['scope']);
         const name = nameSchema.parse(request.query['name']);
         requireModule(request, scope, 'edit');
-        // express.raw above accepts every content type, so the body is always a Buffer.
-        const bytes = request.body as Buffer;
+        // Never trust the parsed body's type: anything but raw bytes counts as an empty upload.
+        const bytes = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
         if (!bytes.length)
           throw new ApplicationError('VALIDATION_ERROR', 'The file is empty.', 400);
         const detected = detectAttachmentType(bytes, name);

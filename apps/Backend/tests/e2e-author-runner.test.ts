@@ -528,6 +528,15 @@ describe('PlaywrightE2eRunner (simulated)', () => {
     delete process.env['DATABASE_URL'];
   });
 
+  it('keeps the Windows system variables the browser needs, when they are set', () => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows');
+    vi.stubEnv('PATHEXT', '');
+    const env = childEnvironment('/w', runInput);
+    expect(env['SystemRoot']).toBe('C:\\Windows');
+    expect(env).not.toHaveProperty('PATHEXT');
+    vi.unstubAllEnvs();
+  });
+
   it('knows the default browser cache per platform', () => {
     expect(defaultBrowsersPath('win32', 'H')).toBe(
       path.join('H', 'AppData', 'Local', 'ms-playwright'),

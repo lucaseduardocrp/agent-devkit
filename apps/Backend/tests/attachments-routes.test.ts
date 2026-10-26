@@ -108,6 +108,19 @@ describe('attachments routes', () => {
     expect(Buffer.from(file.body)).toEqual(PNG);
   });
 
+  it('treats a body parsed as JSON before the router as an empty upload', async () => {
+    // The API parses JSON for every route first, so an upload can arrive as an array.
+    const app = express();
+    app.use(express.json());
+    app.use(createAttachmentsRouter(new InMemoryE2eArtifactStore(), () => context));
+    app.use(errorMiddleware);
+    const response = await request(app)
+      .post('/attachments/files?scope=brain&name=diagram.png')
+      .send([137, 80, 78, 71, 13, 10, 26, 10])
+      .expect(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+  });
+
   it('rejects unsupported files and files of other workspaces', async () => {
     const store = new InMemoryE2eArtifactStore();
     const { app } = build({ store });

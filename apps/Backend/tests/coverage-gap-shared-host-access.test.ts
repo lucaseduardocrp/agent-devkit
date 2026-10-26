@@ -25,7 +25,9 @@ describe('hostAccessFetch connections', () => {
   beforeAll(async () => {
     server = http.createServer((request, response) => {
       hosts.push(request.headers.host ?? '');
-      response.end(`${request.method} ${request.url}`);
+      response
+        .writeHead(200, { 'content-type': 'text/plain' })
+        .end(`${request.method} ${request.url}`);
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = (server.address() as AddressInfo).port;
