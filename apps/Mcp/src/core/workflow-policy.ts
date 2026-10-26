@@ -148,10 +148,10 @@ export async function executeWithWorkflowPolicy(
     (rule) => rule.effect === 'allow' && rule.allowedProviders !== undefined,
   );
   if (providerRules.length) {
-    let allowed = new Set(providerRules[0]!.allowedProviders ?? []);
+    let allowed = new Set(providerRules[0]!.allowedProviders);
     for (const rule of providerRules.slice(1))
       allowed = new Set(
-        [...allowed].filter((provider) => rule.allowedProviders?.includes(provider)),
+        [...allowed].filter((provider) => rule.allowedProviders!.includes(provider)),
       );
     const actual = providerValues(input);
     if (!actual.length || !actual.every((provider) => allowed.has(provider)))

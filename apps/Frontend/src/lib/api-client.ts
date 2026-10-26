@@ -483,13 +483,13 @@ function normalizeAgentWorkflow(
               !rule['allowedProviders'].every((provider) => typeof provider === 'string')))
         )
           return [];
-        const allowedProviders = rule['allowedProviders'] as string[] | undefined;
+        const allowedProviders = rule['allowedProviders'];
         return [
           {
             id: rule['id'],
             name: rule['name'],
             toolset: rule['toolset'] as AgentWorkflowDto['rules'][number]['toolset'],
-            effect: rule['effect'] as AgentWorkflowDto['rules'][number]['effect'],
+            effect: rule['effect'],
             ...(typeof rule['toolName'] === 'string' ? { toolName: rule['toolName'] } : {}),
             ...(allowedProviders ? { allowedProviders } : {}),
             ...(typeof rule['createIssueForAction'] === 'boolean'

@@ -1,0 +1,40 @@
+version: 2
+
+# Weekly dependency updates. Minor and patch versions are grouped into one pull request per
+# ecosystem; major versions come one by one. Like any pull request, they need CI to pass and the
+# owner's review to merge.
+updates:
+  - package-ecosystem: npm
+    directories:
+      - /apps/Backend
+      - /apps/Frontend
+      - /apps/Mcp
+      - /apps/Cli
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ['*']
+
+  - package-ecosystem: docker
+    directories:
+      - /apps/Backend
+      - /apps/Frontend
+      - /apps/Mcp
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker:
+        patterns: ['*']

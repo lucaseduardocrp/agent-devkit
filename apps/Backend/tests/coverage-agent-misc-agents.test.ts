@@ -260,14 +260,12 @@ describe('cloud LLM providers edge cases', () => {
   });
 
   it('falls back to the configured model when usage has no model', async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        json({
-          choices: [{ message: { content: 'ok' } }],
-          usage: { prompt_tokens: 1, completion_tokens: 2 },
-        }),
-      );
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      json({
+        choices: [{ message: { content: 'ok' } }],
+        usage: { prompt_tokens: 1, completion_tokens: 2 },
+      }),
+    );
     const provider = new OpenAiLlmProvider({ apiKey: 'key', model: 'gpt-x', fetcher });
     await expect(provider.complete({ prompt: 'x' })).resolves.toEqual({
       provider: 'OpenAI',

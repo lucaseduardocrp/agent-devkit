@@ -351,8 +351,7 @@ export function ReleaseNotesView({ apiClient, workspaceId, isReadOnly = false }:
       return next;
     });
   const resolveAuditValue = (key: string, value: AuditSnapshot): string | undefined => {
-    if (key === 'agentId' && typeof value === 'string')
-      return agents.find((agent) => agent.id === value)?.name ?? value;
+    // agentId never reaches resolvers: HistoryViewer hides it from snapshots.
     if (key === 'itemIds' && Array.isArray(value))
       return value
         .map((id) => (typeof id === 'string' ? (itemById.get(id)?.title ?? id) : ''))
@@ -754,26 +753,27 @@ export function ReleaseNotesView({ apiClient, workspaceId, isReadOnly = false }:
           </section>
         </div>
       )}
-      <ConfirmationDialog
-        open={Boolean(deleteNote)}
-        title={c.deleteTitle}
-        description={c.deleteDescription.replace('{title}', deleteNote?.title ?? '')}
-        confirmLabel={c.delete}
-        cancelLabel={c.cancel}
-        destructive
-        isLoading={busy}
-        onCancel={() => setDeleteNote(null)}
-        onConfirm={() => {
-          if (!deleteNote) return;
-          const id = deleteNote.id;
-          void runAction(async () => {
-            await apiClient.deleteReleaseNote(id);
-            setDeleteNote(null);
-            if (selectedId === id) setSelectedId(null);
-            await load();
-          });
-        }}
-      />
+      {deleteNote && (
+        <ConfirmationDialog
+          open
+          title={c.deleteTitle}
+          description={c.deleteDescription.replace('{title}', deleteNote.title)}
+          confirmLabel={c.delete}
+          cancelLabel={c.cancel}
+          destructive
+          isLoading={busy}
+          onCancel={() => setDeleteNote(null)}
+          onConfirm={() => {
+            const id = deleteNote.id;
+            void runAction(async () => {
+              await apiClient.deleteReleaseNote(id);
+              setDeleteNote(null);
+              if (selectedId === id) setSelectedId(null);
+              await load();
+            });
+          }}
+        />
+      )}
     </main>
   );
 }

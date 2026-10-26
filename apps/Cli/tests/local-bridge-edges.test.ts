@@ -2,6 +2,10 @@ import { request, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createLocalTunnelBridge } from '../src/e2e/local-bridge.js';
 
+/** A rejection that is not an Error instance (e.g. thrown by code in another realm). */
+const notAnError = (text: string): Error =>
+  Object.assign({ name: 'Fault', message: '' }, { toString: () => text });
+
 const ORIGIN = 'https://adk.example.com';
 let server: Server | undefined;
 
@@ -23,7 +27,7 @@ function fakeTunnel() {
 }
 
 async function start(tunnel = fakeTunnel()) {
-  server = createLocalTunnelBridge(ORIGIN, tunnel, 0);
+  server = createLocalTunnelBridge(ORIGIN, tunnel);
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   return { tunnel, url: `http://127.0.0.1:${(server.address() as { port: number }).port}` };
 }
@@ -81,5 +85,22 @@ describe('local tunnel bridge edges', () => {
     });
     const { url } = await start(tunnel);
     expect((await fetch(`${url}/status`, { headers: { Origin: ORIGIN } })).status).toBe(500);
+  });
+
+  it('drops the connection when the answer fails after its headers were sent', async () => {
+    const tunnel = fakeTunnel();
+    tunnel.status.mockImplementation(() => ({ huge: 1n }) as never);
+    const { url } = await start(tunnel);
+    await expect(
+      fetch(`${url}/status`, { headers: { Origin: ORIGIN } }).then((r) => r.text()),
+    ).rejects.toThrow();
+  });
+
+  it('explains tunnel failures that are not errors', async () => {
+    const tunnel = fakeTunnel();
+    tunnel.start.mockImplementation(() => Promise.reject(notAnError('nope')));
+    const { url } = await start(tunnel);
+    const failed = await post(url, JSON.stringify({ url: 'http://localhost:5173' }));
+    expect(await failed.json()).toEqual({ error: 'Could not start tunnel.' });
   });
 });

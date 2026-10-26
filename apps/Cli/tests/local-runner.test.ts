@@ -20,7 +20,11 @@ import {
   runnerHome,
 } from '../src/e2e/local-runner/playwright-setup.js';
 import { runLocally } from '../src/e2e/local-runner/run-command.js';
-import { E2eRunnerError } from '../src/vendor/e2e/application/e2e-runner.js';
+import { E2eRunnerError } from '../src/vendor/backend/modules/e2e/application/e2e-runner.js';
+
+/** A rejection that is not an Error instance (e.g. thrown by code in another realm). */
+const notAnError = (text: string): Error =>
+  Object.assign({ name: 'Fault', message: '' }, { toString: () => text });
 
 const SCRIPT = `import { test } from '@playwright/test';\ntest('TC001', async ({ page }) => { await page.goto('/'); });`;
 const identity = { id: 'runner-0001', name: 'QA-LAPTOP', platform: 'win32', version: '0.2.0' };
@@ -399,6 +403,142 @@ describe('LocalRunnerAgent', () => {
   });
 });
 
+describe('LocalRunnerAgent edge cases', () => {
+  it('reports run and step errors and uses the default heartbeat', async () => {
+    const { api, calls } = fakeApi({
+      'POST /e2e/runner/claim': { task: runTask() },
+      'POST /e2e/runner/tasks/task-1/complete': undefined,
+    });
+    const local = browser({
+      run: vi.fn<LocalBrowser['run']>().mockResolvedValue({
+        status: 'failed',
+        durationMs: 10,
+        error: 'Expected visible',
+        logs: '1 failed',
+        video: null,
+        steps: [
+          {
+            position: 1,
+            title: 'Pay',
+            status: 'failed',
+            durationMs: 3,
+            error: 'Timeout',
+            screenshot: null,
+          },
+        ],
+      }),
+    });
+    const { agent, events } = agentWith(api, local, { heartbeatMs: undefined });
+    await agent.poll();
+    expect(calls.at(-1)?.body).toMatchObject({
+      outcome: {
+        kind: 'run',
+        error: 'Expected visible',
+        hasVideo: false,
+        steps: [{ error: 'Timeout', hasScreenshot: false }],
+      },
+    });
+    expect(events.at(-1)).toMatchObject({ type: 'finished', error: 'Expected visible' });
+  });
+
+  it('treats results that arrive after a stop as cancelled', async () => {
+    const stopRun = new AbortController();
+    const finished = await browser().run({} as never);
+    const ran = fakeApi({ 'POST /e2e/runner/claim': { task: runTask() } });
+    const run = agentWith(
+      ran.api,
+      browser({
+        run: vi.fn<LocalBrowser['run']>(() => {
+          stopRun.abort();
+          return Promise.resolve(finished);
+        }),
+      }),
+    );
+    await run.agent.poll({ signal: stopRun.signal });
+    expect(run.events.at(-1)?.type).toBe('cancelled');
+    expect(ran.calls.some((call) => call.method === 'PUT')).toBe(false);
+
+    const stopExplore = new AbortController();
+    const explored = fakeApi({
+      'POST /e2e/runner/claim': {
+        task: {
+          ...runTask(),
+          kind: 'explore',
+          input: {
+            kind: 'explore',
+            mode: 'frontend',
+            url: 'http://localhost:3000/',
+            accessToken: null,
+          },
+        },
+      },
+    });
+    const explore = agentWith(
+      explored.api,
+      browser({
+        explore: vi.fn<LocalBrowser['explore']>(() => {
+          stopExplore.abort();
+          return Promise.resolve({ startUrl: 'http://localhost:3000/', pages: [] });
+        }),
+      }),
+    );
+    await explore.agent.poll({ signal: stopExplore.signal });
+    expect(explore.events.at(-1)?.type).toBe('cancelled');
+    expect(explored.calls.some((call) => call.path.endsWith('/complete'))).toBe(false);
+  });
+
+  it('treats a task removed while its error is reported as cancelled, and rethrows other failures', async () => {
+    const failing = browser({
+      run: vi.fn<LocalBrowser['run']>().mockRejectedValue(new Error('boom')),
+    });
+    const gone = fakeApi({
+      'POST /e2e/runner/claim': { task: runTask() },
+      'POST /e2e/runner/tasks/task-1/complete': new AdkApiError(
+        404,
+        'E2E_RUNNER_TASK_NOT_FOUND',
+        'gone',
+      ),
+    });
+    const removed = agentWith(gone.api, failing);
+    await removed.agent.poll();
+    expect(removed.events.at(-1)?.type).toBe('cancelled');
+
+    const broken = fakeApi({
+      'POST /e2e/runner/claim': { task: runTask() },
+      'POST /e2e/runner/tasks/task-1/complete': new AdkApiError(500, 'INTERNAL', 'down'),
+    });
+    await expect(agentWith(broken.api, failing).agent.poll()).rejects.toThrow('down');
+  });
+
+  it('refuses task ids that would change the API path', async () => {
+    const { api, calls } = fakeApi({
+      'POST /e2e/runner/claim': { task: { ...runTask(), id: '..' } },
+    });
+    await expect(agentWith(api, browser()).agent.poll()).rejects.toThrow(
+      'Invalid identifier: "..".',
+    );
+    expect(calls.map((call) => call.path)).toEqual(['/e2e/runner/claim']);
+  });
+
+  it('doubles the backoff while ADK stays unreachable and describes any failure', async () => {
+    let claims = 0;
+    const api = {
+      request: () => {
+        claims += 1;
+        return claims < 3
+          ? Promise.reject(notAnError('socket closed'))
+          : Promise.resolve({ task: null });
+      },
+    } as unknown as AdkApi;
+    const { agent, events } = agentWith(api, browser());
+    await agent.serve({ done: () => Promise.resolve(true) });
+    expect(events).toEqual([
+      { type: 'offline', message: 'socket closed', retryInMs: 2_000 },
+      { type: 'offline', message: 'socket closed', retryInMs: 4_000 },
+    ]);
+  });
+});
+
 describe('devkit e2e run', () => {
   const creation = (overrides: Record<string, unknown> = {}) => ({
     id: 'c1',
@@ -508,6 +648,68 @@ describe('devkit e2e run', () => {
     await expect(
       runLocally(other.api, { serve: vi.fn() }, { creationId: 'c1' }, () => undefined),
     ).rejects.toThrow('down');
+  });
+
+  it('starts a whole run that has no tests yet', async () => {
+    const folder = await tempDir();
+    const { api } = fakeApi({
+      'GET /e2e/creations/c1': { creation: creation({ tests: undefined }) },
+      'POST /e2e/creations/c1/run': undefined,
+    });
+    const lines: string[] = [];
+    const summary = await runLocally(
+      api,
+      { serve: vi.fn() },
+      { creationId: 'c1', scriptsDir: folder },
+      (line) => lines.push(line),
+    );
+    expect(summary).toMatchObject({ passed: 0, failed: 0 });
+    expect(lines).toEqual(['Started "Checkout".']);
+    await expect(
+      runLocally(api, { serve: vi.fn() }, { creationId: 'c1', test: 'TC001' }, () => undefined),
+    ).rejects.toThrow('TC001');
+  });
+
+  it('pushes only the spec of the chosen test, also when ADK has none yet', async () => {
+    const folder = await tempDir();
+    await fs.writeFile(path.join(folder, 'tc001-pay.spec.ts'), 'new');
+    await fs.writeFile(path.join(folder, 'other.spec.ts'), 'x');
+    const tests = [
+      { id: 't1', code: 'TC001', title: 'Pay', status: 'queued', error: null, durationMs: null },
+      { id: 't2', code: 'TC002', title: 'Refund', status: 'passed', error: null, durationMs: 1 },
+    ];
+    const { api, calls } = fakeApi({
+      'GET /e2e/creations/c1': { creation: creation({ tests }) },
+      'GET /e2e/tests/t1/script': { path: 'tests/e2e/tc001-pay.spec.ts', content: null },
+      'PUT /e2e/tests/t1/script': undefined,
+      'POST /e2e/tests/t1/run': undefined,
+    });
+    const lines: string[] = [];
+    await runLocally(
+      api,
+      { serve: vi.fn() },
+      { creationId: 'c1', test: 't1', scriptsDir: folder },
+      (line) => lines.push(line),
+    );
+    expect(calls.some((call) => call.path === '/e2e/tests/t2/script')).toBe(false);
+    expect(lines).toEqual([
+      'Pushed TC001 script (tests/e2e/tc001-pay.spec.ts).',
+      'Started TC001 - Pay.',
+      '• TC001 Pay — queued',
+    ]);
+
+    const missing = fakeApi({
+      'GET /e2e/creations/c1': { creation: creation({ tests }) },
+      'GET /e2e/tests/t2/script': { path: 'tests/e2e/tc002-refund.spec.ts', content: 'x' },
+      'POST /e2e/tests/t2/run': undefined,
+    });
+    await runLocally(
+      missing.api,
+      { serve: vi.fn() },
+      { creationId: 'c1', test: 'TC002', scriptsDir: folder },
+      () => undefined,
+    );
+    expect(missing.calls.some((call) => call.method === 'PUT')).toBe(false);
   });
 });
 

@@ -62,14 +62,14 @@ describe('SpecView template deletion', () => {
     await view.findByRole('heading', { name: 'Nova especificação' });
     fireEvent.click(view.getByRole('button', { name: 'Configurações' }));
     fireEvent.change(view.getByLabelText('Template para editar'), { target: { value: 't2' } });
-    expect(view.getByLabelText<HTMLInputElement>('Nome do template').value).toBe('Release');
+    expect((view.getByLabelText('Nome do template') as HTMLInputElement).value).toBe('Release');
 
     const dialog = await openTemplateDeletion(view);
     expect(dialog).toHaveTextContent('Release');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir' }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith('t2'));
     expect(await view.findByText('Template excluído com sucesso.')).toBeInTheDocument();
-    expect(view.getByLabelText<HTMLInputElement>('Nome do template').value).toBe('Base');
+    expect((view.getByLabelText('Nome do template') as HTMLInputElement).value).toBe('Base');
   });
 
   it('keeps the template when the deletion is cancelled or fails', async () => {
@@ -88,7 +88,7 @@ describe('SpecView template deletion', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir' }));
     expect(await view.findByRole('alert')).toHaveTextContent('Falha ao excluir template.');
     expect(remove).toHaveBeenCalledWith('t1');
-    expect(view.getByLabelText<HTMLInputElement>('Nome do template').value).toBe('Base');
+    expect((view.getByLabelText('Nome do template') as HTMLInputElement).value).toBe('Base');
   });
 });
 

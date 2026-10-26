@@ -74,7 +74,7 @@ describe('AccessTokensPanel failures and stale actions', () => {
     const revoke = vi.spyOn(client, 'revokeAccessToken').mockResolvedValue(undefined);
     const view = render(<AccessTokensPanel apiClient={client} />);
     expect(await view.findByText('Claude Code')).toBeInTheDocument();
-    expect(view.getByTestId('token-list')).toHaveTextContent('Nunca expira');
+    expect(view.getByTestId('token-list')).toHaveTextContent('Sem expiração');
 
     view.rerender(<AccessTokensPanel />);
     fireEvent.click(view.getByTestId('revoke-token-t1'));
@@ -270,7 +270,13 @@ describe('SettingsView member access and workspace actions', () => {
     );
     expect(onDeleteWorkspace).not.toHaveBeenCalled();
 
-    await openFinalDeletion(view, 'Squad Renomeado');
+    // The inline confirmation stays open; typing the new name reaches the final dialog again.
+    fireEvent.change(
+      view.getByRole('textbox', { name: 'Nome completo do workspace para confirmação' }),
+      { target: { value: 'Squad Renomeado' } },
+    );
+    fireEvent.click(view.getByRole('button', { name: 'Confirmar exclusão' }));
+    await view.findByRole('alertdialog', { name: 'Excluir workspace permanentemente?' });
     view.rerender(
       <SettingsView
         apiClient={client}

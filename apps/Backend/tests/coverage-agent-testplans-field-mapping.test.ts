@@ -46,9 +46,10 @@ describe('InMemoryFieldMappingStore', () => {
       itemType: '',
       rules: [],
     });
-    await expect(
-      store.save('ws-2', saved.id, { ...saved, name: 'Stolen' }),
-    ).rejects.toMatchObject({ code: 'FIELD_MAPPING_NOT_FOUND', statusCode: 404 });
+    await expect(store.save('ws-2', saved.id, { ...saved, name: 'Stolen' })).rejects.toMatchObject({
+      code: 'FIELD_MAPPING_NOT_FOUND',
+      statusCode: 404,
+    });
     expect((await store.get('ws-1', saved.id))?.name).toBe('Private');
   });
 });
@@ -105,7 +106,11 @@ describe('resolveFieldMapping sources', () => {
       source: { kind: 'custom' as const, providerId: 'jira', key: 'severity' },
     };
     expect(
-      resolveOne({ ...item, metadata: { customFields: { jira: { severity: 'High' } } } }, rule, text),
+      resolveOne(
+        { ...item, metadata: { customFields: { jira: { severity: 'High' } } } },
+        rule,
+        text,
+      ),
     ).toEqual({ target: 'High' });
     expect(
       resolveOne(
@@ -135,9 +140,9 @@ describe('resolveFieldMapping conversions', () => {
         { id: 'opt-api', name: 'API' },
       ],
     };
-    expect(resolveOne(item, constant(['Interface', 'opt-api'], { Interface: 'UI' }), multi)).toEqual(
-      { target: ['opt-ui', 'opt-api'] },
-    );
+    expect(
+      resolveOne(item, constant(['Interface', 'opt-api'], { Interface: 'UI' }), multi),
+    ).toEqual({ target: ['opt-ui', 'opt-api'] });
     expect(resolveOne(item, constant('API'), multi)).toEqual({ target: ['opt-api'] });
     expect(() => resolveOne(item, constant(['Database']), multi)).toThrowError(
       /Unknown option for Tags/,
@@ -254,7 +259,9 @@ describe('PrismaFieldMappingStore', () => {
       orderBy: { updatedAt: 'desc' },
     });
     expect(await store.get('ws', 'mapping-1')).toMatchObject({ id: 'mapping-1', rules: row.rules });
-    expect(records.findFirst).toHaveBeenCalledWith({ where: { workspaceId: 'ws', id: 'mapping-1' } });
+    expect(records.findFirst).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws', id: 'mapping-1' },
+    });
     records.findFirst.mockResolvedValueOnce(null);
     expect(await store.get('ws', 'missing')).toBeNull();
   });
@@ -285,7 +292,9 @@ describe('PrismaFieldMappingStore', () => {
   it('reports whether a workspace template was deleted', async () => {
     const { records, store } = fake();
     expect(await store.delete('ws', 'mapping-1')).toBe(true);
-    expect(records.deleteMany).toHaveBeenCalledWith({ where: { workspaceId: 'ws', id: 'mapping-1' } });
+    expect(records.deleteMany).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws', id: 'mapping-1' },
+    });
     records.deleteMany.mockResolvedValueOnce({ count: 0 });
     expect(await store.delete('ws', 'missing')).toBe(false);
   });

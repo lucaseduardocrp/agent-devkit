@@ -50,6 +50,8 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Browser redirect target of the OAuth provider; auth_get_oauth_url starts the flow instead.',
   'POST /auth/tokens':
     'Creating a token returns its secret; it must not transit through the model. Use the web app or `devkit login`, which stores it locally.',
+  'GET /capabilities':
+    'Public install descriptor the web app adapts its UI to (whether workers reach localhost); the run tools describe their "local" target instead.',
   'POST /costs/usage':
     'Internal usage accounting: the MCP server itself reports the estimated host-model tokens of every tool call; it is not an action for the model.',
   'GET /e2e/tests/:id/video':

@@ -139,8 +139,8 @@ export const CodeEditor = forwardRef<
    * (`execCommand` is missing), the text is set directly and the selection restored after render.
    */
   const apply = (edit: Edit) => {
-    const element = textarea.current;
-    if (!element) return;
+    // Every caller runs while the editor is mounted, so the textarea is there.
+    const element = textarea.current!;
     const next = applyEdit(element.value, edit);
     element.focus();
     element.setSelectionRange(edit.from, edit.to);
@@ -175,8 +175,7 @@ export const CodeEditor = forwardRef<
   }, [value]);
 
   const format = (): boolean => {
-    const element = textarea.current;
-    if (!element) return false;
+    const element = textarea.current!;
     const current = element.value;
     const formatted =
       language === 'json' ? formatJson(current) : language === 'xml' ? formatXml(current) : null;
@@ -191,16 +190,14 @@ export const CodeEditor = forwardRef<
   useImperativeHandle(ref, () => ({
     format,
     insertMock(name) {
-      const element = textarea.current;
-      if (!element) return;
+      const element = textarea.current!;
       const { selectionStart: start, selectionEnd: end } = element;
       const inString = language === 'json' && insideJsonString(element.value, start);
       const text = mockSnippet(name, language, inString);
       apply({ from: start, to: end, text, selection: [start + text.length, start + text.length] });
     },
     insertTemplate(body) {
-      const element = textarea.current;
-      if (!element) return;
+      const element = textarea.current!;
       const empty = !element.value.trim();
       const start = empty ? 0 : element.selectionStart;
       const end = empty ? element.value.length : element.selectionEnd;
@@ -263,9 +260,8 @@ export const CodeEditor = forwardRef<
     }));
   };
 
-  const choose = (suggestion: VariableSuggestion) => {
-    const element = textarea.current;
-    if (!element || !menu) return;
+  const choose = (menu: Menu, suggestion: VariableSuggestion) => {
+    const element = textarea.current!;
     const caret = element.selectionStart;
     if (menu.mode.kind === 'value') {
       // `"name": "|` becomes `"name": "{{$randomFullName}}"`; a number replaces the quote.
@@ -312,7 +308,7 @@ export const CodeEditor = forwardRef<
       }
       if ((event.key === 'Enter' || event.key === 'Tab') && !event.ctrlKey && !event.metaKey) {
         event.preventDefault();
-        choose(menu.items[menu.index]!);
+        choose(menu, menu.items[menu.index]!);
         return;
       }
       if (event.key === 'Escape') {
@@ -434,7 +430,7 @@ export const CodeEditor = forwardRef<
           index={menu.index}
           left={menu.left}
           top={menu.top}
-          onChoose={choose}
+          onChoose={(suggestion) => choose(menu, suggestion)}
           onHover={(index) => setMenu({ ...menu, index })}
         />
       )}

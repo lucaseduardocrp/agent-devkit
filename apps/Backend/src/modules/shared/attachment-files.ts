@@ -14,7 +14,7 @@ const FILE_REFERENCE =
 
 /** Files of the ADK storage referenced anywhere in the given values (texts, lists...). */
 export function referencedFiles(...values: unknown[]): Set<string> {
-  const text = JSON.stringify(values) ?? '';
+  const text = JSON.stringify(values);
   return new Set([...text.matchAll(FILE_REFERENCE)].map((match) => match[1]!.toLowerCase()));
 }
 

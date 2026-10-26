@@ -503,7 +503,8 @@ export function createApp(options: AppOptions = {}) {
       specs: specRepository,
       pbis: pbiStore,
     }),
-    dispatcher: { wake: () => apiTestDispatcher?.wake() ?? Promise.resolve() },
+    // Set just below before any request can start a run.
+    dispatcher: { wake: () => apiTestDispatcher!.wake() },
     dynamicProviderFactory,
     defaultLlm: options.defaultLlm,
   });

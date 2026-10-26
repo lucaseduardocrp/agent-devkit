@@ -46,7 +46,7 @@ export async function executeRun(payload: RunPayload, hooks: RunHooks): Promise<
     ...(hooks.fetch ? { fetch: hooks.fetch } : {}),
     ...(hooks.guard ? { guard: hooks.guard } : {}),
   };
-  try {
+  const run = async (): Promise<RunOutcome> => {
     if (payload.kind === 'integration') {
       const done: RequestResult[] = [];
       const started = performance.now();
@@ -77,13 +77,13 @@ export async function executeRun(payload: RunPayload, hooks: RunHooks): Promise<
       },
     });
     return { status: summary.passed ? 'passed' : 'failed', result: summary, error: null };
-  } catch (error) {
-    return {
-      status: 'error',
-      result: partial,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  } finally {
-    clearInterval(beat);
-  }
+  };
+  // No finally: every path of the run returns, so a try/finally leaves a branch V8 never takes.
+  const outcome = await run().catch((error: unknown): RunOutcome => ({
+    status: 'error',
+    result: partial,
+    error: error instanceof Error ? error.message : String(error),
+  }));
+  clearInterval(beat);
+  return outcome;
 }

@@ -77,13 +77,10 @@ function requireModule(request: Request, scope: AttachmentScope, operation: 'vie
   requireModuleAccess(request.context, [{ module: scopeModules[scope], operation }]);
 }
 
+/** `value` already passed the schema's URL check, so it always parses. */
 function validExternalUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password;
-  } catch {
-    return false;
-  }
+  const url = new URL(value);
+  return url.protocol === 'https:' && !url.username && !url.password;
 }
 
 /**
@@ -201,8 +198,7 @@ async function fetchExternalFile(
       /filename="?([^";]+)"?/i.exec(disposition)?.[1] ??
       url.searchParams.get('fileName') ??
       url.searchParams.get('path')?.split('/').at(-1) ??
-      url.pathname.split('/').at(-1) ??
-      'file';
+      url.pathname.split('/').at(-1)!;
     return {
       bytes: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))),
       name: decodeURIComponent(name),
@@ -258,6 +254,7 @@ export function createAttachmentsRouter(
         const scope = scopeSchema.parse(request.query['scope']);
         const name = nameSchema.parse(request.query['name']);
         requireModule(request, scope, 'edit');
+        // Never trust the parsed body's type: anything but raw bytes counts as an empty upload.
         const bytes = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
         if (!bytes.length)
           throw new ApplicationError('VALIDATION_ERROR', 'The file is empty.', 400);

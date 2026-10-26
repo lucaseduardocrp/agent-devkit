@@ -11,7 +11,6 @@ import { FakeScriptRepository } from './helpers/fake-script-repository.js';
 const { probeTunnel } = vi.hoisted(() => ({ probeTunnel: vi.fn() }));
 vi.mock('../src/modules/e2e/application/tunnel-probe.js', () => ({ probeTunnel }));
 
-
 const repository = { provider: 'github', id: '42', branch: 'main', path: 'tests/e2e' };
 const ok = { reachable: true, reason: 'ok', status: 200 };
 

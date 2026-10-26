@@ -196,7 +196,7 @@ export class ApiTestService {
         parsed.error.issues
           .slice(0, 20)
           .map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
-        { detail: parsed.error.issues[0]?.message ?? '' },
+        { detail: parsed.error.issues[0]!.message },
       );
     }
     return { ...parsed.data, items: ApiTestService.uniqueIds(parsed.data.items) };
@@ -346,7 +346,7 @@ export class ApiTestService {
         parsed.error.issues
           .slice(0, 20)
           .map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
-        { detail: parsed.error.issues[0]?.message ?? '' },
+        { detail: parsed.error.issues[0]!.message },
       );
     }
     const input = parsed.data;
@@ -869,10 +869,8 @@ export function extractJson(text: string): Record<string, unknown> {
   const start = candidate.indexOf('{');
   const end = candidate.lastIndexOf('}');
   if (start < 0 || end <= start) throw new Error('no JSON object in the answer');
-  const value = JSON.parse(candidate.slice(start, end + 1)) as unknown;
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw new Error('the answer is not a JSON object');
-  return value as Record<string, unknown>;
+  // The slice starts with '{' and ends with '}', so it parses to an object or throws.
+  return JSON.parse(candidate.slice(start, end + 1)) as Record<string, unknown>;
 }
 
 const COLLECTION_SHAPE = `{

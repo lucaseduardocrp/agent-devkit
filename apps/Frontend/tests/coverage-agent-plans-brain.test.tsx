@@ -50,8 +50,8 @@ describe('BrainView external documents', () => {
     const view = render(<BrainView apiClient={client} initialDocuments={[externalDoc]} />);
     fireEvent.click(await view.findByTestId(`tree-item-${externalDoc.id}`));
     fireEvent.click(view.getByTestId('btn-copy-document'));
-    expect(view.getByTestId<HTMLInputElement>('input-document-title').value).toBe('External');
-    expect(view.getByTestId<HTMLTextAreaElement>('textarea-document-content').value).toBe('');
+    expect((view.getByTestId('input-document-title') as HTMLInputElement).value).toBe('External');
+    expect((view.getByTestId('textarea-document-content') as HTMLTextAreaElement).value).toBe('');
   });
 
   it('warns that deleting an external document keeps the original at its source', async () => {
@@ -102,7 +102,7 @@ describe('BrainView assistants', () => {
     expect(view.getByTestId('editor-preview-container')).toBeInTheDocument();
     fireEvent.click(insert);
     fireEvent.click(view.getByTestId('btn-toggle-edit-preview'));
-    expect(view.getByTestId<HTMLTextAreaElement>('textarea-document-content').value).toBe(
+    expect((view.getByTestId('textarea-document-content') as HTMLTextAreaElement).value).toBe(
       'Intro\n\nGenerated text',
     );
   });
@@ -120,7 +120,9 @@ describe('BrainView assistants', () => {
     fireEvent.change(prompt, { target: { value: 'Draft' } });
 
     view.rerender(<BrainView initialDocuments={[appDoc]} />);
-    fireEvent.click(within(view.getByTestId('brain-agent-sidebar')).getByRole('button', { name: 'Ações' }));
+    fireEvent.click(
+      within(view.getByTestId('brain-agent-sidebar')).getByRole('button', { name: 'Ações' }),
+    );
     await waitFor(() => expect(prompt.value).toBe('Draft'));
     expect(execute).not.toHaveBeenCalled();
   });

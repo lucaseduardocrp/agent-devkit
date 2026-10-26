@@ -136,3 +136,99 @@ describe('tunnel manager edges', () => {
     await expect(retry).rejects.toThrow('Tunnel stopped.');
   });
 });
+
+describe('local gateway forwarding edges', () => {
+  it('forwards to HTTPS loopback services and answers 502 when they are down', async () => {
+    const stopped = createServer();
+    const address = await listen(stopped);
+    await new Promise<void>((resolve) => stopped.close(() => resolve()));
+    const gateway = await listen(createLocalGateway(address.replace('http:', 'https:'), TOKEN));
+    expect(await rawStatus(gateway, '/')).toBe(502);
+  });
+
+  it('drops the response when the local service stalls after sending its headers', async () => {
+    const frontend = await listen(
+      createServer((_req, res) => {
+        res.writeHead(200, { 'content-length': '100' });
+        res.write('partial');
+      }),
+    );
+    const gateway = await listen(createLocalGateway(frontend, TOKEN, 50));
+    const failure = await new Promise<string>((resolve) => {
+      const outgoing = request(`${gateway}/`, { headers: AUTH }, (response) => {
+        response.once('error', (error) => resolve(error.message));
+        response.resume();
+      });
+      outgoing.once('error', (error) => resolve(error.message));
+      outgoing.end();
+    });
+    expect(failure).toMatch(/aborted|ECONNRESET|socket hang up/);
+  });
+});
+
+describe('tunnel manager startup edges', () => {
+  it('accepts only HTTP loopback targets', async () => {
+    const tunnel = new CloudflareTunnelManager('cloudflared', fakeProcess().factory);
+    await expect(tunnel.start('::not a url')).rejects.toThrow('Enter a local URL');
+    for (const target of [
+      'https://localhost:5173',
+      'http://example.com',
+      'http://user@localhost:5173',
+      'http://:pw@localhost:5173',
+      'http://localhost:5173/?q=1',
+      'http://localhost:5173/#top',
+    ]) {
+      await expect(tunnel.start(target)).rejects.toThrow('HTTP loopback URL');
+    }
+  });
+
+  it('runs the cloudflared from ADK_CLOUDFLARED_PATH, or the one on the PATH', async () => {
+    vi.stubEnv('ADK_CLOUDFLARED_PATH', '/opt/cloudflared');
+    try {
+      const custom = new CloudflareTunnelManager();
+      await expect(custom.waitForClose()).resolves.toBeUndefined();
+      expect((custom as unknown as { executable: string }).executable).toBe('/opt/cloudflared');
+      vi.stubEnv('ADK_CLOUDFLARED_PATH', '');
+      expect((new CloudflareTunnelManager() as unknown as { executable: string }).executable).toBe(
+        'cloudflared',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('gives up a fullstack start stopped before or right after cloudflared answers', async () => {
+    const { child, factory } = fakeProcess();
+    const tunnel = new CloudflareTunnelManager('cloudflared', factory);
+    const beforeLaunch = tunnel.start('http://localhost:5173', true);
+    tunnel.stop();
+    await expect(beforeLaunch).rejects.toThrow('Tunnel stopped.');
+    expect(factory).not.toHaveBeenCalled();
+
+    const afterLaunch = tunnel.start('http://localhost:5173', true);
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce());
+    child.stdout.emit('data', Buffer.from('https://late.trycloudflare.com\n'));
+    tunnel.stop();
+    await expect(afterLaunch).rejects.toThrow('Tunnel stopped.');
+    expect(tunnel.status()).toBeUndefined();
+  });
+
+  it('ignores late process errors and closes the gateway when a fullstack tunnel exits', async () => {
+    const { child, factory } = fakeProcess();
+    const tunnel = new CloudflareTunnelManager('cloudflared', factory);
+    const started = tunnel.start('http://localhost:5173', true);
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce());
+    (child.stdout as PassThrough).write('https://full.trycloudflare.com\n');
+    const info = await started;
+    expect(info).toMatchObject({
+      localUrl: 'http://localhost:5173',
+      accessClientId: expect.any(String),
+    });
+    child.emit('error', new Error('late'));
+    expect(tunnel.status()).toBe(info);
+    const gateway = (tunnel as unknown as { gateway: Server }).gateway;
+    child.emit('exit', 0);
+    expect(gateway.listening).toBe(false);
+    expect(tunnel.status()).toBeUndefined();
+  });
+});

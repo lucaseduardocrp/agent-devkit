@@ -13,6 +13,11 @@ import {
 } from '../../src/modules/integrations/adapters/prisma-integrations-store.js';
 import { AuthService } from '../../src/modules/identity/application/auth-service.js';
 import { IntegrationsService } from '../../src/modules/integrations/application/integrations-service.js';
+import {
+  PrismaWorkspaceRepository,
+  type PrismaWorkspacesClient,
+} from '../../src/modules/workspaces/adapters/prisma-workspace-repository.js';
+import { WorkspaceService } from '../../src/modules/workspaces/application/workspace-service.js';
 import { decryptSecret } from '../../src/shared/encryption.js';
 
 function requireTestDatabaseUrl(): string {
@@ -37,9 +42,16 @@ describe('PostgreSQL Authentication & Multi-Tenant Integrations E2E', () => {
   const authService = new AuthService(authRepo);
   const integrationsService = new IntegrationsService(integrationsStore);
 
+  // Integrations belong to the user's default workspace, which must exist in PostgreSQL.
+  const workspaceService = new WorkspaceService(
+    new PrismaWorkspaceRepository(database.client as unknown as PrismaWorkspacesClient),
+    authRepo,
+  );
+
   const app = createApp({
     authService,
     integrationsService,
+    workspaceService,
   });
 
   const userAEmail = `${runPrefix}-alice@example.com`;
@@ -181,7 +193,7 @@ describe('PostgreSQL Authentication & Multi-Tenant Integrations E2E', () => {
   it('proves secrets in PostgreSQL are encrypted and cannot be deciphered in plaintext', async () => {
     // Inspect database row directly using Prisma Client
     const recordA = await database.client.integrationRecord.findFirst({
-      where: { ownerId: userAId, providerId: 'azure_devops_wiki' },
+      where: { workspace: { ownerId: userAId }, providerId: 'azure_devops_wiki' },
     });
 
     expect(recordA).not.toBeNull();

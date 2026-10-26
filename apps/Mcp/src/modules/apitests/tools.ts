@@ -56,6 +56,18 @@ export const integrationTestsModule: McpModule = {
         json(await api.request({ method: 'GET', path: '/integration-tests/collections' })),
     }),
     defineTool({
+      name: 'integration_list_dynamic_values',
+      title: 'List API test dynamic values',
+      description:
+        'Lists the `{{$randomFullName}}`-style helpers that URLs, headers and bodies of collection requests can use, each with a fresh sample value.',
+      toolset: 'integrationtests',
+      access: 'read',
+      routes: ['GET /integration-tests/dynamic-values'],
+      input: {},
+      run: async (_, { api }) =>
+        json(await api.request({ method: 'GET', path: '/integration-tests/dynamic-values' })),
+    }),
+    defineTool({
       name: 'integration_get_collection',
       title: 'Get API test collection',
       description:

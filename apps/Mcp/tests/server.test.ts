@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { ElicitRequestSchema, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createMcpServer,
@@ -19,7 +20,7 @@ const fakeWorkflow = fixtures.workflow;
 const API = 'http://adk.test';
 
 /** Fake ADK backend: records the requests it receives. */
-function backend() {
+function backend(workflow: object = fakeWorkflow) {
   const requests: {
     url: string;
     method?: string;
@@ -35,7 +36,7 @@ function backend() {
     });
     // Every tool call first reads the workspace workflow policy.
     if (String(url).endsWith('/agents/workflow')) {
-      return Promise.resolve(Response.json({ workflow: fakeWorkflow }));
+      return Promise.resolve(Response.json({ workflow }));
     }
     if (String(url).endsWith('/stats')) {
       return Promise.resolve(Response.json({ documentsCount: 2, chunksCount: 5 }));
@@ -50,8 +51,9 @@ function backend() {
 async function connect(
   registry = new ToolRegistry(modules),
   state: SessionState = { token: 'stored', workspaceId: 'ws-1' },
+  options: { workflow?: object; elicit?: () => ElicitResult } = {},
 ) {
-  const { requests, fetcher } = backend();
+  const { requests, fetcher } = backend(options.workflow);
   const session = new Session(new MemorySessionStore(state), {
     apiUrl: API,
   });
@@ -65,7 +67,11 @@ async function connect(
     fetch: fetcher,
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'test', version: '1.0.0' });
+  const client = new Client(
+    { name: 'test', version: '1.0.0' },
+    { capabilities: options.elicit ? { elicitation: {} } : {} },
+  );
+  if (options.elicit) client.setRequestHandler(ElicitRequestSchema, options.elicit);
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   return { client, requests };
 }
@@ -121,6 +127,31 @@ describe('MCP server', () => {
     const guideText = (guide.contents[0] as { text: string }).text;
     expect(guideText).toContain('`testplans_prepare` (testplans, read, host model)');
     expect(guideText).toContain('`brain_stats` (brain, read)');
+  });
+
+  it('asks the connected user to approve supervised write actions', async () => {
+    const workflow = { ...fakeWorkflow, autonomy: 'supervised' };
+    const call = async (elicit: () => ElicitResult) => {
+      const { client, requests } = await connect(new ToolRegistry(modules), undefined, {
+        workflow,
+        elicit,
+      });
+      const result = await client.callTool({ name: 'brain_sync', arguments: {} });
+      const synced = requests.some((request) => request.url.endsWith('/knowledge/sync'));
+      return { text: (result.content as { text: string }[])[0]!.text, synced };
+    };
+    expect(await call(() => ({ action: 'accept', content: { approved: true } }))).toMatchObject({
+      synced: true,
+    });
+    for (const answer of [
+      { action: 'accept', content: { approved: false } },
+      { action: 'accept' },
+      { action: 'decline' },
+    ] as ElicitResult[]) {
+      const declined = await call(() => answer);
+      expect(declined.synced).toBe(false);
+      expect(declined.text).toContain('declined');
+    }
   });
 
   it('respects read-only registries', async () => {

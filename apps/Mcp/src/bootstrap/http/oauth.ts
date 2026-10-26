@@ -142,16 +142,11 @@ export class AdkOAuthProvider implements OAuthServerProvider {
     );
     return router;
   }
-
   public challengeForAuthorizationCode(
     client: OAuthClientInformationFull,
     authorizationCode: string,
   ): Promise<string> {
-    try {
-      return Promise.resolve(this.readCode(client, authorizationCode).challenge);
-    } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-    }
+    return Promise.resolve().then(() => this.readCode(client, authorizationCode).challenge);
   }
 
   public exchangeAuthorizationCode(
@@ -160,29 +155,24 @@ export class AdkOAuthProvider implements OAuthServerProvider {
     _codeVerifier?: string,
     redirectUri?: string,
   ): Promise<OAuthTokens> {
-    let code: AuthorizationCode;
-    try {
-      code = this.readCode(client, authorizationCode);
-    } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-    }
-    if (redirectUri && redirectUri !== code.redirectUri) {
-      return Promise.reject(
-        new InvalidGrantError('redirect_uri does not match the authorization request.'),
-      );
-    }
-    if (this.usedCodes.has(code.nonce)) {
-      return Promise.reject(new InvalidGrantError('Authorization code already used.'));
-    }
-    this.forgetExpiredCodes();
-    this.usedCodes.set(code.nonce, Date.now() + CODE_TTL_MS);
-    const expiresIn = code.expiresAt
-      ? Math.max(0, Math.floor((new Date(code.expiresAt).getTime() - Date.now()) / 1000))
-      : undefined;
-    return Promise.resolve({
-      access_token: code.token,
-      token_type: 'bearer',
-      ...(expiresIn === undefined ? {} : { expires_in: expiresIn }),
+    return Promise.resolve().then(() => {
+      const code = this.readCode(client, authorizationCode);
+      if (redirectUri && redirectUri !== code.redirectUri) {
+        throw new InvalidGrantError('redirect_uri does not match the authorization request.');
+      }
+      if (this.usedCodes.has(code.nonce)) {
+        throw new InvalidGrantError('Authorization code already used.');
+      }
+      this.forgetExpiredCodes();
+      this.usedCodes.set(code.nonce, Date.now() + CODE_TTL_MS);
+      const expiresIn = code.expiresAt
+        ? Math.max(0, Math.floor((new Date(code.expiresAt).getTime() - Date.now()) / 1000))
+        : undefined;
+      return {
+        access_token: code.token,
+        token_type: 'bearer',
+        ...(expiresIn === undefined ? {} : { expires_in: expiresIn }),
+      };
     });
   }
 

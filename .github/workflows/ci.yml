@@ -1,0 +1,165 @@
+name: CI
+
+# The merge gate for main. Every pull request runs every check below on the whole repository,
+# whatever it touches, so main always has passing linters and 100% test coverage in every app.
+# Branch protection requires only the "CI passed" job, which fails when any other job here fails
+# (see .github/rulesets and CONTRIBUTING.md).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Verify ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [Backend, Frontend, Mcp, Cli]
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.app }}
+    env:
+      # Prisma's config reads DATABASE_URL to generate the client; nothing connects to it here.
+      DATABASE_URL: postgresql://localhost/ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/*/package-lock.json
+      # The CLI's tests and typecheck read the MCP sources; its build compiles and embeds apps/Mcp.
+      # The backend's tests run the CLI's local E2E runner and the MCP client against the API.
+      - if: matrix.app == 'Cli' || matrix.app == 'Backend'
+        run: npm ci
+        working-directory: apps/Mcp
+      - if: matrix.app == 'Backend'
+        run: npm ci
+        working-directory: apps/Cli
+      - run: npm ci
+      # The backend's E2E runner tests drive a real Chromium.
+      - if: matrix.app == 'Backend'
+        run: npx playwright install --with-deps chromium
+      # Formatting, linters, typecheck and tests with the 100% coverage thresholds of vitest.config.ts.
+      - run: npm run verify
+      - run: npm run build
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.app }}
+          path: apps/${{ matrix.app }}/coverage
+          if-no-files-found: ignore
+          retention-days: 14
+
+  setup:
+    name: Verify setup wizard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm run test:coverage --prefix setup
+
+  integration:
+    name: Backend integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/Backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: adk
+          POSTGRES_PASSWORD: adk
+          POSTGRES_DB: adk_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U adk -d adk_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://adk:adk@localhost:5432/adk_test
+      TEST_DATABASE_URL: postgresql://adk:adk@localhost:5432/adk_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/Backend/package-lock.json
+      - run: npm ci
+      - run: npm run prisma:generate
+      - name: Generate an encryption key
+        run: echo "INTEGRATION_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - run: npm run test:integration
+
+  workflows:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs: [verify, setup, integration, workflows, dependency-review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Jobs skipped on purpose (dependency review outside pull requests) do not fail the gate.
+      - name: Check the results
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            echo "::error::A required CI job failed or was cancelled."
+            exit 1
+          fi

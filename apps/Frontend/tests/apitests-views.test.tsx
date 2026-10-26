@@ -438,7 +438,9 @@ describe('LoadTestsView', () => {
     fireEvent.change(name, { target: { value: 'Black Friday' } });
     fireEvent.click(view.getByTestId('name-dialog-submit'));
     expect(view.getByTestId('scenario-title').textContent).toBe('Black Friday');
-    await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>('Login').checked).toBe(true));
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLInputElement>('Login').checked).toBe(true),
+    );
     expect(screen.getByLabelText<HTMLInputElement>('List orders').checked).toBe(true);
     fireEvent.click(view.getByTestId('save-scenario'));
     await waitFor(() =>

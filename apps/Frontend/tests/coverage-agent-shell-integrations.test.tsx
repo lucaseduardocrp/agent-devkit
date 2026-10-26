@@ -11,7 +11,11 @@ import {
   type UserIntegrationDto,
 } from '../src/lib/api-client.js';
 
-function item(providerId: string, name: string, category: IntegrationCategory): IntegrationCardItem {
+function item(
+  providerId: string,
+  name: string,
+  category: IntegrationCategory,
+): IntegrationCardItem {
   return {
     id: providerId,
     providerId,
@@ -97,11 +101,18 @@ describe('IntegrationConfigModal provider forms', () => {
         Email: 'qa@contoso.com',
         'Chave do projeto': 'PAY',
       },
-      settings: { baseUrl: 'https://contoso.atlassian.net', email: 'qa@contoso.com', projectKey: 'PAY' },
+      settings: {
+        baseUrl: 'https://contoso.atlassian.net',
+        email: 'qa@contoso.com',
+        projectKey: 'PAY',
+      },
     },
     {
       integration: item('testrail', 'TestRail', 'PROJECT_MANAGEMENT'),
-      values: { 'URL do TestRail': 'https://contoso.testrail.io', 'Usuário (email)': 'qa@contoso.com' },
+      values: {
+        'URL do TestRail': 'https://contoso.testrail.io',
+        'Usuário (email)': 'qa@contoso.com',
+      },
       settings: { baseUrl: 'https://contoso.testrail.io', username: 'qa@contoso.com' },
       hint: 'Informe a API key do TestRail no campo de credencial.',
     },
@@ -121,23 +132,26 @@ describe('IntegrationConfigModal provider forms', () => {
       },
       hint: 'Informe o client secret da API key do Xray no campo de credencial.',
     },
-  ])('saves the $integration.name connection fields', async ({ integration, values, settings, hint }) => {
-    const { view, save, onClose } = renderModal(integration);
+  ])(
+    'saves the $integration.name connection fields',
+    async ({ integration, values, settings, hint }) => {
+      const { view, save, onClose } = renderModal(integration);
 
-    expect(view.queryByLabelText('Endpoint / URL de Conexão')).not.toBeInTheDocument();
-    if (hint) expect(view.getByText(hint)).toBeInTheDocument();
-    fill(view, values);
-    fireEvent.click(view.getByRole('button', { name: 'Salvar' }));
+      expect(view.queryByLabelText('Endpoint / URL de Conexão')).not.toBeInTheDocument();
+      if (hint) expect(view.getByText(hint)).toBeInTheDocument();
+      fill(view, values);
+      fireEvent.click(view.getByRole('button', { name: 'Salvar' }));
 
-    await waitFor(() =>
-      expect(save).toHaveBeenCalledWith('PROJECT_MANAGEMENT', integration.providerId, {
-        isEnabled: true,
-        settings,
-        secret: undefined,
-      }),
-    );
-    expect(onClose).toHaveBeenCalled();
-  });
+      await waitFor(() =>
+        expect(save).toHaveBeenCalledWith('PROJECT_MANAGEMENT', integration.providerId, {
+          isEnabled: true,
+          settings,
+          secret: undefined,
+        }),
+      );
+      expect(onClose).toHaveBeenCalled();
+    },
+  );
 
   it('saves the design repository and branch of an Azure DevOps wiki', async () => {
     const { view, save } = renderModal(item('azure_devops_wiki', 'Azure DevOps', 'KNOWLEDGE'));

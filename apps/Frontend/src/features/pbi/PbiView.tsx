@@ -88,7 +88,7 @@ function readColumns(workspaceId: string | null): ColumnId[] {
       const valid = columnIds.filter(
         (id) => id === 'title' || id === 'actions' || selected.has(id),
       );
-      return valid.length ? valid : defaultColumns;
+      return valid;
     }
   } catch {
     // Storage can be unavailable in private browsing.
@@ -343,6 +343,10 @@ function sanitizeHtml(value: string): string {
         continue;
       if (attribute.name !== 'style') element.removeAttribute(attribute.name);
     }
+    if (element.tagName === 'IMG' && !element.hasAttribute('src')) {
+      element.remove();
+      continue;
+    }
     const styles: string[] = [];
     for (let index = 0; index < element.style.length; index++) {
       const property = element.style.item(index);
@@ -364,7 +368,7 @@ function formatDescription(value: string): string {
   const decoded =
     typeof DOMParser === 'undefined'
       ? value
-      : (new DOMParser().parseFromString(value, 'text/html').body.textContent ?? value);
+      : new DOMParser().parseFromString(value, 'text/html').body.textContent;
   const html = renderToStaticMarkup(
     <>
       {parseMarkdownBlocks(decoded).map((block, index) => {
@@ -664,7 +668,7 @@ export function PbiView({
   const formOpen = Boolean(form);
   useInlineImages(descriptionEditorRef, form?.description);
   const descriptionImages = useRichTextImageInput('pbi', descriptionEditorRef, (html) =>
-    setForm((current) => (current ? { ...current, description: sanitizeHtml(html) } : current)),
+    setForm((current) => ({ ...current!, description: sanitizeHtml(html) })),
   );
 
   useEffect(() => {
@@ -917,7 +921,7 @@ export function PbiView({
           normalizeSearch(
             [
               item.title,
-              descriptionText.get(item.id) ?? '',
+              descriptionText.get(item.id)!,
               ...item.links.map((link) => link.externalId),
             ].join(' '),
           ),
@@ -970,7 +974,7 @@ export function PbiView({
       return null;
     const selfMatches = (item: PbiItem): boolean => {
       const assignee = sourceText(item.sourceData.adkAssigneeUserId);
-      const text = searchIndex.get(item.id) ?? '';
+      const text = searchIndex.get(item.id)!;
       return (
         terms.every((term) => text.includes(term)) &&
         (!sourceFilter ||
@@ -1060,7 +1064,6 @@ export function PbiView({
     }
   };
   const pull = () => {
-    if (pulling) return;
     setPulling(true);
     void runActivity({ kind: 'pull', title: c.pullAll }, async () => {
       const result = await apiClient.pullPbiBoards();
@@ -1093,21 +1096,16 @@ export function PbiView({
   /** Closing the form without saving drops what was typed, pasted and attached. */
   const closeForm = () => {
     if (form) {
-      const editorValue = descriptionEditorRef.current
-        ? editorHtml(descriptionEditorRef.current)
-        : form.description;
+      const editorValue = editorHtml(descriptionEditorRef.current!);
       discardDrafts({ ...form, description: editorValue });
     }
     setForm(null);
   };
   const save = (event: FormEvent) => {
     event.preventDefault();
-    if (!form) return;
     void runAction(async () => {
-      const editorValue = descriptionEditorRef.current
-        ? editorHtml(descriptionEditorRef.current)
-        : (form.description ?? '');
-      const { id, kind, sourceData, ...fields } = form;
+      const editorValue = editorHtml(descriptionEditorRef.current!);
+      const { id, kind, sourceData, ...fields } = form!;
       const values = {
         ...fields,
         description: editorValue.trim() ? sanitizeHtml(editorValue) : '',
@@ -1139,7 +1137,6 @@ export function PbiView({
     fields: Record<string, string>,
     templateId?: string,
   ) => {
-    if (pushingIds.has(item.id)) return;
     setPushItem(null);
     setPushingIds((current) => new Set(current).add(item.id));
     void runActivity({ kind: 'push', title: `${c.publish}: ${item.title}` }, () =>
@@ -2427,24 +2424,25 @@ export function PbiView({
           </form>
         )}
       </Modal>
-      <ConfirmationDialog
-        open={canDelete && Boolean(deleteItem)}
-        title={c.deleteTitle}
-        description={c.deleteDescription.replace('{title}', deleteItem?.title ?? '')}
-        confirmLabel={t('common.delete')}
-        cancelLabel={t('common.cancel')}
-        destructive
-        isLoading={busy}
-        onCancel={() => setDeleteItem(null)}
-        onConfirm={() => {
-          if (!deleteItem) return;
-          void runAction(async () => {
-            await apiClient.deletePbiItem(deleteItem.id);
-            setDeleteItem(null);
-            await load();
-          });
-        }}
-      />
+      {canDelete && deleteItem && (
+        <ConfirmationDialog
+          open
+          title={c.deleteTitle}
+          description={c.deleteDescription.replace('{title}', deleteItem.title)}
+          confirmLabel={t('common.delete')}
+          cancelLabel={t('common.cancel')}
+          destructive
+          isLoading={busy}
+          onCancel={() => setDeleteItem(null)}
+          onConfirm={() => {
+            void runAction(async () => {
+              await apiClient.deletePbiItem(deleteItem.id);
+              setDeleteItem(null);
+              await load();
+            });
+          }}
+        />
+      )}
     </main>
   );
 }

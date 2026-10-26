@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PostgresDatabase } from '../../src/adapters/persistence/postgres-database.js';
 import { PrismaE2eJobQueue } from '../../src/modules/e2e/adapters/prisma-e2e-queue.js';
 import { PrismaE2eRunnerTaskStore } from '../../src/modules/e2e/adapters/prisma-runner-task-store.js';
@@ -39,9 +39,19 @@ async function newCreation() {
   });
 }
 
+beforeAll(async () => {
+  const user = await db.userRecord.create({
+    data: { email: `${workspaceId}@test.local`, name: 'Runner tasks test' },
+  });
+  await db.workspaceRecord.create({
+    data: { id: workspaceId, name: 'Runner tasks test', slug: workspaceId, ownerId: user.id },
+  });
+});
+
 afterAll(async () => {
   await db.e2eCreationRecord.deleteMany({ where: { workspaceId } });
   await db.e2eLocalRunnerRecord.deleteMany({ where: { workspaceId } });
+  await db.userRecord.deleteMany({ where: { email: `${workspaceId}@test.local` } });
   await database.close();
 });
 

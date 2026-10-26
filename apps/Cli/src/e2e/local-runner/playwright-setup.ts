@@ -7,7 +7,7 @@ import path from 'node:path';
 import {
   defaultBrowsersPath,
   PlaywrightE2eRunner,
-} from '../../vendor/e2e/adapters/playwright-runner.js';
+} from '../../vendor/backend/modules/e2e/adapters/playwright-runner.js';
 
 /** Folder that contains this package's `node_modules/@playwright/test` (global or local install). */
 export function playwrightPackageRoot(): string {

@@ -94,8 +94,8 @@ function SplitPane({
   useEffect(() => {
     if (!dragging) return;
     const move = (event: PointerEvent) => {
-      const rect = container.current?.getBoundingClientRect();
-      if (!rect) return;
+      // The listeners only live while the pane is mounted.
+      const rect = container.current!.getBoundingClientRect();
       onRatio(
         clamp(
           horizontal
@@ -307,12 +307,13 @@ export function IntegrationTestsView({
     [apiClient, loadLists],
   );
 
-  /** Runs read the saved collection, so pending edits are saved first. */
+  /**
+   * Runs read the saved collection, so pending edits are saved first. Only called from the
+   * request, runner and settings pages, which show a loaded collection.
+   */
   const saveIfDirty = useCallback(
     async (collectionId: string) =>
-      dirtyRef.current[collectionId]?.size
-        ? save(collectionId)
-        : (loadedRef.current[collectionId] ?? null),
+      dirtyRef.current[collectionId]?.size ? save(collectionId) : loadedRef.current[collectionId]!,
     [save],
   );
 
@@ -388,16 +389,15 @@ export function IntegrationTestsView({
     [apiClient, environmentId, follow, isReadOnly, pending, saveIfDirty, t, target],
   );
 
-  const cancelSend = (requestId: string) => {
-    const run = pending[requestId];
-    if (run) void apiClient.cancelApiRun('integration', run.runId).catch(fail);
-  };
+  /** Offered only while the request is being sent. */
+  const cancelSend = (requestId: string) =>
+    void apiClient.cancelApiRun('integration', pending[requestId]!.runId).catch(fail);
 
   const runCollection = async (
     collectionId: string,
     options: { itemIds: string[]; bail: boolean },
   ) => {
-    if (isReadOnly) return;
+    // Read-only members get no run buttons (runner and sidebar hide them).
     setError(null);
     openTab({ kind: 'runner', collectionId });
     const saved = await saveIfDirty(collectionId);
@@ -447,8 +447,8 @@ export function IntegrationTestsView({
   useEffect(() => {
     const gone = tabs.filter((tab) => {
       if (tab.kind !== 'request') return false;
-      const collection = loaded[tab.collectionId];
-      return collection && !findRequest(collection.items, tab.requestId);
+      // Request tabs open from a loaded collection, and deleting a collection closes its tabs.
+      return !findRequest(loaded[tab.collectionId]!.items, tab.requestId);
     });
     if (gone.length) closeTabs(gone.map(tabKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -531,9 +531,12 @@ export function IntegrationTestsView({
     }
   };
 
+  /** Collections not loaded yet are acted on from the sidebar, which lists their summary. */
+  const collectionName = (collectionId: string) =>
+    loaded[collectionId]?.name ?? summaries.find((item) => item.id === collectionId)!.name;
+
   const deleteCollection = (collectionId: string) => {
-    const name =
-      loaded[collectionId]?.name ?? summaries.find((item) => item.id === collectionId)?.name ?? '';
+    const name = collectionName(collectionId);
     setConfirming({
       title: t('apiTests.deleteCollection'),
       description: t('apiTests.deleteCollectionConfirm', { name }),
@@ -550,10 +553,7 @@ export function IntegrationTestsView({
   const renameCollection = (collectionId: string) =>
     setNaming({
       title: t('apiTests.ui.renameCollection'),
-      initial:
-        loaded[collectionId]?.name ??
-        summaries.find((item) => item.id === collectionId)?.name ??
-        '',
+      initial: collectionName(collectionId),
       confirmLabel: t('apiTests.ui.rename'),
       submit: (name) => {
         setNaming(null);
@@ -1118,9 +1118,10 @@ export function IntegrationTestsView({
         destructive
         onCancel={() => setConfirming(null)}
         onConfirm={() => {
-          const prompt = confirming;
+          // The dialog is open only while there is something to confirm.
+          const prompt = confirming!;
           setConfirming(null);
-          if (prompt) void Promise.resolve(prompt.confirm()).catch(fail);
+          void Promise.resolve(prompt.confirm()).catch(fail);
         }}
       />
     </div>

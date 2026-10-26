@@ -4,13 +4,15 @@ import type { AgentWorkflowRepository } from '../application/agent-workflow-repo
 export class InMemoryAgentWorkflowRepository implements AgentWorkflowRepository {
   private readonly workflows = new Map<string, AgentWorkflow>();
 
-  public async findByWorkspace(workspaceId: string): Promise<AgentWorkflow> {
-    return structuredClone(this.workflows.get(workspaceId) ?? EMPTY_AGENT_WORKFLOW);
+  public findByWorkspace(workspaceId: string): Promise<AgentWorkflow> {
+    return Promise.resolve(
+      structuredClone(this.workflows.get(workspaceId) ?? EMPTY_AGENT_WORKFLOW),
+    );
   }
 
-  public async save(workspaceId: string, workflow: AgentWorkflow): Promise<AgentWorkflow> {
+  public save(workspaceId: string, workflow: AgentWorkflow): Promise<AgentWorkflow> {
     const saved = { ...structuredClone(workflow), updatedAt: new Date().toISOString() };
     this.workflows.set(workspaceId, saved);
-    return structuredClone(saved);
+    return Promise.resolve(structuredClone(saved));
   }
 }

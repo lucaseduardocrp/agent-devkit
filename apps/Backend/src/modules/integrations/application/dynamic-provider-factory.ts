@@ -106,7 +106,7 @@ export class DynamicProviderFactory {
     url: URL,
   ): Promise<Record<string, string> | null> {
     const host = url.hostname.toLowerCase();
-    const firstSegment = decodeURIComponent(url.pathname.split('/')[1] ?? '').toLowerCase();
+    const firstSegment = decodeURIComponent(url.pathname.split('/')[1]!).toLowerCase();
     const sameHost = (value: unknown) => {
       try {
         return new URL(asString(value)).hostname.toLowerCase() === host;

@@ -45,7 +45,10 @@ describe('AiKnowledgeTestPlanGenerator rejects unusable model steps', () => {
 
   it.each([
     ['generic actions', [{ action: 'Execute the test.', expected: 'The report is displayed.' }]],
-    ['generic expected results', [{ action: 'Open the report screen.', expected: 'Works as expected.' }]],
+    [
+      'generic expected results',
+      [{ action: 'Open the report screen.', expected: 'Works as expected.' }],
+    ],
     [
       'oversized actions',
       [{ action: `Open the report ${'x'.repeat(250)}`, expected: 'The report is displayed.' }],
@@ -54,7 +57,8 @@ describe('AiKnowledgeTestPlanGenerator rejects unusable model steps', () => {
       'actions copied from the requirement',
       [
         {
-          action: 'Report screen must display every employee dismissal record filtered between dates',
+          action:
+            'Report screen must display every employee dismissal record filtered between dates',
           expected: 'The report is displayed.',
         },
       ],
@@ -64,7 +68,8 @@ describe('AiKnowledgeTestPlanGenerator rejects unusable model steps', () => {
       [
         {
           action: 'Open the report screen.',
-          expected: 'Report screen must display every employee dismissal record filtered between dates',
+          expected:
+            'Report screen must display every employee dismissal record filtered between dates',
         },
       ],
     ],
@@ -89,7 +94,8 @@ describe('AiKnowledgeTestPlanGenerator rejects unusable model steps', () => {
     const { complete, llm } = llmReturning([
       {
         action: 'Open the employee report screen and choose the dismissal filter options available',
-        expected: 'The filtered list shows only matching people with their names and current status',
+        expected:
+          'The filtered list shows only matching people with their names and current status',
       },
     ]);
     const result = await new AiKnowledgeTestPlanGenerator({ defaultLlm: llm }).generate({

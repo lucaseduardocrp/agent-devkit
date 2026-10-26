@@ -9,7 +9,6 @@ const { httpsRequest, dnsLookup } = vi.hoisted(() => ({
 vi.mock('node:https', () => ({ request: httpsRequest }));
 vi.mock('node:dns/promises', () => ({ lookup: dnsLookup }));
 
-
 type Address = { address: string; family: 4 | 6 };
 type LookupCallback = (error: Error | null, address: unknown, family?: number) => void;
 interface RequestOptions {
@@ -172,19 +171,13 @@ describe('tunnel probe over HTTPS (faked socket)', () => {
       respond(response);
       response.emit('error', new Error('reset'));
     });
-    await expect(probeTunnel('https://app.example.com', publicDns)).resolves.toEqual(
-      networkError,
-    );
+    await expect(probeTunnel('https://app.example.com', publicDns)).resolves.toEqual(networkError);
 
     serve(({ outgoing }) => outgoing.emit('error', new Error('ECONNREFUSED')));
-    await expect(probeTunnel('https://app.example.com', publicDns)).resolves.toEqual(
-      networkError,
-    );
+    await expect(probeTunnel('https://app.example.com', publicDns)).resolves.toEqual(networkError);
 
     const sent = serve(({ outgoing }) => outgoing.emit('timeout'));
-    await expect(probeTunnel('https://app.example.com', publicDns)).resolves.toEqual(
-      networkError,
-    );
+    await expect(probeTunnel('https://app.example.com', publicDns)).resolves.toEqual(networkError);
     expect(sent[0]!.destroy).toHaveBeenCalledWith(new Error('timeout'));
   });
 });

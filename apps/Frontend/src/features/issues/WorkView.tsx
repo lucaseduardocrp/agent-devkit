@@ -63,8 +63,9 @@ function formatIssueDescription(value: string): string {
   const parser = new DOMParser();
   let parsed = parser.parseFromString(value, 'text/html');
   // Some imported work items contain HTML that was escaped before being stored.
-  if (!/<\/?[a-z][^>]*>/i.test(value) && /<\/?[a-z][^>]*>/i.test(parsed.body.textContent ?? ''))
-    parsed = parser.parseFromString(parsed.body.textContent ?? value, 'text/html');
+  const text = parsed.body.textContent;
+  if (!/<\/?[a-z][^>]*>/i.test(value) && /<\/?[a-z][^>]*>/i.test(text))
+    parsed = parser.parseFromString(text, 'text/html');
   for (const element of [...parsed.body.querySelectorAll<HTMLElement>('*')]) {
     if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'MATH'].includes(element.tagName)) {
       element.remove();
@@ -95,6 +96,7 @@ function formatIssueDescription(value: string): string {
         continue;
       element.removeAttribute(attribute.name);
     }
+    if (element.tagName === 'IMG' && !element.hasAttribute('src')) element.remove();
   }
   return parsed.body.innerHTML;
 }
@@ -742,10 +744,9 @@ export function WorkView({
     });
   };
 
-  const updateIssue = (changes: IssueChanges) => {
-    if (!selectedIssue) return;
+  const updateIssue = (issueId: string, changes: IssueChanges) => {
     void runAction(async () => {
-      await apiClient.updateIssue(selectedIssue.id, changes);
+      await apiClient.updateIssue(issueId, changes);
     });
   };
 
@@ -1706,8 +1707,8 @@ export function WorkView({
               onPaste={formImages.onPaste}
               onDrop={formImages.onDrop}
             />
-            <ImageInputStatus state={formImages} />
           </label>
+          <ImageInputStatus state={formImages} />
           <AttachmentPanel
             apiClient={apiClient}
             scope="issue"
@@ -1844,7 +1845,9 @@ export function WorkView({
                         disabled={isReadOnly || busy}
                         value={selectedIssue.status}
                         onChange={(event) =>
-                          updateIssue({ status: event.target.value as IssueStatus })
+                          updateIssue(selectedIssue.id, {
+                            status: event.target.value as IssueStatus,
+                          })
                         }
                       >
                         {statusOrder.map((key) => (
@@ -1860,7 +1863,9 @@ export function WorkView({
                         disabled={isReadOnly || busy}
                         value={selectedIssue.priority}
                         onChange={(event) =>
-                          updateIssue({ priority: event.target.value as IssuePriority })
+                          updateIssue(selectedIssue.id, {
+                            priority: event.target.value as IssuePriority,
+                          })
                         }
                       >
                         {priorityOrder.map((key) => (
@@ -1876,7 +1881,9 @@ export function WorkView({
                         disabled={isReadOnly || busy}
                         value={selectedIssue.assigneeAgentId ?? ''}
                         onChange={(event) =>
-                          updateIssue({ assigneeAgentId: event.target.value || null })
+                          updateIssue(selectedIssue.id, {
+                            assigneeAgentId: event.target.value || null,
+                          })
                         }
                       >
                         <option value="">{t.noAgent}</option>
@@ -1889,7 +1896,9 @@ export function WorkView({
                         disabled={isReadOnly || busy}
                         value={selectedIssue.assigneeUserId ?? ''}
                         onChange={(event) =>
-                          updateIssue({ assigneeUserId: event.target.value || null })
+                          updateIssue(selectedIssue.id, {
+                            assigneeUserId: event.target.value || null,
+                          })
                         }
                       >
                         <option value="">{t.unassigned}</option>
@@ -1971,8 +1980,8 @@ export function WorkView({
                             onPaste={detailImages.onPaste}
                             onDrop={detailImages.onDrop}
                           />
-                          <ImageInputStatus state={detailImages} />
                         </label>
+                        <ImageInputStatus state={detailImages} />
                         <div className="flex gap-2">
                           <Button
                             type="submit"

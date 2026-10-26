@@ -211,6 +211,15 @@ function asText(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** A response header; null when absent or when the name is not a valid header name (e.g. empty). */
+function readHeader(headers: Headers, name: string | undefined): string | null {
+  try {
+    return headers.get(name ?? '');
+  } catch {
+    return null;
+  }
+}
+
 function typeOf(value: unknown): string {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
@@ -239,7 +248,7 @@ function evaluate(
       actual = response.durationMs;
       break;
     case 'header': {
-      const value = response.headers.get(assertion.path ?? '');
+      const value = readHeader(response.headers, assertion.path);
       present = value !== null;
       actual = value ?? undefined;
       break;
@@ -315,7 +324,7 @@ function capture(rule: Capture, response: ResponseView): string | undefined {
     case 'status':
       return String(response.status);
     case 'header':
-      return response.headers.get(rule.path ?? '') ?? undefined;
+      return readHeader(response.headers, rule.path) ?? undefined;
     case 'body':
       return response.text;
     case 'json': {
@@ -363,7 +372,7 @@ export async function executeRequest(
       durationMs: 0,
       sizeBytes: 0,
       passed: false,
-      error: `Invalid request: ${error instanceof Error ? error.message : String(error)}`,
+      error: `Invalid request: ${(error as Error).message}`,
       assertions: [],
     };
   }

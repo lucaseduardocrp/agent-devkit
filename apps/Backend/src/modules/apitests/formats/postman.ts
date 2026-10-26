@@ -270,7 +270,7 @@ function jsonAccess(path: string): string {
 }
 
 /** The checks and captures of a request as a Postman test script. */
-export function scriptFor(request: ApiRequestSpec): string[] {
+function scriptFor(request: ApiRequestSpec): string[] {
   const lines: string[] = [];
   for (const assertion of request.assertions) {
     const expected = js(assertion.expected ?? '');

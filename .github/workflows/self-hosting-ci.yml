@@ -43,6 +43,8 @@ jobs:
         run: |
           bash -n adk.sh
           bash -n ADK.command
+          # The single quotes keep $e for PowerShell.
+          # shellcheck disable=SC2016
           pwsh -NoProfile -Command '$e = $null; [System.Management.Automation.Language.Parser]::ParseFile("scripts/adk.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
       - name: Validate the Compose files
         run: |

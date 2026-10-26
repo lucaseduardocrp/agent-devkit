@@ -225,6 +225,31 @@ export const ptBR = {
   TEST_MANAGEMENT_PLAN_NOT_FOUND: 'Test plan não encontrado na plataforma de gestão de testes.',
   TEST_RUN_NOTHING_TO_PUBLISH:
     'Nenhum teste executado está vinculado a um test case desta plataforma.',
+  AGENT_TOO_MANY_SKILLS: 'Este agente tem mais skills do que o permitido.',
+  AGENT_WORKFLOW_AGENT_IN_USE:
+    'Este agente é usado pelo workflow ativo do workspace. Atualize o workflow antes de excluí-lo.',
+  AGENT_WORKFLOW_AGENT_REQUIRED:
+    'Selecione um agente no workflow ou no workspace antes de gerar este plano de teste.',
+  AGENT_WORKFLOW_EMPTY: 'Um workflow ativo precisa de pelo menos uma etapa ou regra de módulo.',
+  AGENT_WORKFLOW_INVALID_RULE: 'Uma regra de módulo do workflow é inválida.',
+  AGENT_WORKFLOW_INVALID_STEP: 'Uma etapa do workflow é inválida.',
+  AGENT_WORKFLOW_OUTPUT_INVALID: 'O workflow de agentes não produziu passos de teste válidos.',
+  AGENT_WORKFLOW_PROVIDER_ACTION_REQUIRED: 'Restrições de provedor precisam do nome exato da ação.',
+  AGENT_WORKFLOW_TOO_LONG: 'Um workflow pode ter no máximo 20 etapas.',
+  AGENT_WORKFLOW_TOO_MANY_RULES: 'Um workflow pode ter no máximo 100 regras de módulo.',
+  ATTACHMENTS_UNAVAILABLE: 'O armazenamento de arquivos não está configurado.',
+  ATTACHMENT_HOST_NOT_INTEGRATED:
+    'Este arquivo não está hospedado por uma integração do workspace.',
+  ATTACHMENT_IN_USE:
+    'Só é possível descartar envios não salvos; arquivos salvos são removidos com o item.',
+  ATTACHMENT_NOT_FOUND: 'Arquivo não encontrado.',
+  ATTACHMENT_TOO_LARGE: 'Este arquivo é maior do que o permitido para o tipo.',
+  ATTACHMENT_TYPE_UNSUPPORTED: 'Este tipo de arquivo não é suportado.',
+  ATTACHMENT_UNAVAILABLE: 'O provedor não retornou o arquivo.',
+  HUB_SKILL_NOT_FOUND: 'Esta skill não está no ADK Hub.',
+  HUB_SKILL_TOO_LARGE: 'Esta skill é grande demais para um agente.',
+  IMAGE_NOT_FOUND: 'Imagem não encontrada.',
+  WORKFLOW_ANSWER_REQUIRED: 'Uma resposta é obrigatória.',
 } as const;
 
 export type ErrorMessageCode = keyof typeof ptBR;

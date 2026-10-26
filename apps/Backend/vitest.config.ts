@@ -5,7 +5,7 @@ export default defineConfig({
   test: {
     // The code has no built-in encryption key, so each test run gets a fresh one.
     env: { INTEGRATION_ENCRYPTION_KEY: randomBytes(32).toString('hex') },
-    exclude: [...configDefaults.exclude, 'tests/integration/**', '.e2e-workspaces-test-*/**'],
+    exclude: [...configDefaults.exclude, 'tests/integration/**', '.e2e-workspaces-*/**'],
     coverage: {
       all: true,
       exclude: [

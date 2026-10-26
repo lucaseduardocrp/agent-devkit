@@ -4,13 +4,11 @@ import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { Input } from '../../components/ui/input.js';
 import { Modal } from '../../components/ui/modal.js';
-import { Select } from '../../components/ui/select.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import type { ApiClient } from '../../lib/api-client.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import type {
   ApiRunStatus,
-  ApiRunTarget,
   GenerationRequest,
   KeyValue,
   SourceType,
@@ -186,27 +184,6 @@ export function VariablesEditor({
         </Button>
       )}
     </div>
-  );
-}
-
-export function TargetSelect({
-  value,
-  onChange,
-}: {
-  readonly value: ApiRunTarget;
-  readonly onChange: (target: ApiRunTarget) => void;
-}): React.JSX.Element {
-  const { t } = useI18n();
-  return (
-    <Select
-      aria-label={t('apiTests.target')}
-      value={value}
-      onChange={(event) => onChange(event.target.value as ApiRunTarget)}
-      data-testid="run-target"
-    >
-      <option value="remote">{t('apiTests.targetRemote')}</option>
-      <option value="local">{t('apiTests.targetLocal')}</option>
-    </Select>
   );
 }
 

@@ -64,16 +64,14 @@ function parseRules(raw: unknown): AgentWorkflowRule[] {
         id: value['id'],
         name: value['name'],
         toolset: value['toolset'] as AgentWorkflowToolset,
-        effect: value['effect'] as AgentWorkflowRule['effect'],
-        ...(value['toolName'] ? { toolName: value['toolName'] as string } : {}),
-        ...(allowedProviders !== undefined
-          ? { allowedProviders: allowedProviders as string[] }
-          : {}),
+        effect: value['effect'],
+        ...(value['toolName'] ? { toolName: value['toolName'] } : {}),
+        ...(allowedProviders !== undefined ? { allowedProviders } : {}),
         ...(value['createIssueForAction'] !== undefined
-          ? { createIssueForAction: value['createIssueForAction'] as boolean }
+          ? { createIssueForAction: value['createIssueForAction'] }
           : {}),
         ...(value['requireApproval'] !== undefined
-          ? { requireApproval: value['requireApproval'] as boolean }
+          ? { requireApproval: value['requireApproval'] }
           : {}),
       },
     ];

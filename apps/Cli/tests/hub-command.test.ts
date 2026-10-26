@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runHubCommand, type HubCommandOptions } from '../src/hub/command.js';
 import { formatInfo, formatInstalled, formatList, mcpInstructions } from '../src/hub/format.js';
 import { HubInstaller } from '../src/hub/install.js';
@@ -162,6 +162,34 @@ describe('devkit skills / plugins', () => {
   });
 });
 
+describe('devkit skills / plugins defaults', () => {
+  it('reads the newest hub index and resolves folders from the user home and working directory', async () => {
+    const home = await tempHome();
+    const index = hubIndex();
+    const fetcher = vi.fn((url: string | URL | Request) =>
+      Promise.resolve(
+        String(url).endsWith('/main/index.json')
+          ? Response.json(index)
+          : new Response('rate limit', { status: 403 }),
+      ),
+    );
+    const said: string[] = [];
+    const context = {
+      say: (message: string) => said.push(message),
+      print: () => undefined,
+      installer: new HubInstaller({ lockFile: home.lockFile, fetch: fetcher }),
+      fetch: fetcher,
+    };
+    await runHubCommand('skill', ['edge'], {}, context);
+    expect(said[0]).toMatch(/edge-hunter/);
+    for (const scope of ['user', 'project'] as const)
+      await expect(
+        runHubCommand('skill', ['remove', 'edge-hunter'], { scope }, context),
+      ).rejects.toThrow('was not installed with devkit');
+    expect(said).toHaveLength(1);
+  });
+});
+
 describe('hub output', () => {
   const index = hubIndex();
 
@@ -170,6 +198,23 @@ describe('hub output', () => {
       formatList(index, 'plugin', [pluginEntry({ tier: 'verified', category: 'unknown' })]),
     ).toMatch(/jira-qa\s+verified\s+unknown/);
     expect(formatInstalled([])).toMatch(/Nothing from the ADK Hub is installed/);
+    expect(
+      formatInstalled([
+        {
+          kind: 'skill',
+          name: 'edge-hunter',
+          version: '',
+          revision: 'b'.repeat(64),
+          skillsDir: '/skills',
+          paths: [],
+          mcpServers: [],
+          installedAt: '2026-10-23T12:00:00Z',
+        },
+      ]),
+    ).toBe(`skill   edge-hunter  ${'b'.repeat(12)}  → /skills`);
+    expect(
+      formatList(index, 'skill', [skillEntry(), skillEntry({ name: 'other-skill' })]),
+    ).toContain('2 skills.');
     expect(formatList(index, 'skill', [skillEntry({ description: 'x'.repeat(100) })])).toContain(
       '…',
     );
@@ -199,6 +244,13 @@ describe('hub output', () => {
     expect(plugin).toContain(`Version      ${'a'.repeat(12)}`);
     expect(plugin).toContain('(pkg)');
     expect(plugin).toContain('Skills       -');
+    const bare = formatInfo(
+      index,
+      'plugin',
+      pluginEntry({ capabilities: { skills: [], agents: [], mcpServers: [], requiresEnv: [] } }),
+    );
+    expect(bare).toContain('MCP servers  -');
+    expect(bare).toContain('Needs env    -');
     expect(plugin).toContain('Platforms    linux');
     expect(plugin).toContain('Needs devkit >=0.2.0');
     expect(plugin).toContain('Disclosure: Sends issue text to Jira.');
@@ -229,5 +281,9 @@ describe('hub output', () => {
       '"mcpServers"',
     );
     expect(mcpInstructions('claude', 'user', {})).toEqual([]);
+    // A plugin's .mcp.json may leave the command out; the command shows that nothing would run.
+    expect(mcpInstructions('codex', 'user', { broken: {} })[1]).toBe(
+      "  codex mcp add broken -- ''",
+    );
   });
 });

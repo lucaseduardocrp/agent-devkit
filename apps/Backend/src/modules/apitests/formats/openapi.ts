@@ -43,7 +43,7 @@ function resolve(document: Json, value: unknown, depth = 0): unknown {
 }
 
 /** A plausible example value for a JSON schema, preferring the schema's own examples. */
-export function sampleFor(
+function sampleFor(
   document: Json,
   schemaValue: unknown,
   depth = 0,
