@@ -71,12 +71,15 @@ describe('local browser setup', () => {
     await expect(fs.stat(path.join(home, 'runs', 'package.json'))).resolves.toBeTruthy();
   });
 
-  it('links Playwright with a directory symlink outside Windows', async () => {
-    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+  it.each([
+    ['linux', 'dir'],
+    ['win32', 'junction'],
+  ])('links Playwright on %s with a %s link', async (name, type) => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue(name as NodeJS.Platform);
     const symlink = vi.spyOn(fs, 'symlink').mockResolvedValue(undefined);
     const home = await tempDir();
     await prepareWorkspaceRoot(home, playwrightPackageRoot());
-    expect(symlink).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'dir');
+    expect(symlink).toHaveBeenCalledWith(expect.any(String), expect.any(String), type);
     platform.mockRestore();
   });
 

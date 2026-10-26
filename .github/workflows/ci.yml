@@ -46,6 +46,10 @@ jobs:
       - if: matrix.app == 'Cli'
         run: npm ci
         working-directory: apps/Mcp
+      # The backend's tests and typecheck run the CLI's local E2E runner against the backend's.
+      - if: matrix.app == 'Backend'
+        run: npm ci
+        working-directory: apps/Cli
       - run: npm ci
       # Formatting, linters, typecheck and tests with the 100% coverage thresholds of vitest.config.ts.
       - run: npm run verify

@@ -111,6 +111,17 @@ describe('PostgreSQL Authentication & Multi-Tenant Integrations E2E', () => {
   });
 
   it('stores AES-256-GCM encrypted integrations and isolates them strictly between users', async () => {
+    // Integrations belong to a workspace; without the workspace module each user's id is the owner,
+    // so each user gets a workspace with that id (deleted with the user).
+    await database.client.workspaceRecord.createMany({
+      data: [userAId, userBId].map((id) => ({
+        id,
+        name: 'Integration test',
+        slug: id,
+        ownerId: id,
+      })),
+    });
+
     // User A configures Azure DevOps Wiki
     const saveA = await request(app)
       .put('/integrations/KNOWLEDGE/azure_devops_wiki')
