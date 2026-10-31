@@ -555,7 +555,9 @@ export class DynamicProviderFactory {
             providerId === 'openai'
               ? 'https://api.openai.com/v1'
               : 'https://api.groq.com/openai/v1';
-          const res = await fetcher(`${baseUrl}/models/${encodeURIComponent(model)}`, {
+          // Groq model ids are namespaced (e.g. openai/gpt-oss-120b); keep the slashes.
+          const modelPath = model.split('/').map(encodeURIComponent).join('/');
+          const res = await fetcher(`${baseUrl}/models/${modelPath}`, {
             headers: { authorization: `Bearer ${secret.trim()}` },
           });
           return res.ok

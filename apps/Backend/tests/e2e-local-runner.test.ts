@@ -81,6 +81,7 @@ describe('LocalE2eRunner', () => {
     expect(task.input).toEqual({
       kind: 'run',
       script: 'spec',
+      hooks: null,
       mode: 'frontend',
       baseUrl: 'http://localhost:8014',
       locale: 'pt-BR',

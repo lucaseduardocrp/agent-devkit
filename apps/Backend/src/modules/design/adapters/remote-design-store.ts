@@ -7,6 +7,10 @@ import type {
   DesignRemoteStore,
   DesignRepositoryProvider,
 } from '../application/design-service.js';
+import {
+  InMemoryDesignSettingsStore,
+  type DesignSettingsStore,
+} from '../application/design-settings-store.js';
 
 const root = 'design-prototypes';
 const systemsRoot = 'design-systems';
@@ -28,15 +32,35 @@ interface RemoteFile {
 
 const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 const encodePath = (path: string): string => path.split('/').map(encodeURIComponent).join('/');
+/** "owner/repo" and "Project/Repo" both split on the last slash. */
+const splitRepositoryName = (value: string): [string, string] => {
+  const slash = value.lastIndexOf('/');
+  return slash < 0
+    ? ['', value.trim()]
+    : [value.slice(0, slash).trim(), value.slice(slash + 1).trim()];
+};
 
 export class RemoteDesignStore implements DesignRemoteStore {
   public constructor(
     private readonly integrations: IntegrationsService,
     private readonly fetcher: typeof fetch = fetch,
+    private readonly settings: DesignSettingsStore = new InMemoryDesignSettingsStore(),
   ) {}
 
+  /**
+   * Design works in the one repository chosen in its settings. Workspaces that have not chosen
+   * one yet still fall back to the repository their integration carries.
+   */
   public async configuredProviders(workspaceId: string) {
     const integrations = await this.integrations.listIntegrations(workspaceId);
+    const chosen = await this.settings.get(workspaceId);
+    if (chosen) {
+      const providerId = chosen.provider === 'github' ? 'github_projects' : 'azure_devops_wiki';
+      const connected = integrations.some(
+        (item) => item.providerId === providerId && item.isEnabled,
+      );
+      return connected ? [chosen.provider] : [];
+    }
     const providers: DesignRepositoryProvider[] = [];
     if (
       integrations.some(
@@ -272,16 +296,25 @@ export class RemoteDesignStore implements DesignRemoteStore {
         409,
       );
     }
-    const repo = text(integration.settings.repo) || text(integration.settings.repository);
+    // The repository and branch are chosen in the Design module. Workspaces configured before
+    // that move still carry them in the integration, which is used until Design has its own.
+    const chosen = await this.settings.get(workspaceId);
+    const picked = chosen?.provider === provider ? chosen : null;
+    const [pickedOwner, pickedRepo] = splitRepositoryName(picked?.repositoryName ?? '');
+    const repo =
+      pickedRepo || text(integration.settings.repo) || text(integration.settings.repository);
+    const branch = picked?.branch || text(integration.settings.branch) || 'main';
     if (!repo) {
       throw new ApplicationError(
         'DESIGN_REPOSITORY_NOT_CONFIGURED',
-        'Informe o repositório na configuração da integração.',
+        'Escolha o repositório e a branch nas configurações do Design.',
         409,
       );
     }
     if (provider === 'github') {
-      const owner = text(integration.settings.owner) || text(integration.settings.organization);
+      // Listings name a GitHub repository "owner/repo".
+      const owner =
+        pickedOwner || text(integration.settings.owner) || text(integration.settings.organization);
       if (!owner) {
         throw new ApplicationError(
           'DESIGN_REPOSITORY_NOT_CONFIGURED',
@@ -295,11 +328,12 @@ export class RemoteDesignStore implements DesignRemoteStore {
         owner,
         repo,
         baseUrl: text(integration.settings.baseUrl) || 'https://api.github.com',
-        branch: text(integration.settings.branch) || 'main',
+        branch,
       };
     }
     const organization = text(integration.settings.organization);
-    const project = text(integration.settings.project);
+    // Listings name an Azure DevOps repository "Project/Repo".
+    const project = pickedOwner || text(integration.settings.project);
     if (!organization || !project) {
       throw new ApplicationError(
         'DESIGN_REPOSITORY_NOT_CONFIGURED',
@@ -319,7 +353,7 @@ export class RemoteDesignStore implements DesignRemoteStore {
       project,
       repo,
       baseUrl: baseUrl || `https://dev.azure.com/${organization}`,
-      branch: text(integration.settings.branch) || 'main',
+      branch,
     };
   }
 

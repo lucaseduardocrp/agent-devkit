@@ -399,6 +399,19 @@ const cases: Record<string, [unknown, string]> = {
     { collectionId: 'c1', format: 'bruno' },
     'GET /integration-tests/collections/c1/export',
   ],
+  integration_list_repositories: [{}, 'GET /integration-tests/repositories'],
+  integration_list_branches: [
+    { provider: 'github', repositoryId: '42' },
+    'GET /integration-tests/repositories/branches',
+  ],
+  integration_preview_pipeline: [
+    { collectionId: 'c1' },
+    'GET /integration-tests/collections/c1/ci',
+  ],
+  integration_publish_pipeline: [
+    { collectionId: 'c1' },
+    'POST /integration-tests/collections/c1/ci',
+  ],
   integration_list_environments: [{}, 'GET /integration-tests/environments'],
   integration_save_environment: [
     { environmentId: 'e1', name: 'Staging' },
@@ -414,6 +427,18 @@ const cases: Record<string, [unknown, string]> = {
   ],
   integration_generate: [{ instructions: 'Orders API' }, 'POST /integration-tests/generate'],
   integration_run: [{ collectionId: 'c1', target: 'local' }, 'POST /integration-tests/runs'],
+  integration_get_runtime: [
+    { collectionId: 'c1' },
+    'GET /integration-tests/collections/c1/runtime',
+  ],
+  integration_clear_runtime: [
+    { collectionId: 'c1' },
+    'DELETE /integration-tests/collections/c1/runtime',
+  ],
+  integration_clear_personal_secret: [
+    { scope: 'collection', scopeId: 'c1', ref: 'var:token' },
+    'DELETE /integration-tests/personal-secrets',
+  ],
   integration_list_runs: [{}, 'GET /integration-tests/runs'],
   integration_get_run: [{ runId: 'r1' }, 'GET /integration-tests/runs/r1'],
   integration_cancel_run: [{ runId: 'r1' }, 'POST /integration-tests/runs/r1/cancel'],
@@ -962,7 +987,13 @@ describe('e2e tools', () => {
     const rerun = await call('e2e_run_test', { testId: 't1', regenerate: true });
     expect(rerun.api.calls[0]!.body).toEqual({ regenerate: true });
     const update = await call('e2e_update_script', { testId: 't1', content: 'test("x")' });
-    expect(update.api.calls[0]!.body).toEqual({ content: 'test("x")' });
+    expect(update.api.calls[0]!.body).toEqual({ content: 'test("x")', kind: 'spec' });
+    const cleanup = await call('e2e_update_script', {
+      testId: 't1',
+      kind: 'afterRun',
+      content: '',
+    });
+    expect(cleanup.api.calls[0]!.body).toEqual({ content: '', kind: 'afterRun' });
     expect((await call('e2e_delete', { runId: 'c1' })).data).toEqual({
       deleted: true,
       runId: 'c1',

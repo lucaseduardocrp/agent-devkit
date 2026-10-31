@@ -14,6 +14,9 @@ export type NavTab =
   | 'pbis'
   | 'brain'
   | 'agents'
+  | 'agentsPlayground'
+  | 'agentsMap'
+  | 'agentsWorkflow'
   | 'spec'
   | 'releaseNotes'
   | 'design'
@@ -124,6 +127,12 @@ export function Sidebar({
   const isProductChild =
     activeTab === 'design' || activeTab === 'spec' || activeTab === 'releaseNotes';
   const [productExpanded, setProductExpanded] = useState<boolean>(isProductChild);
+  const isAgentsChild =
+    activeTab === 'agents' ||
+    activeTab === 'agentsPlayground' ||
+    activeTab === 'agentsMap' ||
+    activeTab === 'agentsWorkflow';
+  const [agentsExpanded, setAgentsExpanded] = useState<boolean>(isAgentsChild);
 
   const activeMembership = workspaces?.find((w) => w.workspace.id === activeWorkspaceId);
   const { can } = usePermissions();
@@ -320,8 +329,34 @@ export function Sidebar({
             {item('dashboard', 'ti-layout-dashboard', t('nav.dashboard'), {
               testId: 'sidebar-dashboard-button',
             })}
-            {item('agents', 'ti-robot', t('nav.agents'), { testId: 'sidebar-agents-button' })}
             {item('brain', 'ti-brain', t('nav.brain'))}
+            {show('agents') &&
+              group(
+                t('nav.ai'),
+                'ti-robot',
+                agentsExpanded,
+                isAgentsChild,
+                () => setAgentsExpanded((prev) => !prev),
+                <>
+                  {item('agents', 'ti-layout-grid', t('nav.agents'), {
+                    nested: true,
+                    testId: 'sidebar-agents-button',
+                  })}
+                  {item('agentsPlayground', 'ti-terminal-2', t('agents.playground'), {
+                    nested: true,
+                    testId: 'sidebar-agents-playground-button',
+                  })}
+                  {item('agentsMap', 'ti-sitemap', t('agents.map'), {
+                    nested: true,
+                    testId: 'sidebar-agents-map-button',
+                  })}
+                  {item('agentsWorkflow', 'ti-route', t('agents.workflow'), {
+                    nested: true,
+                    testId: 'sidebar-agents-workflow-button',
+                  })}
+                </>,
+                'sidebar-agents-group-button',
+              )}
 
             {showProduct &&
               group(

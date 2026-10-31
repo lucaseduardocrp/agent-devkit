@@ -1,7 +1,11 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { E2eTestDetail } from '../src/features/e2e/E2eTestDetail.js';
-import { formatDuration, type E2eTestDetail as Dto } from '../src/features/e2e/e2e-types.js';
+import {
+  formatDuration,
+  type E2eScriptKind,
+  type E2eTestDetail as Dto,
+} from '../src/features/e2e/e2e-types.js';
 import type { ApiClient } from '../src/lib/api-client.js';
 
 function detail(overrides: Partial<Dto> = {}): Dto {
@@ -14,6 +18,8 @@ function detail(overrides: Partial<Dto> = {}): Dto {
     description: 'Validate that the list reorders in real time.',
     steps: ['Open the event', 'Vote'],
     priority: 'high',
+    beforeRunInstructions: null,
+    afterRunInstructions: null,
     status: 'failed',
     error: 'expect(locator).toBeVisible() failed',
     analysis: 'Goal: ...\nWhat failed: ...',
@@ -43,6 +49,7 @@ function detail(overrides: Partial<Dto> = {}): Dto {
 const SPEC = "import { test } from '@playwright/test';";
 function script(content: string | null = SPEC) {
   return {
+    kind: 'spec' as E2eScriptKind,
     path: 'tests/e2e/tc007-ordering.spec.ts',
     content,
     url: 'https://github.com/acme/demo-app/blob/main/tests/e2e/tc007-ordering.spec.ts',
@@ -66,6 +73,7 @@ function setup(response: Dto | Error = detail(), isReadOnly = false) {
     rerunE2eTest: vi.fn().mockResolvedValue(undefined),
     getE2eScript: vi.fn().mockResolvedValue(script()),
     pushE2eScript: vi.fn(),
+    saveE2eHookInstructions: vi.fn(),
   };
   const onBack = vi.fn();
   const view = render(
@@ -113,6 +121,8 @@ describe('E2eTestDetail', () => {
       'Preview',
       'Test Case',
       'Código',
+      'Before Run',
+      'After Run',
     ]);
     expect(view.queryByText('Caso de uso')).toBeNull();
     await openInfoTab(view);
@@ -328,7 +338,7 @@ describe('E2eTestDetail', () => {
     const { view, client } = setup(detail({ status: 'passed', error: null, analysis: null }));
     await view.findByText('TC007-Ensure real-time ordering');
     fireEvent.click(view.getByRole('tab', { name: 'Código' }));
-    await waitFor(() => expect(client.getE2eScript).toHaveBeenCalledWith('t1'));
+    await waitFor(() => expect(client.getE2eScript).toHaveBeenCalledWith('t1', 'spec'));
     expect(await view.findByRole('link', { name: 'Abrir no repositório' })).toHaveAttribute(
       'href',
       'https://github.com/acme/demo-app/blob/main/tests/e2e/tc007-ordering.spec.ts',
@@ -342,7 +352,7 @@ describe('E2eTestDetail', () => {
     client.pushE2eScript.mockResolvedValueOnce(script(`${SPEC}\n// edited`));
     fireEvent.click(view.getByRole('button', { name: /Push/ }));
     await waitFor(() =>
-      expect(client.pushE2eScript).toHaveBeenCalledWith('t1', `${SPEC}\n// edited`),
+      expect(client.pushE2eScript).toHaveBeenCalledWith('t1', `${SPEC}\n// edited`, 'spec'),
     );
     expect(await view.findByText('Script enviado para o repositório.')).toBeInTheDocument();
     expect(view.queryByLabelText('Código')).toBeNull();
@@ -384,7 +394,108 @@ describe('E2eTestDetail', () => {
     fireEvent.change(view.getByLabelText('Código'), { target: { value: SPEC } });
     client.pushE2eScript.mockResolvedValueOnce(script());
     fireEvent.click(view.getByRole('button', { name: /Push/ }));
-    await waitFor(() => expect(client.pushE2eScript).toHaveBeenCalledWith('t1', SPEC));
+    await waitFor(() => expect(client.pushE2eScript).toHaveBeenCalledWith('t1', SPEC, 'spec'));
+  });
+
+  it('writes the Before Run from a template and pulls the After Run in their own tabs', async () => {
+    const { view, client } = setup(detail({ status: 'passed' }));
+    await view.findByText('TC007-Ensure real-time ordering');
+    client.getE2eScript.mockResolvedValueOnce({
+      ...script(null),
+      kind: 'beforeRun',
+      path: 'tests/e2e/tc007.before.ts',
+    });
+    fireEvent.click(view.getByRole('tab', { name: 'Before Run' }));
+    await waitFor(() => expect(client.getE2eScript).toHaveBeenCalledWith('t1', 'beforeRun'));
+    expect(await view.findByText(/Este teste não tem Before Run/)).toBeInTheDocument();
+    expect(view.getByText(/prepara as pré-condições/)).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: /Editar/ }));
+    const editor = view.getByLabelText('Before Run') as HTMLTextAreaElement;
+    expect(editor.value).toContain(
+      'export default async function beforeRun({ page, request }: { page: Page; request: APIRequestContext })',
+    );
+    client.pushE2eScript.mockResolvedValueOnce({ ...script(editor.value), kind: 'beforeRun' });
+    fireEvent.click(view.getByRole('button', { name: /Push/ }));
+    await waitFor(() =>
+      expect(client.pushE2eScript).toHaveBeenCalledWith('t1', editor.value, 'beforeRun'),
+    );
+
+    client.getE2eScript.mockResolvedValueOnce({ ...script(null), kind: 'afterRun' });
+    fireEvent.click(view.getByRole('tab', { name: 'After Run' }));
+    await waitFor(() => expect(client.getE2eScript).toHaveBeenCalledWith('t1', 'afterRun'));
+    expect(await view.findByText(/Este teste não tem After Run/)).toBeInTheDocument();
+  });
+
+  it('lists the setup and cleanup steps of the hooks like the steps of the test case', async () => {
+    const { view, client } = setup(detail({ status: 'passed' }));
+    await view.findByText('TC007-Ensure real-time ordering');
+    const before = `/**
+ * Before Run steps:
+ * 1. Criar o funcionário "E2E TC007" => O funcionário é criado
+ * 2. Criar o evento do funcionário => O evento aparece no calendário
+ */
+export default async function beforeRun() {}`;
+    client.getE2eScript.mockResolvedValueOnce({ ...script(before), kind: 'beforeRun' });
+    fireEvent.click(view.getByRole('tab', { name: 'Before Run' }));
+    const steps = await view.findByTestId('e2e-beforeRun-steps');
+    expect(view.getByRole('heading', { name: 'Passos de preparação' })).toBeInTheDocument();
+    expect(within(steps).getAllByRole('listitem')).toHaveLength(2);
+    expect(steps.textContent).toContain('Criar o funcionário "E2E TC007"');
+    expect(steps.textContent).toContain('O evento aparece no calendário');
+
+    // The list follows the draft while editing.
+    fireEvent.click(view.getByRole('button', { name: /Editar/ }));
+    fireEvent.change(view.getByLabelText('Before Run'), {
+      target: {
+        value: before.replace(
+          ' * 2. Criar o evento do funcionário => O evento aparece no calendário\n',
+          '',
+        ),
+      },
+    });
+    expect(within(view.getByTestId('e2e-beforeRun-steps')).getAllByRole('listitem')).toHaveLength(
+      1,
+    );
+
+    // A hook without the list explains how to describe its steps.
+    client.getE2eScript.mockResolvedValueOnce({
+      ...script('export default async function afterRun() {}'),
+      kind: 'afterRun',
+    });
+    fireEvent.click(view.getByRole('tab', { name: 'After Run' }));
+    expect(await view.findByText(/O script não lista os passos/)).toBeInTheDocument();
+    expect(view.getByRole('heading', { name: 'Passos de limpeza' })).toBeInTheDocument();
+  });
+
+  it('shows the outcome of the run only on the Preview and Test Case tabs', async () => {
+    const { view } = setup(
+      detail({
+        stepResults: [
+          {
+            position: 1,
+            title: 'Passo 1 - Abrir',
+            status: 'failed',
+            durationMs: 900,
+            error: 'boom',
+            hasScreenshot: false,
+          },
+        ],
+      }),
+    );
+    await view.findByText('TC007-Ensure real-time ordering');
+    const outcome = () => [
+      view.queryByText('Erro'),
+      view.queryByText('Análise da IA'),
+      view.queryByRole('button', { name: /Logs da execução/ }),
+      view.queryByText('Passo 1 - Abrir', { exact: false }),
+    ];
+    expect(outcome().every(Boolean)).toBe(true);
+    for (const name of ['Código', 'Before Run', 'After Run']) {
+      fireEvent.click(view.getByRole('tab', { name }));
+      expect(outcome().filter(Boolean)).toEqual([]);
+    }
+    await openInfoTab(view);
+    expect(outcome().every(Boolean)).toBe(true);
   });
 
   it('keeps the spec read-only for viewers', async () => {
@@ -394,6 +505,50 @@ describe('E2eTestDetail', () => {
     await waitFor(() => expect(view.container.querySelector('code')).not.toBeNull());
     expect(view.queryByRole('button', { name: /Editar/ })).toBeNull();
     expect(view.getByRole('button', { name: /Pull/ })).toBeInTheDocument();
+  });
+
+  it('writes, saves and reports failures of the AI instructions of a hook', async () => {
+    const { view, client } = setup(detail({ beforeRunInstructions: null }));
+    await view.findByText('TC007-Ensure real-time ordering');
+    fireEvent.click(view.getByRole('tab', { name: 'Before Run' }));
+    expect(
+      await view.findByText('Nenhuma instrução ainda. A IA decide como montar o cenário.'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(view.getByRole('button', { name: 'Alterar instruções' }));
+    const editor = view.getByLabelText('Instruções para a IA');
+    editor.innerHTML = '<p>Navegar para /xpto</p>';
+    fireEvent.input(editor);
+    client.saveE2eHookInstructions.mockResolvedValueOnce(
+      detail({ beforeRunInstructions: '<p>Navegar para /xpto</p>' }),
+    );
+    fireEvent.click(view.getByRole('button', { name: /Salvar instruções/ }));
+    await waitFor(() =>
+      expect(client.saveE2eHookInstructions).toHaveBeenCalledWith(
+        't1',
+        'beforeRun',
+        '<p>Navegar para /xpto</p>',
+      ),
+    );
+    expect(await view.findByText('Navegar para /xpto')).toBeInTheDocument();
+
+    fireEvent.click(view.getByRole('button', { name: 'Alterar instruções' }));
+    client.saveE2eHookInstructions.mockRejectedValueOnce(new Error('Sem acesso'));
+    fireEvent.click(view.getByRole('button', { name: /Salvar instruções/ }));
+    expect(await view.findByText('Sem acesso')).toBeInTheDocument();
+    client.saveE2eHookInstructions.mockRejectedValueOnce('boom');
+    fireEvent.click(view.getByRole('button', { name: /Salvar instruções/ }));
+    expect(await view.findByText('Não foi possível salvar as instruções.')).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: 'Cancelar' }));
+    expect(view.queryByLabelText('Instruções para a IA')).toBeNull();
+  });
+
+  it('shows the saved hook instructions and hides editing them from viewers', async () => {
+    const { view } = setup(detail({ afterRunInstructions: '<p>Apagar o registro</p>' }), true);
+    await view.findByText('TC007-Ensure real-time ordering');
+    fireEvent.click(view.getByRole('tab', { name: 'After Run' }));
+    expect(await view.findByText('Apagar o registro')).toBeInTheDocument();
+    expect(view.queryByRole('button', { name: 'Alterar instruções' })).toBeNull();
   });
 
   it('formats durations', () => {

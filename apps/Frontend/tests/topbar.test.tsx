@@ -6,7 +6,7 @@ import type { NavTab } from '../src/components/layout/Sidebar.js';
 describe('Topbar', () => {
   it('renders correct header titles for all tabs', () => {
     const pairs: Array<[NavTab, string]> = [
-      ['brain', 'Brain'],
+      ['brain', 'Cérebro'],
       ['testplans', 'Planos de Teste'],
       ['connect', 'Integrações'],
       ['settings', 'Configurações'],

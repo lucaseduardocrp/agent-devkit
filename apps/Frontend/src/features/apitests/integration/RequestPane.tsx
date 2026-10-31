@@ -1,11 +1,10 @@
-import React, { useId, useRef, useState } from 'react';
+import React, { useId, useState } from 'react';
 import { Button } from '../../../components/ui/button.js';
 import { IconButton } from '../../../components/ui/icon-button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Modal } from '../../../components/ui/modal.js';
 import { SearchableSelect } from '../../../components/ui/searchable-select.js';
 import { Select } from '../../../components/ui/select.js';
-import { Textarea } from '../../../components/ui/textarea.js';
 import { useI18n } from '../../../lib/i18n/index.js';
 import { cn } from '../../../lib/utils.js';
 import { RenderedCode } from '../../brain/RenderedCode.js';
@@ -18,22 +17,50 @@ import {
   type ApiRequestSpec,
   type Assertion,
   type Capture,
-  type RequestAuth,
-  type RequestBody,
+  type HttpMethod,
+  type RequestKind,
 } from '../api-test-types.js';
 import { KeyValueEditor } from '../ApiTestShared.js';
 import { VariableInput } from '../VariableInput.js';
-import { CodeEditor, type CodeEditorHandle } from './CodeEditor.js';
-import { CodeEditorToolbar } from './CodeEditorToolbar.js';
+import { AuthEditor } from './AuthEditor.js';
+import { BodyEditor } from './BodyEditor.js';
+import { CODE_TARGET_INFO, codeTargets, generateCode, type CodeTarget } from './code-generation.js';
+import { DocsEditor } from './DocsEditor.js';
+import { GraphqlQueryTab, GraphqlVariablesTab } from './GraphqlPane.js';
+import { GrpcMessageTab, GrpcMethodPicker } from './GrpcPane.js';
+import { inheritedAuth } from './inheritance.js';
 import {
+  KIND_COLOR,
+  KIND_SHORT,
   METHOD_COLOR,
   composeUrl,
   sameUrl,
   splitUrl,
   syncPathParams,
-  toCurl,
 } from './integration-model.js';
-import { PaneTabs } from './integration-parts.js';
+import { PaneTabs, type PaneTab } from './integration-parts.js';
+import { MessagesEditor } from './MessagesEditor.js';
+import type { RequestActions } from './request-actions.js';
+import { RequestSettingsEditor } from './RequestSettingsEditor.js';
+import { ScriptEditor } from './ScriptEditor.js';
+
+const kindOf = (request: Pick<ApiRequestSpec, 'kind'>): RequestKind => request.kind ?? 'http';
+
+/** The methods each kind may use; none for the kinds that have no HTTP method. */
+const KIND_METHODS: Partial<Record<RequestKind, readonly HttpMethod[]>> = {
+  http: HTTP_METHODS,
+  graphql: ['POST', 'GET'],
+  sse: HTTP_METHODS,
+};
+
+const URL_PLACEHOLDERS: Record<RequestKind, string> = {
+  http: '{{baseUrl}}/users/:id',
+  graphql: '{{baseUrl}}/graphql',
+  grpc: 'grpc://localhost:50051',
+  websocket: 'wss://example.com/socket',
+  sse: '{{baseUrl}}/events',
+  socket: 'tcp://localhost:9000',
+};
 
 // ---------- URL bar ----------
 
@@ -43,6 +70,7 @@ export function UrlBar({
   readOnly,
   dirty,
   sending,
+  actions,
   onChange,
   onSend,
   onCancel,
@@ -53,12 +81,16 @@ export function UrlBar({
   readonly readOnly: boolean;
   readonly dirty: boolean;
   readonly sending: boolean;
+  /** Lists the gRPC methods of the server (the gRPC method picker). */
+  readonly actions?: RequestActions;
   readonly onChange: (request: ApiRequestSpec) => void;
   readonly onSend: () => void;
   readonly onCancel: () => void;
   readonly onSave: () => void;
 }): React.JSX.Element {
   const { t } = useI18n();
+  const kind = kindOf(request);
+  const methods = KIND_METHODS[kind];
   const [showCode, setShowCode] = useState(false);
   // The bar shows the path with the query. While typing, the text stays as typed (`?a` is not
   // rewritten to `?a=`) as long as it means the same request.
@@ -74,28 +106,40 @@ export function UrlBar({
     onChange({ ...request, url, query, pathParams: syncPathParams(url, request.pathParams) });
   };
   return (
-    <div className="flex shrink-0 items-center gap-2 px-3 py-2.5" data-testid="request-editor">
+    <div className="flex shrink-0 items-start gap-2 px-3 py-2.5" data-testid="request-editor">
       <div className="flex min-w-0 flex-1 items-center">
-        <div className="w-[124px] shrink-0">
-          <SearchableSelect
-            label={t('apiTests.method')}
-            placeholder={t('apiTests.method')}
-            emptyMessage={t('apiTests.ui.noMatches')}
-            className="rounded-r-none font-mono font-bold"
-            value={request.method}
-            disabled={readOnly}
-            options={HTTP_METHODS.map((method) => ({
-              value: method,
-              label: method,
-              className: cn('font-mono font-bold', METHOD_COLOR[method]),
-            }))}
-            onChange={(method) =>
-              method && onChange({ ...request, method: method as ApiRequestSpec['method'] })
-            }
-            searchable={false}
-            data-testid="method-select"
-          />
-        </div>
+        {methods ? (
+          <div className="w-[124px] shrink-0">
+            <SearchableSelect
+              label={t('apiTests.method')}
+              placeholder={t('apiTests.method')}
+              emptyMessage={t('apiTests.ui.noMatches')}
+              className="rounded-r-none font-mono font-bold"
+              value={request.method}
+              disabled={readOnly}
+              options={methods.map((method) => ({
+                value: method,
+                label: method,
+                className: cn('font-mono font-bold', METHOD_COLOR[method]),
+              }))}
+              onChange={(method) =>
+                method && onChange({ ...request, method: method as ApiRequestSpec['method'] })
+              }
+              searchable={false}
+              data-testid="method-select"
+            />
+          </div>
+        ) : (
+          <span
+            className={cn(
+              'flex h-[40px] w-[72px] shrink-0 items-center justify-center rounded-l-md border border-r-0 border-border bg-surface-2 font-mono text-xs font-bold',
+              KIND_COLOR[kind as Exclude<RequestKind, 'http'>],
+            )}
+            data-testid="kind-label"
+          >
+            {KIND_SHORT[kind as Exclude<RequestKind, 'http'>]}
+          </span>
+        )}
         <VariableInput
           mono
           aria-label="URL"
@@ -103,11 +147,19 @@ export function UrlBar({
           className="rounded-l-none"
           value={shown}
           disabled={readOnly}
-          placeholder={t('apiTests.ui.urlPlaceholder')}
+          placeholder={URL_PLACEHOLDERS[kind]}
           onValueChange={changeUrl}
           onBlur={() => setDraft(null)}
         />
       </div>
+      {kind === 'grpc' && (
+        <GrpcMethodPicker
+          request={request}
+          readOnly={readOnly}
+          actions={actions}
+          onChange={onChange}
+        />
+      )}
       <IconButton
         variant="subtle"
         icon={<i className="ti ti-code" aria-hidden="true" />}
@@ -135,45 +187,56 @@ export function UrlBar({
           </Button>
         ) : (
           <Button onClick={onSend} title="Ctrl + Enter" data-testid="run-request">
-            <i className="ti ti-send" aria-hidden="true" />
-            {t('apiTests.send')}
+            <i
+              className={cn(
+                'ti',
+                kind === 'websocket' || kind === 'socket' ? 'ti-plug' : 'ti-send',
+              )}
+              aria-hidden="true"
+            />
+            {kind === 'websocket' || kind === 'socket'
+              ? t('apiTests.protocol.connect')
+              : t('apiTests.send')}
           </Button>
         ))}
-      <CodeDialog
-        open={showCode}
-        code={toCurl(request, collection)}
-        onClose={() => setShowCode(false)}
-      />
+      {showCode && (
+        <CodeDialog request={request} collection={collection} onClose={() => setShowCode(false)} />
+      )}
     </div>
   );
 }
 
 function CodeDialog({
-  open,
-  code,
+  request,
+  collection,
   onClose,
 }: {
-  readonly open: boolean;
-  readonly code: string;
+  readonly request: ApiRequestSpec;
+  readonly collection: ApiCollection;
   readonly onClose: () => void;
 }): React.JSX.Element {
   const { t } = useI18n();
   const id = useId();
+  const targets = codeTargets(request);
+  const [target, setTarget] = useState<CodeTarget>(targets[0]!);
   const [copied, setCopied] = useState(false);
+  const code = generateCode(target, request, {
+    auth: inheritedAuth(collection, request.id).auth,
+  });
   const copy = () =>
     void navigator.clipboard?.writeText(code).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     });
   return (
-    <Modal open={open} onClose={onClose} labelledBy={id}>
+    <Modal open onClose={onClose} labelledBy={id}>
       <div
-        className="flex max-h-[calc(100vh-2rem)] w-[min(94vw,720px)] flex-col gap-4 rounded-lg border border-border bg-surface-1 p-6 shadow-2xl"
+        className="flex max-h-[calc(100vh-2rem)] w-[min(94vw,760px)] flex-col gap-4 rounded-lg border border-border bg-surface-1 p-6 shadow-2xl"
         data-testid="code-dialog"
       >
         <div className="flex items-center justify-between gap-2">
           <h2 id={id} className="text-lg font-semibold text-[var(--text-primary)]">
-            {t('apiTests.ui.generateCode')} · cURL
+            {t('apiTests.ui.generateCode')}
           </h2>
           <IconButton
             icon={<i className="ti ti-x" aria-hidden="true" />}
@@ -181,8 +244,22 @@ function CodeDialog({
             onClick={onClose}
           />
         </div>
+        <Select
+          aria-label={t('apiTests.protocol.codeLanguage')}
+          containerClassName="w-72"
+          value={target}
+          disabled={targets.length === 1}
+          onChange={(event) => setTarget(event.target.value as CodeTarget)}
+          data-testid="code-language"
+        >
+          {targets.map((value) => (
+            <option key={value} value={value}>
+              {CODE_TARGET_INFO[value].label}
+            </option>
+          ))}
+        </Select>
         <div className="min-h-0 overflow-auto rounded-md border border-[var(--border)] bg-[var(--surface-0)]">
-          <RenderedCode code={code} language="bash" />
+          <RenderedCode code={code} language={CODE_TARGET_INFO[target].highlight} />
         </div>
         <p className="text-xs text-[var(--text-muted)]">{t('apiTests.ui.generateCodeHint')}</p>
         <div className="flex justify-end gap-2">
@@ -200,113 +277,6 @@ function CodeDialog({
 }
 
 // ---------- editors ----------
-
-export function AuthEditor({
-  auth,
-  onChange,
-  readOnly,
-  allowInherit,
-}: {
-  readonly auth: RequestAuth;
-  readonly onChange: (auth: RequestAuth) => void;
-  readonly readOnly: boolean;
-  readonly allowInherit: boolean;
-}): React.JSX.Element {
-  const { t } = useI18n();
-  const setType = (type: RequestAuth['type']) => {
-    if (type === 'bearer') return onChange({ type, token: '{{token}}' });
-    if (type === 'basic') return onChange({ type, username: '', password: '' });
-    if (type === 'apikey') return onChange({ type, key: 'X-API-Key', value: '', in: 'header' });
-    return onChange({ type });
-  };
-  return (
-    <div className="flex max-w-2xl flex-col gap-4">
-      <Select
-        aria-label={t('apiTests.authType')}
-        containerClassName="w-64"
-        value={auth.type}
-        disabled={readOnly}
-        onChange={(event) => setType(event.target.value as RequestAuth['type'])}
-      >
-        {allowInherit && <option value="inherit">{t('apiTests.auth.inherit')}</option>}
-        <option value="none">{t('apiTests.auth.none')}</option>
-        <option value="bearer">Bearer token</option>
-        <option value="basic">Basic</option>
-        <option value="apikey">API key</option>
-      </Select>
-      {auth.type === 'inherit' && (
-        <p className="text-xs text-[var(--text-secondary)]">{t('apiTests.ui.inheritHint')}</p>
-      )}
-      {auth.type === 'bearer' && (
-        <label className="flex flex-col gap-1.5 text-xs text-[var(--text-secondary)]">
-          Token
-          <VariableInput
-            mono
-            aria-label="Token"
-            value={auth.token}
-            disabled={readOnly}
-            placeholder="{{token}}"
-            onValueChange={(token) => onChange({ ...auth, token })}
-          />
-        </label>
-      )}
-      {auth.type === 'basic' && (
-        <div className="grid grid-cols-2 gap-3">
-          <label className="flex flex-col gap-1.5 text-xs text-[var(--text-secondary)]">
-            {t('apiTests.username')}
-            <VariableInput
-              aria-label={t('apiTests.username')}
-              value={auth.username}
-              disabled={readOnly}
-              onValueChange={(username) => onChange({ ...auth, username })}
-            />
-          </label>
-          <label className="flex flex-col gap-1.5 text-xs text-[var(--text-secondary)]">
-            {t('apiTests.ui.password')}
-            <VariableInput
-              mono
-              aria-label={t('apiTests.ui.password')}
-              value={auth.password}
-              disabled={readOnly}
-              placeholder="{{password}}"
-              onValueChange={(password) => onChange({ ...auth, password })}
-            />
-          </label>
-        </div>
-      )}
-      {auth.type === 'apikey' && (
-        <div className="grid grid-cols-[1fr_1fr_140px] gap-3">
-          <VariableInput
-            aria-label={t('apiTests.key')}
-            value={auth.key}
-            disabled={readOnly}
-            onValueChange={(key) => onChange({ ...auth, key })}
-          />
-          <VariableInput
-            mono
-            aria-label={t('apiTests.value')}
-            value={auth.value}
-            disabled={readOnly}
-            placeholder="{{apiKey}}"
-            onValueChange={(value) => onChange({ ...auth, value })}
-          />
-          <Select
-            aria-label={t('apiTests.ui.addTo')}
-            value={auth.in}
-            disabled={readOnly}
-            onChange={(event) =>
-              onChange({ ...auth, in: event.target.value as 'header' | 'query' })
-            }
-          >
-            <option value="header">Header</option>
-            <option value="query">Query</option>
-          </Select>
-        </div>
-      )}
-      <p className="text-xs text-[var(--text-muted)]">{t('apiTests.variablesHint')}</p>
-    </div>
-  );
-}
 
 function AssertionsEditor({
   assertions,
@@ -493,84 +463,188 @@ function CapturesEditor({
 
 // ---------- request pane ----------
 
-type RequestTab = 'query' | 'body' | 'headers' | 'auth' | 'captures' | 'assertions' | 'docs';
+type RequestTab =
+  | 'query'
+  | 'body'
+  | 'gqlQuery'
+  | 'gqlVariables'
+  | 'message'
+  | 'messages'
+  | 'headers'
+  | 'auth'
+  | 'vars'
+  | 'script'
+  | 'assertions'
+  | 'captures'
+  | 'tests'
+  | 'docs'
+  | 'settings';
+
+/** The tabs of each kind, in order, as in Bruno. */
+const KIND_TABS: Record<RequestKind, readonly RequestTab[]> = {
+  http: [
+    'query',
+    'body',
+    'headers',
+    'auth',
+    'vars',
+    'script',
+    'assertions',
+    'captures',
+    'tests',
+    'docs',
+    'settings',
+  ],
+  graphql: [
+    'gqlQuery',
+    'gqlVariables',
+    'headers',
+    'auth',
+    'vars',
+    'script',
+    'assertions',
+    'captures',
+    'tests',
+    'docs',
+    'settings',
+  ],
+  grpc: [
+    'message',
+    'headers',
+    'auth',
+    'vars',
+    'script',
+    'assertions',
+    'captures',
+    'tests',
+    'docs',
+    'settings',
+  ],
+  websocket: [
+    'messages',
+    'headers',
+    'auth',
+    'vars',
+    'settings',
+    'script',
+    'assertions',
+    'captures',
+    'tests',
+    'docs',
+  ],
+  sse: [
+    'headers',
+    'auth',
+    'body',
+    'vars',
+    'settings',
+    'script',
+    'assertions',
+    'captures',
+    'tests',
+    'docs',
+  ],
+  socket: ['messages', 'vars', 'settings', 'script', 'assertions', 'captures', 'tests', 'docs'],
+};
+
+const firstTab = (request: ApiRequestSpec): RequestTab => {
+  const kind = kindOf(request);
+  if (kind === 'http') return request.body.mode !== 'none' ? 'body' : 'query';
+  return KIND_TABS[kind][0]!;
+};
 
 export function RequestPane({
   request,
+  collection,
+  actions,
   readOnly,
   onChange,
   mocks = null,
   mocksFailed = false,
   onRetryMocks = () => undefined,
+  onClearPersonal,
 }: {
   readonly request: ApiRequestSpec;
+  /** Proto files, auth inheritance and personal secrets of the collection the request is in. */
+  readonly collection?: ApiCollection;
+  /** Runs the GraphQL introspection (schema docs and completion). */
+  readonly actions?: RequestActions;
   readonly readOnly: boolean;
   readonly onChange: (request: ApiRequestSpec) => void;
   /** The mock values the API offers, for the body editor; null while they load. */
   readonly mocks?: readonly ApiMockValue[] | null;
   readonly mocksFailed?: boolean;
   readonly onRetryMocks?: () => void;
+  /** Forgets one of the current user's personal secrets (the Auth tab). */
+  readonly onClearPersonal?: (ref: string) => void;
 }): React.JSX.Element {
   const { t } = useI18n();
-  const editor = useRef<CodeEditorHandle>(null);
-  const [tab, setTab] = useState<RequestTab>(request.body.mode !== 'none' ? 'body' : 'query');
+  const kind = kindOf(request);
+  const [chosen, setChosen] = useState<RequestTab>(() => firstTab(request));
+  // A kind change (rare) keeps a tab that exists.
+  const tab = KIND_TABS[kind].includes(chosen) ? chosen : firstTab(request);
   const set = (patch: Partial<ApiRequestSpec>) => onChange({ ...request, ...patch });
   const pathParams = syncPathParams(request.url, request.pathParams);
-  const textBody =
-    request.body.mode === 'json' || request.body.mode === 'text' || request.body.mode === 'xml'
-      ? request.body
-      : null;
-  const fieldBody =
-    request.body.mode === 'form' || request.body.mode === 'urlencoded' ? request.body : null;
-  const setBodyMode = (mode: RequestBody['mode']) =>
-    set({
-      body:
-        mode === 'none'
-          ? { mode }
-          : mode === 'form' || mode === 'urlencoded'
-            ? { mode, fields: fieldBody?.fields ?? [] }
-            : { mode, content: textBody?.content ?? '' },
-    });
-  const enabled = (rows: readonly { enabled?: boolean }[]) =>
+  const enabled = (rows: readonly { enabled?: boolean }[] = []) =>
     rows.filter((row) => row.enabled !== false).length;
+  const mark = (value: unknown) => (value ? '•' : '');
+  const editorProps = { readOnly, mocks, mocksFailed, onRetryMocks, onChange };
+  const websocket = request.websocket ?? { messages: [] };
+  const socket = request.socket ?? { messages: [] };
+
+  const tabInfo: Record<RequestTab, Omit<PaneTab<RequestTab>, 'id'>> = {
+    query: { label: t('apiTests.ui.query'), indicator: enabled(request.query) + pathParams.length },
+    body: { label: t('apiTests.tabs.body'), indicator: mark(request.body.mode !== 'none') },
+    gqlQuery: {
+      label: t('apiTests.protocol.query'),
+      indicator: mark(request.graphql?.query.trim()),
+    },
+    gqlVariables: {
+      label: t('apiTests.protocol.variables'),
+      indicator: mark((request.graphql?.variables ?? '').replace(/[\s{}]/g, '')),
+    },
+    message: { label: t('apiTests.protocol.message') },
+    messages: {
+      label: t('apiTests.protocol.messages'),
+      indicator: (kind === 'socket' ? socket : websocket).messages.length,
+    },
+    headers: {
+      label: kind === 'grpc' ? t('apiTests.protocol.metadata') : t('apiTests.tabs.headers'),
+      indicator: enabled(request.headers),
+    },
+    auth: {
+      label: t('apiTests.tabs.auth'),
+      indicator: mark(request.auth.type !== 'inherit' && request.auth.type !== 'none'),
+    },
+    vars: { label: t('apiTests.protocol.vars'), indicator: enabled(request.vars) },
+    script: {
+      label: t('apiTests.protocol.script'),
+      indicator: mark(request.scripts?.preRequest?.trim() || request.scripts?.postResponse?.trim()),
+    },
+    assertions: { label: t('apiTests.tabs.assertions'), indicator: request.assertions.length },
+    captures: { label: t('apiTests.tabs.captures'), indicator: request.captures.length },
+    tests: { label: t('apiTests.protocol.tests'), indicator: mark(request.scripts?.tests?.trim()) },
+    docs: { label: t('apiTests.tabs.docs'), indicator: mark(request.description) },
+    settings: { label: t('apiTests.protocol.settings') },
+  };
 
   return (
-    <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={t('apiTests.request')}>
+    <section
+      className="flex h-full min-h-0 min-w-0 flex-col"
+      aria-label={t('apiTests.request')}
+      data-testid={`request-pane-${kind}`}
+    >
       <PaneTabs
         label={t('apiTests.request')}
         value={tab}
-        onChange={setTab}
-        tabs={[
-          {
-            id: 'query',
-            label: t('apiTests.ui.query'),
-            indicator: enabled(request.query) + pathParams.length,
-          },
-          {
-            id: 'body',
-            label: t('apiTests.tabs.body'),
-            indicator: request.body.mode === 'none' ? '' : '•',
-          },
-          { id: 'headers', label: t('apiTests.tabs.headers'), indicator: enabled(request.headers) },
-          {
-            id: 'auth',
-            label: t('apiTests.tabs.auth'),
-            indicator: request.auth.type === 'inherit' || request.auth.type === 'none' ? '' : '•',
-          },
-          {
-            id: 'captures',
-            label: t('apiTests.tabs.captures'),
-            indicator: request.captures.length,
-          },
-          {
-            id: 'assertions',
-            label: t('apiTests.tabs.assertions'),
-            indicator: request.assertions.length,
-          },
-          { id: 'docs', label: t('apiTests.tabs.docs'), indicator: request.description ? '•' : '' },
-        ]}
+        onChange={setChosen}
+        tabs={KIND_TABS[kind].map((id) => ({ id, ...tabInfo[id] }))}
       />
-      <div className="min-h-0 flex-1 overflow-y-auto p-3" role="tabpanel">
+      {/* Docs fill the pane and scroll inside themselves; the other tabs scroll as a whole. */}
+      <div
+        className={cn('min-h-0 flex-1 p-3', tab === 'docs' ? 'overflow-hidden' : 'overflow-y-auto')}
+        role="tabpanel"
+      >
         {tab === 'query' && (
           <div className="flex flex-col gap-6">
             <KeyValueEditor
@@ -597,6 +671,30 @@ export function RequestPane({
             )}
           </div>
         )}
+        {tab === 'body' && <BodyEditor request={request} {...editorProps} />}
+        {tab === 'gqlQuery' && (
+          <GraphqlQueryTab request={request} actions={actions} {...editorProps} />
+        )}
+        {tab === 'gqlVariables' && <GraphqlVariablesTab request={request} {...editorProps} />}
+        {tab === 'message' && (
+          <GrpcMessageTab request={request} collection={collection ?? {}} {...editorProps} />
+        )}
+        {tab === 'messages' &&
+          (kind === 'socket' ? (
+            <MessagesEditor
+              protocol="socket"
+              messages={socket.messages}
+              readOnly={readOnly}
+              onChange={(messages) => set({ socket: { ...socket, messages } })}
+            />
+          ) : (
+            <MessagesEditor
+              protocol="websocket"
+              messages={websocket.messages}
+              readOnly={readOnly}
+              onChange={(messages) => set({ websocket: { ...websocket, messages } })}
+            />
+          ))}
         {tab === 'headers' && (
           <KeyValueEditor
             rows={request.headers}
@@ -609,62 +707,31 @@ export function RequestPane({
             auth={request.auth}
             allowInherit
             readOnly={readOnly}
+            owner={request.id}
+            personalSecrets={collection?.personalSecrets}
+            onClearPersonal={onClearPersonal}
+            inherited={collection ? inheritedAuth(collection, request.id) : null}
             onChange={(auth) => set({ auth })}
           />
         )}
-        {tab === 'body' && (
-          <div className="flex h-full flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <Select
-                aria-label={t('apiTests.bodyMode')}
-                containerClassName="w-56"
-                value={request.body.mode}
-                disabled={readOnly}
-                onChange={(event) => setBodyMode(event.target.value as RequestBody['mode'])}
-              >
-                <option value="none">{t('apiTests.body.none')}</option>
-                <option value="json">JSON</option>
-                <option value="xml">XML</option>
-                <option value="text">Text</option>
-                <option value="urlencoded">Form URL Encoded</option>
-                <option value="form">Multipart Form</option>
-              </Select>
-              {textBody && (
-                <CodeEditorToolbar
-                  editor={editor}
-                  language={textBody.mode}
-                  readOnly={readOnly}
-                  mocks={mocks}
-                  mocksFailed={mocksFailed}
-                  onRetryMocks={onRetryMocks}
-                />
-              )}
-            </div>
-            {textBody && (
-              <CodeEditor
-                ref={editor}
-                label={t('apiTests.tabs.body')}
-                value={textBody.content}
-                language={textBody.mode}
-                readOnly={readOnly}
-                mocks={mocks}
-                placeholder={
-                  textBody.mode === 'json' ? '{\n  "name": "{{$randomFullName}}"\n}' : ''
-                }
-                onChange={(content) => set({ body: { mode: textBody.mode, content } })}
-              />
-            )}
-            {fieldBody && (
-              <KeyValueEditor
-                rows={fieldBody.fields}
-                readOnly={readOnly}
-                onChange={(fields) => set({ body: { mode: fieldBody.mode, fields } })}
-              />
-            )}
-            {request.body.mode === 'none' && (
-              <p className="text-xs text-[var(--text-muted)]">{t('apiTests.noBodyHint')}</p>
-            )}
+        {tab === 'vars' && (
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-[var(--text-muted)]">{t('apiTests.protocol.varsHint')}</p>
+            <KeyValueEditor
+              rows={request.vars ?? []}
+              readOnly={readOnly}
+              onChange={(vars) => set({ vars })}
+            />
           </div>
+        )}
+        {(tab === 'script' || tab === 'tests') && (
+          <ScriptEditor
+            key={tab}
+            section={tab}
+            scripts={request.scripts}
+            readOnly={readOnly}
+            onChange={(scripts) => set({ scripts })}
+          />
         )}
         {tab === 'captures' && (
           <CapturesEditor
@@ -681,13 +748,20 @@ export function RequestPane({
           />
         )}
         {tab === 'docs' && (
-          <Textarea
-            aria-label={t('apiTests.tabs.docs')}
-            className="h-56 resize-none text-sm"
+          <DocsEditor
             value={request.description ?? ''}
-            disabled={readOnly}
-            placeholder={t('apiTests.descriptionPlaceholder')}
-            onChange={(event) => set({ description: event.target.value })}
+            readOnly={readOnly}
+            hint={t('apiTests.workbench.docsHint')}
+            onChange={(description) => set({ description })}
+            data-testid="request-docs"
+          />
+        )}
+        {tab === 'settings' && (
+          <RequestSettingsEditor
+            request={request}
+            collection={collection}
+            readOnly={readOnly}
+            onChange={onChange}
           />
         )}
       </div>

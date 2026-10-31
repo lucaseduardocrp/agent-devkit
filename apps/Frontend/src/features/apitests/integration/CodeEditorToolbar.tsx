@@ -9,7 +9,7 @@ import { MocksMenu } from './MocksMenu.js';
 
 /** The shortcuts of CodeEditor, in the order they are listed. `Mod` is Ctrl, or ⌘ on a Mac. */
 const SHORTCUTS = [
-  ['format', 'Shift+Alt+F'],
+  ['format', 'Mod+B'],
   ['indent', 'Tab'],
   ['outdent', 'Shift+Tab'],
   ['copyDown', 'Shift+Alt+↓'],
@@ -81,12 +81,12 @@ export function CodeEditorToolbar({
 
   return (
     <>
-      {language !== 'text' && !readOnly && (
+      {language !== 'text' && language !== 'javascript' && !readOnly && (
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          title="Shift+Alt+F"
+          title="Ctrl+B"
           data-testid="format-body"
           onClick={() =>
             setNotice(
@@ -94,7 +94,9 @@ export function CodeEditorToolbar({
                 ? t(
                     language === 'json'
                       ? 'apiTests.editor.formatInvalidJson'
-                      : 'apiTests.editor.formatInvalidXml',
+                      : language === 'graphql'
+                        ? 'apiTests.protocol.formatInvalidGraphql'
+                        : 'apiTests.editor.formatInvalidXml',
                   )
                 : null,
             )
@@ -104,7 +106,7 @@ export function CodeEditorToolbar({
           {t('apiTests.editor.format')}
         </Button>
       )}
-      {!readOnly && (
+      {!readOnly && language !== 'javascript' && (
         <EditorPopover
           icon="ti-wand"
           label={t('apiTests.mocks.button')}

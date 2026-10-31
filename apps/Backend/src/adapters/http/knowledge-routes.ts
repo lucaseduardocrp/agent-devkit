@@ -29,6 +29,34 @@ const pageAttachmentsKey = (workspaceId: string, pageId: string): string =>
   `attachments/${workspaceId}/brain-pages/${Buffer.from(pageId, 'utf8').toString('base64url')}.json`;
 
 const nativeSource = (source: string): boolean => source.startsWith('app://local?title=');
+/** Pages created in (or copied to) the application; everything else belongs to a provider. */
+const appSource = (source: string): boolean =>
+  source.startsWith('app://') || source === 'app' || source === 'local';
+/** Pages pushed to a board provider (Trello, Jira, GitHub Projects) keep this source. */
+const boardPushSource = (
+  providerId: string,
+  externalId: string,
+  title: string,
+  remoteUrl: string | null,
+): string => {
+  const source = new URL(`adk-provider://${providerId}/${encodeURIComponent(externalId)}`);
+  source.searchParams.set('title', title);
+  if (remoteUrl) source.searchParams.set('remoteUrl', remoteUrl);
+  return source.toString();
+};
+/** Sidebar section of a provider page; legacy external pages default to the Azure Wiki. */
+const documentProvider = (source: string): string | undefined => {
+  if (appSource(source)) return undefined;
+  if (source.startsWith('wikijs:')) return 'wikijs';
+  if (source.startsWith('github:')) return 'github_projects';
+  try {
+    const url = new URL(source);
+    if (url.protocol === 'adk-provider:') return url.hostname;
+  } catch {
+    // Non-URL sources fall through to the default section.
+  }
+  return 'azure_devops_wiki';
+};
 const sourceParam = (source: string, key: string): string | null => {
   try {
     return new URL(source).searchParams.get(key);
@@ -310,6 +338,63 @@ export function createKnowledgeRouter(
         throw new ApplicationError('INVALID_DOCUMENT_TITLE', 'O documento não possui título.', 400);
       }
       const input = (request.body ?? {}) as Record<string, unknown>;
+      const grouped = new Map<string, KnowledgeChunk[]>();
+      for (const chunk of all.filter((item) => nativeSource(item.source))) {
+        const group = grouped.get(chunk.pageId) ?? [];
+        group.push(chunk);
+        grouped.set(chunk.pageId, group);
+      }
+      const published: { oldId: string; newId: string; remoteUrl: string }[] = [];
+      const pending: {
+        previous: Readonly<Pick<KnowledgePage, 'id' | 'source'>>;
+        page: KnowledgePage;
+      }[] = [];
+      /** Pushes a page and its subpages, queuing each one to move to its Wiki source. */
+      const pushTree = async (
+        provider: {
+          pushPage(page: { id: string; content: string; path?: string }): Promise<KnowledgePage>;
+        },
+        id: string,
+        parentPath = '',
+      ): Promise<void> => {
+        const own = grouped.get(id)!.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        const title = sourceParam(own[0]!.source, 'title')?.trim();
+        if (!title)
+          throw new ApplicationError(
+            'INVALID_DOCUMENT_TITLE',
+            'O documento não possui título.',
+            400,
+          );
+        const path = `${parentPath}/${wikiSegment(title)}`;
+        const verifiedPage = await provider.pushPage({
+          id,
+          content: own.map((chunk) => chunk.content).join(''),
+          path,
+        });
+        pending.push({
+          previous: { id, source: own[0]!.source },
+          page: verifiedPage,
+        });
+        published.push({
+          oldId: `${own[0]!.source}:${id}`,
+          newId: `${verifiedPage.source}:${verifiedPage.id}`,
+          remoteUrl: verifiedPage.source,
+        });
+        for (const [childId, child] of grouped) {
+          if (sourceParam(child[0]!.source, 'parentPageId') === id)
+            await pushTree(provider, childId, path);
+        }
+      };
+      /** Pushed pages leave Application Notes and live in their provider's section. */
+      const movePending = () =>
+        knowledgeRepository.movePages(
+          pending.map((item) => ({
+            previous: item.previous,
+            page: item.page,
+            chunks: chunkPage(item.page),
+          })),
+          context,
+        );
       if (input.providerId !== undefined) {
         const providerId = input.providerId;
         const title = sourceParam(chunks[0]!.source, 'title')!.trim();
@@ -341,13 +426,9 @@ export function createKnowledgeRouter(
               'Wiki do Azure DevOps não configurada.',
               400,
             );
-          const parentPath = normalizedWikiParentPath(value('parentPath'));
-          const page = await provider.pushPage({
-            id: pageId,
-            content,
-            path: `${parentPath}/${wikiSegment(title)}`,
-          });
-          response.json({ success: true, remoteUrl: page.source, published: [] });
+          await pushTree(provider, pageId, normalizedWikiParentPath(value('parentPath')));
+          await movePending();
+          response.json({ success: true, remoteUrl: published[0]!.remoteUrl, published });
           return;
         }
         if (typeof providerId !== 'string')
@@ -383,7 +464,25 @@ export function createKnowledgeRouter(
             ...(value('externalId') ? { externalId: value('externalId') } : {}),
           },
         );
-        response.json({ success: true, remoteUrl: pushed.externalUrl, published: [] });
+        const page: KnowledgePage = {
+          id: pageId,
+          source: boardPushSource(providerId, pushed.externalId, title, pushed.externalUrl),
+          content,
+          updatedAt: new Date().toISOString(),
+        };
+        pending.push({ previous: { id: pageId, source: chunks[0]!.source }, page });
+        await movePending();
+        response.json({
+          success: true,
+          remoteUrl: pushed.externalUrl,
+          published: [
+            {
+              oldId: `${chunks[0]!.source}:${pageId}`,
+              newId: `${page.source}:${pageId}`,
+              remoteUrl: pushed.externalUrl ?? page.source,
+            },
+          ],
+        });
         return;
       }
       const provider = await dynamicProviderFactory.resolveAzureDevOpsWikiProvider(ownerId);
@@ -393,12 +492,6 @@ export function createKnowledgeRouter(
           'Configure e ative a integração Azure DevOps com credenciais de escrita.',
           400,
         );
-      }
-      const grouped = new Map<string, typeof chunks>();
-      for (const chunk of all.filter((item) => nativeSource(item.source))) {
-        const group = grouped.get(chunk.pageId) ?? [];
-        group.push(chunk);
-        grouped.set(chunk.pageId, group);
       }
       let rootId = pageId;
       const ancestors = new Set<string>([rootId]);
@@ -414,41 +507,8 @@ export function createKnowledgeRouter(
         ancestors.add(parentId);
         rootId = parentId;
       }
-      const published: { oldId: string; newId: string; remoteUrl: string }[] = [];
-      const pending: {
-        previous: Readonly<Pick<KnowledgePage, 'id' | 'source'>>;
-        page: KnowledgePage;
-      }[] = [];
-      const pushTree = async (id: string, parentPath = ''): Promise<void> => {
-        const own = grouped.get(id)!.sort((a, b) => a.chunkIndex - b.chunkIndex);
-        const title = sourceParam(own[0]!.source, 'title')?.trim();
-        if (!title)
-          throw new ApplicationError(
-            'INVALID_DOCUMENT_TITLE',
-            'O documento não possui título.',
-            400,
-          );
-        const path = `${parentPath}/${wikiSegment(title)}`;
-        const verifiedPage = await provider.pushPage({
-          id,
-          content: own.map((chunk) => chunk.content).join(''),
-          path,
-        });
-        pending.push({
-          previous: { id, source: own[0]!.source },
-          page: verifiedPage,
-        });
-        published.push({
-          oldId: `${own[0]!.source}:${id}`,
-          newId: `${verifiedPage.source}:${verifiedPage.id}`,
-          remoteUrl: verifiedPage.source,
-        });
-        for (const [childId, child] of grouped) {
-          if (sourceParam(child[0]!.source, 'parentPageId') === id) await pushTree(childId, path);
-        }
-      };
       try {
-        await pushTree(rootId);
+        await pushTree(provider, rootId);
       } catch (error) {
         if (error instanceof ApplicationError) throw error;
         throw new ApplicationError(
@@ -458,14 +518,7 @@ export function createKnowledgeRouter(
           [{ stage: 'network' }],
         );
       }
-      await knowledgeRepository.movePages(
-        pending.map((item) => ({
-          previous: item.previous,
-          page: item.page,
-          chunks: chunkPage(item.page),
-        })),
-        context,
-      );
+      await movePending();
       response.status(200).json({
         success: true,
         remoteUrl: published.find((item) => item.oldId.endsWith(`:${pageId}`))!.remoteUrl,
@@ -506,6 +559,7 @@ export function createKnowledgeRouter(
         totalCharacters: number;
         updatedAt: string;
         isCustom: boolean;
+        provider?: string;
         parentPageId?: string;
         pagePath?: string;
       }
@@ -524,10 +578,8 @@ export function createKnowledgeRouter(
 
         if (!doc) {
           let title = chunk.pageId;
-          const isCustom =
-            chunk.source.startsWith('app://') ||
-            chunk.source === 'app' ||
-            (!chunk.source.startsWith('http://') && !chunk.source.startsWith('https://'));
+          const isCustom = appSource(chunk.source);
+          const provider = documentProvider(chunk.source);
 
           try {
             const url = new URL(chunk.source);
@@ -564,6 +616,7 @@ export function createKnowledgeRouter(
             totalCharacters: 0,
             updatedAt: chunk.createdAt,
             isCustom,
+            ...(provider ? { provider } : {}),
             ...(sourceParam(chunk.source, 'parentPageId')
               ? { parentPageId: sourceParam(chunk.source, 'parentPageId')! }
               : {}),
@@ -716,10 +769,7 @@ export function createKnowledgeRouter(
       }
 
       const existingSource = docChunks[0]!.source;
-      const isExternal =
-        existingSource.startsWith('http://') || existingSource.startsWith('https://');
-
-      if (isExternal) {
+      if (!appSource(existingSource)) {
         throw new ApplicationError(
           'CANNOT_EDIT_EXTERNAL_DOCUMENT',
           'Documentos sincronizados de integrações externas não podem ser editados diretamente. A edição deve ser feita na plataforma de origem e sincronizada.',

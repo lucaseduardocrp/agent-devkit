@@ -435,3 +435,128 @@ describe('GitScriptRepository – connections', () => {
     });
   });
 });
+
+describe('GitScriptRepository – commits of several files', () => {
+  const API = 'https://api.github.com/repos/acme/demo-app';
+  const changes = [
+    { path: 'tests/e2e/a.yml', content: 'v2' },
+    { path: 'tests/e2e/new.yml', content: 'v1' },
+    { path: 'tests/e2e/old.yml', content: null },
+  ];
+
+  it('commits on GitHub through one tree and moves the branch', async () => {
+    const { repo, calls } = setup([
+      (url) =>
+        url === `${API}/git/ref/heads/feature/ci` ? json({ object: { sha: 'head-1' } }) : undefined,
+      (url) =>
+        url === `${API}/git/commits/head-1` ? json({ tree: { sha: 'tree-0' } }) : undefined,
+      (url) => (url === `${API}/git/trees` ? json({ sha: 'tree-1' }, 201) : undefined),
+      (url) =>
+        url === `${API}/git/commits`
+          ? json({ sha: 'commit-2', html_url: 'https://github.com/acme/demo-app/commit/commit-2' })
+          : undefined,
+      (url, init) =>
+        url === `${API}/git/refs/heads/feature/ci` && init.method === 'PATCH'
+          ? json({})
+          : undefined,
+    ]);
+    const url = await repo.commitFiles(
+      'ws',
+      { ...github, branch: 'feature/ci' },
+      changes,
+      'update the pipeline',
+    );
+    expect(url).toBe('https://github.com/acme/demo-app/commit/commit-2');
+    const sent = calls.filter((call) => call.method !== 'GET');
+    expect(sent.map((call) => call.method)).toEqual(['POST', 'POST', 'PATCH']);
+    expect(sent[0]?.body).toEqual({
+      base_tree: 'tree-0',
+      tree: [
+        { path: 'tests/e2e/a.yml', mode: '100644', type: 'blob', content: 'v2' },
+        { path: 'tests/e2e/new.yml', mode: '100644', type: 'blob', content: 'v1' },
+        { path: 'tests/e2e/old.yml', mode: '100644', type: 'blob', sha: null },
+      ],
+    });
+    expect(sent[1]?.body).toEqual({
+      message: 'update the pipeline',
+      tree: 'tree-1',
+      parents: ['head-1'],
+    });
+    expect(sent[2]?.body).toEqual({ sha: 'commit-2' });
+  });
+
+  it('skips the GitHub commit when the tree did not change and reports API failures', async () => {
+    const { repo, calls } = setup([
+      (url) => (url.endsWith('/git/ref/heads/main') ? json({ object: { sha: 'h' } }) : undefined),
+      (url) => (url.endsWith('/git/commits/h') ? json({ tree: { sha: 'same' } }) : undefined),
+      (url) => (url.endsWith('/git/trees') ? json({ sha: 'same' }, 201) : undefined),
+    ]);
+    expect(await repo.commitFiles('ws', github, changes, 'm')).toBeNull();
+    expect(calls.filter((call) => call.method !== 'GET')).toHaveLength(1);
+
+    const failing = setup([
+      (url) => (url.endsWith('/git/ref/heads/main') ? json({ object: { sha: 'h' } }) : undefined),
+      (url) => (url.endsWith('/git/commits/h') ? json({ tree: { sha: 't' } }) : undefined),
+      (url) => (url.endsWith('/git/trees') ? json({}, 422) : undefined),
+    ]);
+    await expect(failing.repo.commitFiles('ws', github, changes, 'm')).rejects.toMatchObject({
+      code: 'E2E_REPOSITORY_ERROR',
+      message: 'GitHub answered HTTP 422 while committing the files.',
+    });
+  });
+
+  it('pushes the changes to Azure DevOps in one commit', async () => {
+    const { repo, calls } = setup([
+      (url) =>
+        url.includes('/refs?filter=heads/develop')
+          ? json({ value: [{ name: 'refs/heads/develop', objectId: 'head-1' }] })
+          : undefined,
+      (url) =>
+        url.includes('/items?scopePath=')
+          ? json({
+              value: [
+                { path: '/tests/e2e/a.yml', gitObjectType: 'blob' },
+                { path: '/tests/e2e/old.yml', gitObjectType: 'blob' },
+              ],
+            })
+          : undefined,
+      (_url, init) =>
+        init.method === 'POST' ? json({ commits: [{ commitId: 'c-9' }] }, 201) : undefined,
+    ]);
+    expect(await repo.commitFiles('ws', azure, changes, 'update')).toBe(
+      `${AZ}/Finance/_git/app/commit/c-9`,
+    );
+    const push = calls.find((call) => call.method === 'POST');
+    expect(push?.body).toEqual({
+      refUpdates: [{ name: 'refs/heads/develop', oldObjectId: 'head-1' }],
+      commits: [
+        {
+          comment: 'update',
+          changes: [
+            {
+              changeType: 'edit',
+              item: { path: '/tests/e2e/a.yml' },
+              newContent: { content: 'v2', contentType: 'rawtext' },
+            },
+            {
+              changeType: 'add',
+              item: { path: '/tests/e2e/new.yml' },
+              newContent: { content: 'v1', contentType: 'rawtext' },
+            },
+            { changeType: 'delete', item: { path: '/tests/e2e/old.yml' } },
+          ],
+        },
+      ],
+    });
+
+    const silent = setup([
+      (url) =>
+        url.includes('/refs?filter=heads/develop')
+          ? json({ value: [{ name: 'refs/heads/develop', objectId: 'head-1' }] })
+          : undefined,
+      (url) => (url.includes('/items?scopePath=') ? json({}) : undefined),
+      (_url, init) => (init.method === 'POST' ? json({}, 201) : undefined),
+    ]);
+    expect(await silent.repo.commitFiles('ws', azure, changes, 'update')).toBeNull();
+  });
+});

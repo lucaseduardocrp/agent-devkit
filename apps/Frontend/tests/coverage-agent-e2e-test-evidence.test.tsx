@@ -23,6 +23,8 @@ const base: E2eTestDetail = {
   description: 'Validar o login',
   steps: ['Abrir login'],
   priority: 'high',
+  beforeRunInstructions: null,
+  afterRunInstructions: null,
   scriptPath: 'tests/tc001.spec.ts',
   status: 'failed',
   error: null,

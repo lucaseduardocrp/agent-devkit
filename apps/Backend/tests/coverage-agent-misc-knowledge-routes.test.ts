@@ -26,6 +26,8 @@ function setup(
 ) {
   const knowledgeRepository = {
     all: vi.fn(async () => chunks),
+    movePages: vi.fn(async () => undefined),
+    listRelations: vi.fn(async () => []),
   } as unknown as KnowledgeChunkRepository;
   return createApp({
     requestContextResolver: async () => context,
@@ -108,14 +110,29 @@ describe('knowledge document push validation', () => {
   });
 
   it('publishes at the Wiki root when no destination object is sent', async () => {
-    const pushPage = vi.fn(async () => ({ source: 'https://wiki/page' }));
+    const pushPage = vi.fn(async () => ({
+      id: '7',
+      source: 'https://wiki/page',
+      content: 'Content',
+      updatedAt: 'now',
+    }));
     const resolveAzureDevOpsWikiProvider = vi.fn(async () => ({ pushPage }));
     const app = setup({ resolveAzureDevOpsWikiProvider }, [native('Root page')]);
     const response = await request(app)
       .post('/knowledge/documents/doc-1/push')
       .send({ providerId: 'azure_devops_wiki', destination: 'invalid' });
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ success: true, remoteUrl: 'https://wiki/page', published: [] });
+    expect(response.body).toEqual({
+      success: true,
+      remoteUrl: 'https://wiki/page',
+      published: [
+        {
+          oldId: `app://local?title=${encodeURIComponent('Root page')}:doc-1`,
+          newId: 'https://wiki/page:7',
+          remoteUrl: 'https://wiki/page',
+        },
+      ],
+    });
     expect(resolveAzureDevOpsWikiProvider).toHaveBeenCalledWith(context.ownerId, undefined, '');
     expect(pushPage).toHaveBeenCalledWith({ id: 'doc-1', content: 'Content', path: '/Root page' });
   });
@@ -137,7 +154,7 @@ describe('knowledge document push validation', () => {
   });
 
   it('validates board providers and forwards every destination field', async () => {
-    const push = vi.fn(async () => ({ externalUrl: 'https://jira/PROJ-9' }));
+    const push = vi.fn(async () => ({ externalId: 'PROJ-9', externalUrl: 'https://jira/PROJ-9' }));
     const resolveBrainBoardPushProvider = vi
       .fn()
       .mockResolvedValueOnce(null)
@@ -175,7 +192,41 @@ describe('knowledge document push validation', () => {
       { parentExternalId: 'PROJ-1', issueType: 'Story', externalId: 'PROJ-9' },
     );
 
-    await request(app).post('/knowledge/documents/doc-1/push').send({ providerId: 'jira' });
+    push.mockResolvedValueOnce({ externalId: 'PROJ-10', externalUrl: null } as never);
+    const withoutUrl = await request(app)
+      .post('/knowledge/documents/doc-1/push')
+      .send({ providerId: 'jira' });
     expect(push).toHaveBeenLastCalledWith(expect.objectContaining({ title: 'Board doc' }), {});
+    expect(withoutUrl.body.published[0].remoteUrl).toBe(
+      'adk-provider://jira/PROJ-10?title=Board+doc',
+    );
+  });
+});
+
+describe('knowledge document sections', () => {
+  it('assigns each provider page to its section and keeps only app pages as application notes', async () => {
+    const app = setup({}, [
+      chunk('native', 'app://local?title=Native'),
+      chunk('legacy-app', 'app'),
+      chunk('wiki', 'https://dev.azure.com/wiki?pagePath=%2FWiki'),
+      chunk('wikijs', 'wikijs:wiki.example.com'),
+      chunk('issue', 'github:acme/repo'),
+      chunk('card', 'adk-provider://trello/card-1?title=Card'),
+      chunk('legacy', 'azure-devops:dev.azure.com'),
+    ]);
+    const { documents } = (await request(app).get('/knowledge/documents')).body as {
+      documents: { pageId: string; isCustom: boolean; provider?: string }[];
+    };
+    expect(
+      Object.fromEntries(documents.map((doc) => [doc.pageId, [doc.isCustom, doc.provider]])),
+    ).toEqual({
+      native: [true, undefined],
+      'legacy-app': [true, undefined],
+      wiki: [false, 'azure_devops_wiki'],
+      wikijs: [false, 'wikijs'],
+      issue: [false, 'github_projects'],
+      card: [false, 'trello'],
+      legacy: [false, 'azure_devops_wiki'],
+    });
   });
 });

@@ -3,9 +3,9 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runCollection, selectRequests } from '../src/modules/apitests/engine/collection-runner.js';
 import {
+  executeRequest,
   fillPathParams,
   interpolate,
-  prepareRequest,
   readJsonPath,
   scopeOf,
 } from '../src/modules/apitests/engine/http-request.js';
@@ -82,35 +82,29 @@ describe('variables and paths', () => {
     expect(interpolate('{{$guid}}', scope)).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it('fills :name path segments, escaped when sending, and never touches a port', () => {
+  it('fills :name path segments, escaped when sending, and never touches a port', async () => {
     expect(
       fillPathParams('http://localhost:8080/orders/:id/items/:item', [
         { key: 'id', value: '{{orderId}}' },
         { key: 'item', value: 'x', enabled: false },
       ]),
     ).toBe('http://localhost:8080/orders/{{orderId}}/items/:item');
-    const prepared = prepareRequest(
-      {
+    const result = await executeRequest(
+      request({
         id: 'r',
-        type: 'request',
         name: 'Get order',
-        method: 'GET',
         url: '{{baseUrl}}/orders/:id',
         pathParams: [{ key: 'id', value: '{{orderId}}' }],
-        headers: [],
         query: [{ key: 'expand', value: 'items' }],
-        body: { mode: 'none' },
-        auth: { type: 'none' },
-        assertions: [],
-        captures: [],
-      },
-      { type: 'none' },
+      }),
       scopeOf([
-        { key: 'baseUrl', value: 'https://api.test:8443' },
+        { key: 'baseUrl', value: base },
         { key: 'orderId', value: 'a/b c' },
       ]),
+      { auth: { type: 'none' } },
     );
-    expect(prepared.url.toString()).toBe('https://api.test:8443/orders/a%2Fb%20c?expand=items');
+    expect(result.url).toBe(`${base}/orders/a%2Fb%20c?expand=items`);
+    expect(seen.some((entry) => entry.url === '/orders/a%2Fb%20c?expand=items')).toBe(true);
   });
 
   it('reads JSON paths in the common notations', () => {

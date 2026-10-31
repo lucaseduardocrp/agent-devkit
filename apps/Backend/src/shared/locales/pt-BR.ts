@@ -36,6 +36,9 @@ export const ptBR = {
     'Aqui um teste de carga pode usar no máximo {vus} usuários virtuais por {minutes} minutos.',
   LOAD_TEST_ALREADY_RUNNING: 'Este cenário já está em execução.',
   API_TEST_SOURCES_UNAVAILABLE: 'As fontes não podem ser lidas neste ADK.',
+  API_TEST_CI_UNAVAILABLE: 'O acesso a repositórios não está disponível neste servidor.',
+  API_TEST_CI_REPOSITORY_NOT_FOUND:
+    'O repositório do pipeline não está disponível. Verifique a integração com GitHub ou Azure DevOps.',
   API_TEST_SOURCE_NOT_FOUND: 'Fonte não encontrada: {source}.',
   API_TEST_NO_LLM:
     'Nenhum provedor de IA configurado. Configure um em Integrações, ou gere pelo seu assistente via MCP.',
@@ -59,7 +62,6 @@ export const ptBR = {
   ISSUE_CLOSED: 'Uma issue encerrada não pode ser executada.',
   BUDGET_EXCEEDED: 'O orçamento mensal de agentes foi atingido.',
   ISSUE_ALREADY_RUNNING: 'Esta issue já tem uma execução em andamento.',
-  ISSUE_HAS_RUNS: 'Esta issue possui histórico de execução e gastos.',
   INVALID_RUN_MODE: 'O modo de execução não corresponde a esta ação.',
   INVALID_RUN_STATE: 'O estado atual da execução não permite esta ação.',
   RATE_NOT_FOUND: 'Tarifa não encontrada.',
@@ -142,6 +144,9 @@ export const ptBR = {
   CANNOT_EDIT_EXTERNAL_DOCUMENT: 'Documentos externos não podem ser editados por aqui.',
   DESIGN_NOT_FOUND: 'Design não encontrado.',
   DESIGN_REPOSITORY_NOT_CONFIGURED: 'O repositório de design não está configurado.',
+  DESIGN_REPOSITORY_NOT_FOUND: 'Repositório não encontrado nas integrações do workspace.',
+  DESIGN_BRANCH_NOT_FOUND: 'Branch não encontrada no repositório escolhido.',
+  DESIGN_SETTINGS_UNAVAILABLE: 'Configuração do Design indisponível neste ADK.',
   DOCUMENT_HAS_SUBPAGES: 'O documento possui subpáginas e não pode ser removido.',
   INVALID_AGENT_RESPONSE: 'O agente retornou uma resposta inválida.',
   INVALID_DOCUMENT_CONTENT: 'O conteúdo do documento é inválido.',

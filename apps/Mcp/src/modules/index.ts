@@ -92,4 +92,16 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Saves the attachment panel of a Brain document after the browser uploads its files.',
   'POST /runs/:id/continue':
     'Human review gate of a paused server run (approve, answer or request changes); the agent being reviewed must not approve its own work.',
+  'PUT /integration-tests/collections/:id/runtime':
+    'Hand-editing runtime variables and cookies happens in the web request editor; runs set them, and integration_clear_runtime resets them.',
+  'GET /design/settings':
+    'Repository and branch of the Design module, chosen by a person in the Design settings of the web app; the design tools work in whatever it points to.',
+  'PUT /design/settings':
+    'Repository and branch of the Design module, chosen by a person in the Design settings of the web app; the design tools work in whatever it points to.',
+  'GET /design/repositories':
+    'Repository picker of the Design settings in the web app; e2e_list_repositories lists the same repositories.',
+  'GET /design/repositories/branches':
+    'Branch picker of the Design settings in the web app; e2e_list_branches lists the same branches.',
+  'PUT /e2e/tests/:id/hook-instructions':
+    "Guidance for ADK's own author of Before Run and After Run scripts, edited in the web app; an MCP host writes those scripts itself with e2e_update_script.",
 };

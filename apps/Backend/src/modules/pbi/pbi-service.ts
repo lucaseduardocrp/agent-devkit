@@ -120,6 +120,7 @@ function summary(item: PbiItem): PbiItemSummary {
 /** Keys a provider may return after a push that ADK mirrors on the local item. */
 const pushedSourceKeys = [
   'type',
+  'descriptionFormat',
   'iterationPath',
   'areaPath',
   'assignedTo',

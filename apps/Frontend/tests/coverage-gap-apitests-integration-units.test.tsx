@@ -21,9 +21,9 @@ import {
   requestIds,
   sameUrl,
   splitUrl,
-  toCurl,
   writeLayout,
 } from '../src/features/apitests/integration/integration-model.js';
+import { generateCode } from '../src/features/apitests/integration/code-generation.js';
 import { VariableInput } from '../src/features/apitests/VariableInput.js';
 import {
   VariablesContext,
@@ -65,6 +65,11 @@ const collection: ApiCollection = {
 };
 
 afterEach(() => vi.restoreAllMocks());
+
+const toCurl = (
+  request: Parameters<typeof generateCode>[1],
+  collection: Parameters<typeof generateCode>[2],
+) => generateCode('curl', request, collection);
 
 describe('integration-model helpers', () => {
   it('formats sizes in bytes, kilobytes and megabytes', () => {
@@ -113,8 +118,8 @@ describe('integration-model helpers', () => {
     expect(curl({ auth: { type: 'apikey', key: 'X-Key', value: 'k', in: 'header' } })).toContain(
       `-H 'X-Key: k'`,
     );
-    expect(curl({ auth: { type: 'apikey', key: 'X-Key', value: 'k', in: 'query' } })).not.toContain(
-      'X-Key',
+    expect(curl({ auth: { type: 'apikey', key: 'X-Key', value: 'k', in: 'query' } })).toContain(
+      'X-Key=k',
     );
     expect(curl({ headers: [{ key: 'X-A', value: '1' }] })).toContain(`-H 'X-A: 1'`);
     const text = curl({ body: { mode: 'text', content: '' } });
@@ -325,8 +330,11 @@ describe('CollectionSettingsPane', () => {
     expect(view.getByText('3')).toBeTruthy();
     fireEvent.change(view.getByTestId('collection-name'), { target: { value: 'Orders v2' } });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Orders v2' }));
-    fireEvent.change(view.getByDisplayValue('Docs'), { target: { value: 'New docs' } });
+    fireEvent.click(view.getByRole('tab', { name: /Descrição/ }));
+    fireEvent.click(view.getByRole('button', { name: 'Código' }));
+    fireEvent.change(view.getByTestId('collection-docs'), { target: { value: 'New docs' } });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ description: 'New docs' }));
+    fireEvent.click(view.getByRole('tab', { name: /Visão geral/ }));
     fireEvent.click(view.getByRole('button', { name: /Bruno/ }));
     expect(onExport).toHaveBeenCalledWith('bruno');
     fireEvent.click(view.getByRole('button', { name: 'Excluir coleção' }));
@@ -541,10 +549,12 @@ describe('CollectionRunner', () => {
     fireEvent.click(view.getByLabelText('b'));
     fireEvent.click(view.getByText('Parar na primeira falha'));
     fireEvent.click(view.getByTestId('run-collection'));
-    expect(onRun).toHaveBeenLastCalledWith({ itemIds: ['a', 'c'], bail: true });
+    expect(onRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ itemIds: ['a', 'c'], bail: true }),
+    );
     fireEvent.click(view.getByLabelText('b'));
     fireEvent.click(view.getByTestId('run-collection'));
-    expect(onRun).toHaveBeenLastCalledWith({ itemIds: [], bail: true });
+    expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ itemIds: [], bail: true }));
     fireEvent.click(view.getByText('Selecionar todas'));
     expect((view.getByTestId('run-collection') as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(view.getByText('Selecionar todas'));
@@ -603,7 +613,9 @@ describe('CollectionRunner', () => {
     fireEvent.click(finished.view.getByText('a'));
     expect(finished.view.getByTestId('response-status').textContent).toBe('200 OK');
     fireEvent.click(finished.view.getByTestId('run-again'));
-    expect(finished.onRun).toHaveBeenCalledWith({ itemIds: [], bail: false });
+    expect(finished.onRun).toHaveBeenCalledWith(
+      expect.objectContaining({ itemIds: [], bail: false }),
+    );
     fireEvent.click(finished.view.getByRole('button', { name: 'Limpar' }));
     expect(finished.onReset).toHaveBeenCalled();
     finished.view.unmount();

@@ -147,8 +147,8 @@ describe('ApiTestService CRUD errors', () => {
     await svc.deleteCollection(W, saved.id);
     expect(await svc.listCollections(W)).toEqual([]);
 
-    const env = await svc.saveEnvironment(W, { name: 'Dev', variables: [] });
-    const renamed = await svc.saveEnvironment(W, { name: 'Dev 2', variables: [] }, env.id);
+    const env = await svc.saveEnvironment(W, U, { name: 'Dev', variables: [] });
+    const renamed = await svc.saveEnvironment(W, U, { name: 'Dev 2', variables: [] }, env.id);
     expect(renamed).toMatchObject({ id: env.id, createdAt: env.createdAt, name: 'Dev 2' });
     expect(await svc.listEnvironments(W)).toHaveLength(1);
     await svc.deleteEnvironment(W, env.id);
@@ -212,7 +212,7 @@ describe('ApiTestService scenarios and load runs', () => {
       svc.startLoadRun(W, U, { scenarioId: scenario.id, authorized: true }),
     ).rejects.toMatchObject({ code: 'API_TEST_INVALID', details: [] });
 
-    const env = await svc.saveEnvironment(W, {
+    const env = await svc.saveEnvironment(W, U, {
       name: 'Local',
       variables: [{ key: 'token', value: 's3cret', secret: true }],
     });
@@ -282,7 +282,7 @@ describe('ApiTestService integration runs', () => {
     expect(svc.payloadOf(claimed)).toMatchObject({ kind: 'integration', bail: true, itemIds: [] });
     expect(await svc.heartbeat(claimed.id, 'worker')).toBe('running');
     expect(
-      await svc.finish(claimed.id, 'worker', { status: 'passed', result: null, error: null }),
+      await svc.finish(claimed, 'worker', { status: 'passed', result: null, error: null }),
     ).toBe(true);
     expect(await svc.sweep(new Date(), 2)).toEqual({ requeued: 0, failed: 0 });
     expect((await svc.listRuns(W, {})).length).toBe(1);

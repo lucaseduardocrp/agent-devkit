@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { cn } from '../../../lib/utils.js';
 import type { ApiMockValue } from '../api-test-types.js';
@@ -19,6 +20,7 @@ import {
   currentLine,
   deleteLines,
   duplicate,
+  formatGraphql,
   formatJson,
   formatXml,
   indent,
@@ -52,8 +54,74 @@ export interface CodeEditorHandle {
   insertTemplate: (body: string) => void;
 }
 
+/** A word the editor may complete, e.g. a GraphQL field of the type at the caret. */
+export interface WordCompletion {
+  readonly label: string;
+  /** Shown on the right, e.g. the field type. */
+  readonly detail?: string;
+}
+
+/** Words to offer at `caret`, replacing `text[start, caret]`; null for none. */
+export type CompletionSource = (
+  text: string,
+  caret: number,
+) => { readonly start: number; readonly items: readonly WordCompletion[] } | null;
+
+/** The words list, styled as the `{{` suggestions. */
+function WordList({
+  label,
+  words,
+  index,
+  left,
+  top,
+  onChoose,
+  onHover,
+}: {
+  readonly label: string;
+  readonly words: readonly WordCompletion[];
+  readonly index: number;
+  readonly left: number;
+  readonly top: number;
+  readonly onChoose: (word: WordCompletion) => void;
+  readonly onHover: (index: number) => void;
+}): React.JSX.Element {
+  return createPortal(
+    <div
+      role="listbox"
+      aria-label={label}
+      className="fixed z-[1000] max-h-60 w-80 overflow-y-auto rounded-md border border-border bg-surface-1 py-1 shadow-xl"
+      style={{ left, top }}
+      data-testid="word-suggestions"
+    >
+      {words.map((word, position) => (
+        <div
+          key={word.label}
+          role="option"
+          aria-selected={position === index}
+          className={cn(
+            'flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs',
+            position === index && 'bg-[var(--fill-ghost-hover)]',
+          )}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            onChoose(word);
+          }}
+          onMouseEnter={() => onHover(position)}
+        >
+          <span className="shrink-0 font-mono text-[var(--text-primary)]">{word.label}</span>
+          <span className="min-w-0 flex-1 truncate text-right font-mono text-[var(--text-muted)]">
+            {word.detail ?? ''}
+          </span>
+        </div>
+      ))}
+    </div>,
+    document.body,
+  );
+}
+
 /** Why the list is open: a `{{` was typed, a value was opened with a quote, or Ctrl+Space. */
 type MenuMode =
+  | { readonly kind: 'word'; readonly words: readonly WordCompletion[] }
   | { readonly kind: 'variable' }
   | { readonly kind: 'value'; readonly opened: ValueQuote }
   | { readonly kind: 'invoke' };
@@ -88,11 +156,30 @@ export const CodeEditor = forwardRef<
     readonly placeholder?: string;
     /** The mock values the API offers; null when not loaded, to avoid flagging them as unknown. */
     readonly mocks?: readonly ApiMockValue[] | null;
+    /** Words to complete while typing (GraphQL fields), besides the `{{` variables. */
+    readonly completions?: CompletionSource;
+    /** Smallest height of the editor, in pixels. */
+    readonly minHeight?: number;
+    readonly 'data-testid'?: string;
   }
 >(function CodeEditor(
-  { value, onChange, readOnly, language, label, placeholder, mocks = null },
+  {
+    value,
+    onChange,
+    readOnly,
+    language,
+    label,
+    placeholder,
+    mocks = null,
+    completions,
+    minHeight = 220,
+    'data-testid': testId,
+  },
   ref,
 ) {
+  // Scripts are code: `{{` means nothing there, and mocks go in as plain text.
+  const usesVariables = language !== 'javascript';
+  const mockLanguage = language === 'json' || language === 'xml' ? language : 'text';
   const variables = useContext(VariablesContext);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const pendingSelection = useRef<readonly [number, number] | null>(null);
@@ -178,7 +265,13 @@ export const CodeEditor = forwardRef<
     const element = textarea.current!;
     const current = element.value;
     const formatted =
-      language === 'json' ? formatJson(current) : language === 'xml' ? formatXml(current) : null;
+      language === 'json'
+        ? formatJson(current)
+        : language === 'xml'
+          ? formatXml(current)
+          : language === 'graphql'
+            ? formatGraphql(current)
+            : null;
     if (formatted === null) return false;
     if (formatted !== current) {
       const caret = Math.min(element.selectionStart, formatted.length);
@@ -193,7 +286,7 @@ export const CodeEditor = forwardRef<
       const element = textarea.current!;
       const { selectionStart: start, selectionEnd: end } = element;
       const inString = language === 'json' && insideJsonString(element.value, start);
-      const text = mockSnippet(name, language, inString);
+      const text = mockSnippet(name, mockLanguage, inString);
       apply({ from: start, to: end, text, selection: [start + text.length, start + text.length] });
     },
     insertTemplate(body) {
@@ -218,11 +311,16 @@ export const CodeEditor = forwardRef<
    */
   const refreshMenu = (invoked = false) => {
     const element = textarea.current;
-    if (!element || !variables || document.activeElement !== element) return setMenu(null);
+    if (!element || document.activeElement !== element) return setMenu(null);
     const caret = element.selectionStart;
     if (caret !== element.selectionEnd) return setMenu(null);
     const text = element.value;
-    const typing = typingMatch(text.slice(0, caret));
+    const typing = variables && usesVariables ? typingMatch(text.slice(0, caret)) : null;
+    if (!typing && completions) {
+      const found = completions(text, caret);
+      if (found?.items.length) return openMenu({ kind: 'word', words: found.items }, found.start);
+    }
+    if (!variables || !usesVariables) return setMenu(null);
     const opened = !typing && language === 'json' ? valueQuote(text, caret) : null;
     let mode: MenuMode | null = null;
     let items: VariableSuggestion[] = [];
@@ -240,28 +338,45 @@ export const CodeEditor = forwardRef<
       items = rankMocksForKey(variables, keyBefore(text, caret), '');
     }
     if (!mode || !items.length) return setMenu(null);
-    const before = text.slice(0, start);
+    openMenu(mode, start, items);
+  };
+
+  const openMenu = (shown: MenuMode, start: number, items: readonly VariableSuggestion[] = []) => {
+    const element = textarea.current!;
+    const before = element.value.slice(0, start);
     const lineStart = before.lastIndexOf('\n') + 1;
     const lineIndex = before.split('\n').length - 1;
     const rect = element.getBoundingClientRect();
     const left = rect.left + PADDING_X + textWidth(element, before.slice(lineStart));
     const top = rect.top + PADDING_Y + (lineIndex + 1) * LINE_HEIGHT + 4;
-    const shown = mode;
+    const count = shown.kind === 'word' ? shown.words.length : items.length;
     setMenu((current) => ({
       mode: shown,
       start,
       items,
       index:
         current?.start === start && current.mode.kind === shown.kind
-          ? Math.min(current.index, items.length - 1)
+          ? Math.min(current.index, count - 1)
           : 0,
       left: Math.max(8, Math.min(left, window.innerWidth - 328)),
       top: Math.min(top, window.innerHeight - 240),
     }));
   };
 
-  const choose = (menu: Menu, suggestion: VariableSuggestion) => {
-    const element = textarea.current!;
+  /** Replaces the word being typed by the chosen one. */
+  const chooseWord = (word: WordCompletion) => {
+    const element = textarea.current;
+    if (!element || !menu) return;
+    const caret = element.selectionStart;
+    const removed = /^\w*/.exec(element.value.slice(caret))![0].length;
+    setMenu(null);
+    const end = menu.start + word.label.length;
+    apply({ from: menu.start, to: caret + removed, text: word.label, selection: [end, end] });
+  };
+
+  const choose = (suggestion: VariableSuggestion) => {
+    const element = textarea.current;
+    if (!element || !menu) return;
     const caret = element.selectionStart;
     if (menu.mode.kind === 'value') {
       // `"name": "|` becomes `"name": "{{$randomFullName}}"`; a number replaces the quote.
@@ -270,7 +385,11 @@ export const CodeEditor = forwardRef<
     }
     if (menu.mode.kind === 'invoke') {
       setMenu(null);
-      const text = mockSnippet(suggestion.name, language, insideJsonString(element.value, caret));
+      const text = mockSnippet(
+        suggestion.name,
+        mockLanguage,
+        insideJsonString(element.value, caret),
+      );
       return apply({
         from: caret,
         to: caret,
@@ -286,7 +405,9 @@ export const CodeEditor = forwardRef<
       language !== 'json' ||
       suggestion.source !== 'dynamic' ||
       insideJsonString(element.value, menu.start);
-    const text = plain ? `{{${suggestion.name}}}` : mockSnippet(suggestion.name, language, false);
+    const text = plain
+      ? `{{${suggestion.name}}}`
+      : mockSnippet(suggestion.name, mockLanguage, false);
     setMenu(null);
     apply({
       from: menu.start,
@@ -300,15 +421,17 @@ export const CodeEditor = forwardRef<
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (menu) {
+      const count = menu.mode.kind === 'word' ? menu.mode.words.length : menu.items.length;
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         const step = event.key === 'ArrowDown' ? 1 : -1;
-        setMenu({ ...menu, index: (menu.index + step + menu.items.length) % menu.items.length });
+        setMenu({ ...menu, index: (menu.index + step + count) % count });
         return;
       }
       if ((event.key === 'Enter' || event.key === 'Tab') && !event.ctrlKey && !event.metaKey) {
         event.preventDefault();
-        choose(menu, menu.items[menu.index]!);
+        if (menu.mode.kind === 'word') chooseWord(menu.mode.words[menu.index]!);
+        else choose(menu.items[menu.index]!);
         return;
       }
       if (event.key === 'Escape') {
@@ -346,7 +469,7 @@ export const CodeEditor = forwardRef<
       run(copyLines(selection(), vertical));
     } else if (vertical && event.altKey && !event.shiftKey && !mod) {
       run(moveLines(selection(), vertical));
-    } else if (event.altKey && event.shiftKey && !mod && event.code === 'KeyF') {
+    } else if (mod && !event.shiftKey && !event.altKey && event.code === 'KeyB') {
       event.preventDefault();
       format();
     } else if (mod && !event.shiftKey && !event.altKey && event.code === 'Space') {
@@ -369,7 +492,11 @@ export const CodeEditor = forwardRef<
   };
 
   return (
-    <div className="flex min-h-[220px] flex-1 overflow-auto rounded-md border border-[var(--border)] bg-[var(--surface-2)] focus-within:border-[var(--border-accent)]">
+    <div
+      className="flex flex-1 overflow-auto rounded-md border border-[var(--border)] bg-[var(--surface-2)] focus-within:border-[var(--border-accent)]"
+      style={{ minHeight }}
+      data-testid={testId}
+    >
       <div
         aria-hidden="true"
         className="sticky left-0 z-[1] select-none border-r border-[var(--border)] bg-[var(--surface-2)] px-2 py-2 text-right font-mono text-xs leading-5 text-[var(--text-muted)]"
@@ -424,13 +551,24 @@ export const CodeEditor = forwardRef<
           onCut={(event) => onClipboard(event, true)}
         />
       </div>
-      {menu && (
+      {menu?.mode.kind === 'word' && (
+        <WordList
+          label={label}
+          words={menu.mode.words}
+          index={menu.index}
+          left={menu.left}
+          top={menu.top}
+          onChoose={chooseWord}
+          onHover={(index) => setMenu({ ...menu, index })}
+        />
+      )}
+      {menu && menu.mode.kind !== 'word' && (
         <VariableSuggestionList
           items={menu.items}
           index={menu.index}
           left={menu.left}
           top={menu.top}
-          onChoose={(suggestion) => choose(menu, suggestion)}
+          onChoose={choose}
           onHover={(index) => setMenu({ ...menu, index })}
         />
       )}

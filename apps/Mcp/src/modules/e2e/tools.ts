@@ -14,6 +14,7 @@ import {
   reportingTarget,
   runId,
   runPath,
+  scriptKind,
   testId,
   testPath,
   type ExternalCaseDto,
@@ -146,6 +147,7 @@ const HOST_RULES = [
   'Test case N (1-based, in the order you send them) gets code TC00N; start each test name with it, e.g. "TC001 - Valid login".',
   'Credentials reach scripts only as process.env.E2E_USERNAME and process.env.E2E_PASSWORD; never write them in a spec or in chat.',
   'Base locators on the snapshot (labels, placeholders, button texts) and keep every spec independent.',
+  'When a case needs data or configuration prepared first (its preconditions), write its beforeRun following rules.beforeRun; when it creates or changes data, write its afterRun following rules.afterRun to remove it. Both are committed next to the spec, run around the test on every execution, and can be read or changed later with e2e_get_script and e2e_update_script (kind beforeRun or afterRun).',
   'Existing tests with an externalCase automate a case kept on a test management platform (Azure Test Plans, TestRail, Xray); its steps are listed in "steps". Plan exactly those tests (one spec per case, no extra cases), write exactly one top-level await test.step(...) per listed step, in the same order and named as rules.script says, assert the expected result inside it, and send the same externalCase back for that test in e2e_save_plan. Each top-level step becomes the step result and screenshot published to the platform.',
   'After e2e_save_plan poll e2e_get until the run finishes. With reporting.autoPublish the results are then published to the platform automatically; otherwise call e2e_publish_run. Poll e2e_get until lastReport.status is no longer "publishing".',
 ];
@@ -558,6 +560,22 @@ export const e2eModule: McpModule = {
                 .describe(
                   'Full TypeScript Playwright spec for this case; its test name starts with the case code (TC001 for the first case).',
                 ),
+              beforeRun: z
+                .string()
+                .max(60_000)
+                .nullable()
+                .optional()
+                .describe(
+                  'Before Run module (rules.beforeRun): builds the preconditions of the case before the test runs. Omit when there are none.',
+                ),
+              afterRun: z
+                .string()
+                .max(60_000)
+                .nullable()
+                .optional()
+                .describe(
+                  'After Run module (rules.afterRun): removes what the case and its Before Run created, even when they fail. Omit when nothing is left behind.',
+                ),
               externalCase: caseReference
                 .nullable()
                 .optional()
@@ -686,15 +704,16 @@ export const e2eModule: McpModule = {
       openWorld: true,
       title: 'Get E2E script',
       description:
-        'Reads the Playwright script of a test case from the repository, with its file path and web link.',
+        'Reads a script of a test case from the repository, with its file path and web link: the Playwright spec, its Before Run (preconditions) or its After Run (cleanup). content is null when that script does not exist.',
       toolset: 'e2e',
       access: 'read',
       routes: ['GET /e2e/tests/:id/script'],
-      input: { testId },
-      run: async ({ testId: value }, { api }) => {
+      input: { testId, kind: scriptKind },
+      run: async ({ testId: value, kind }, { api }) => {
         const { script } = await api.request<{ script: { content?: string | null } }>({
           method: 'GET',
           path: `${testPath(value)}/script`,
+          query: { kind },
         });
         return json({
           script: {
@@ -709,24 +728,24 @@ export const e2eModule: McpModule = {
       openWorld: true,
       title: 'Update E2E script',
       description:
-        'Commits a new version of a test case Playwright script to the repository (validated first; the run must not be active). Run e2e_run_test afterwards to execute it.',
+        'Commits a new version of a test case script to the repository: the Playwright spec, its Before Run or its After Run (validated first; the run must not be active). Before Run and After Run export one default async function that receives { page, request } (only { request } for API runs) and declare no test; empty content turns them off. Run e2e_run_test afterwards to execute it.',
       toolset: 'e2e',
       access: 'write',
       routes: ['PUT /e2e/tests/:id/script'],
       input: {
         testId,
+        kind: scriptKind,
         content: z
           .string()
-          .min(1)
           .max(60_000)
-          .describe('Full TypeScript content of the Playwright spec (@playwright/test).'),
+          .describe('Full TypeScript content of the script (imports only from @playwright/test).'),
       },
-      run: async ({ testId: value, content }, { api }) =>
+      run: async ({ testId: value, kind, content }, { api }) =>
         json(
           await api.request({
             method: 'PUT',
             path: `${testPath(value)}/script`,
-            body: { content },
+            body: { content, kind },
           }),
         ),
     }),

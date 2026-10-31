@@ -176,6 +176,48 @@ describe('AgentE2eAuthor', () => {
     expect(second.prompt).not.toContain('problemToFix');
   });
 
+  it('writes Before Run and After Run from the test case, or none when there is nothing to do', async () => {
+    const hook = 'export default async function beforeRun({ page }) {}';
+    const { author: subject, complete } = author(`\`\`\`ts\n${hook}\n\`\`\``);
+    expect(
+      await subject.writeHook({ creation, test: testCase, kind: 'beforeRun', snapshot: null }),
+    ).toBe(hook);
+    const request = complete.mock.calls[0]![0] as { prompt: string; instruction: string };
+    expect(request.instruction).toContain('Write the Before Run');
+    // Its steps head the file so the web app can list them like the steps of the test case.
+    expect(request.instruction).toContain('block comment that lists its setup steps');
+    expect(request.instruction).toContain('"action => expected result"');
+    expect(request.instruction).toContain(
+      'export default async function beforeRun({ page, request }',
+    );
+    expect(request.prompt).toContain('"code": "TC001"');
+
+    const none = author('NONE').author;
+    expect(
+      await none.writeHook({
+        creation: { ...creation, mode: 'backend' },
+        test: testCase,
+        kind: 'afterRun',
+        snapshot: null,
+        beforeRun: hook,
+      }),
+    ).toBeNull();
+  });
+
+  it('tells the spec what Before Run and After Run already do', async () => {
+    const { author: subject, complete } = author("import { test } from '@playwright/test';");
+    await subject.writeScript({
+      creation,
+      test: testCase,
+      snapshot: null,
+      hooks: { beforeRun: 'prepare()', afterRun: null },
+    });
+    const request = complete.mock.calls[0]![0] as { prompt: string; instruction: string };
+    expect(request.prompt).toContain('"beforeRunPreparesPreconditions": "prepare()"');
+    expect(request.prompt).not.toContain('afterRunCleansUp');
+    expect(request.instruction).toContain('do not create them again');
+  });
+
   it('analyzes failures and falls back to raw text', async () => {
     const parsed = await author('{"verdict":"test_issue","summary":"Goal: x"}').author.analyze({
       creation,

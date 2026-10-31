@@ -37,6 +37,9 @@ export const enUS = {
   LOAD_TEST_LIMIT: 'Here a load test may use at most {vus} virtual users for {minutes} minutes.',
   LOAD_TEST_ALREADY_RUNNING: 'This scenario is already running.',
   API_TEST_SOURCES_UNAVAILABLE: 'Sources cannot be read in this ADK.',
+  API_TEST_CI_UNAVAILABLE: 'Repository access is not available on this server.',
+  API_TEST_CI_REPOSITORY_NOT_FOUND:
+    'The repository of the pipeline is not available. Check the GitHub or Azure DevOps integration.',
   API_TEST_SOURCE_NOT_FOUND: 'Source not found: {source}.',
   API_TEST_NO_LLM:
     'No AI provider is configured. Configure one in Integrations, or generate from your assistant through MCP.',
@@ -61,7 +64,6 @@ export const enUS = {
   ISSUE_CLOSED: 'Closed issues cannot be run.',
   BUDGET_EXCEEDED: 'The monthly agent budget has been reached.',
   ISSUE_ALREADY_RUNNING: 'This issue already has an active run.',
-  ISSUE_HAS_RUNS: 'This issue has execution and cost history.',
   INVALID_RUN_MODE: 'The run mode does not match this action.',
   INVALID_RUN_STATE: 'The current run state does not allow this action.',
   RATE_NOT_FOUND: 'Cost rate not found.',
@@ -142,6 +144,9 @@ export const enUS = {
   CANNOT_EDIT_EXTERNAL_DOCUMENT: 'External documents cannot be edited here.',
   DESIGN_NOT_FOUND: 'Design not found.',
   DESIGN_REPOSITORY_NOT_CONFIGURED: 'The design repository is not configured.',
+  DESIGN_REPOSITORY_NOT_FOUND: 'The repository is not in the integrations of the workspace.',
+  DESIGN_BRANCH_NOT_FOUND: 'The branch is not in the chosen repository.',
+  DESIGN_SETTINGS_UNAVAILABLE: 'The Design settings are not available in this ADK.',
   DOCUMENT_HAS_SUBPAGES: 'The document has subpages and cannot be removed.',
   INVALID_AGENT_RESPONSE: 'The agent returned an invalid response.',
   INVALID_DOCUMENT_CONTENT: 'The document content is invalid.',

@@ -18,6 +18,8 @@ function testSummary(overrides: Partial<E2eTestSummary> = {}): E2eTestSummary {
     description: 'Verify the public page.',
     steps: ['Open the page'],
     priority: 'high',
+    beforeRunInstructions: null,
+    afterRunInstructions: null,
     scriptPath: 'tests/e2e/tc001-access.spec.ts',
     status: 'passed',
     error: null,

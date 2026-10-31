@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ENGINE_FILES } from '../scripts/sync-apitests-engine.mjs';
@@ -21,5 +21,12 @@ describe('vendored API test engine', () => {
   it.each(ENGINE_FILES)('%s matches the backend (run scripts/sync-apitests-engine.mjs)', (file) => {
     expect(existsSync(join(BACKEND, file))).toBe(true);
     expect(read(join(VENDOR, file))).toBe(read(join(BACKEND, file)));
+  });
+
+  it('has no file the backend engine no longer has', () => {
+    const stale = readdirSync(VENDOR).filter(
+      (file) => file.endsWith('.ts') && !ENGINE_FILES.includes(file),
+    );
+    expect(stale).toEqual([]);
   });
 });

@@ -4,6 +4,12 @@ import { id, untrusted } from '../shared.js';
 
 export const runId = id('E2E run id (from e2e_list or e2e_create).');
 export const testId = id('E2E test case id (from e2e_get).');
+export const scriptKind = z
+  .enum(['spec', 'beforeRun', 'afterRun'])
+  .default('spec')
+  .describe(
+    'Which script of the test: spec (the test), beforeRun (prepares its preconditions) or afterRun (removes what it left behind).',
+  );
 export const QUEUE_NOTICE =
   'Runs are executed asynchronously by the E2E worker: poll e2e_get until the status is completed, failed or cancelled.';
 

@@ -227,6 +227,7 @@ function prismaIssueDb() {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
+    agentRunRecord: { count: vi.fn().mockResolvedValue(0) },
     issueCommentRecord: { findMany: vi.fn().mockResolvedValue([]) },
     issueInboxRecord: {
       findMany: vi.fn().mockResolvedValue([]),
@@ -242,12 +243,12 @@ describe('PrismaIssueStore', () => {
     const { db, store, issue } = prismaIssueDb();
     expect(await store.list('ws')).toEqual([issue]);
     expect(db.issueRecord.findMany).toHaveBeenCalledWith({
-      where: { workspaceId: 'ws' },
+      where: { workspaceId: 'ws', deletedAt: null },
       orderBy: { updatedAt: 'desc' },
     });
     expect(await store.get('ws', 'issue-1')).toEqual(issue);
     expect(db.issueRecord.findFirst).toHaveBeenCalledWith({
-      where: { id: 'issue-1', workspaceId: 'ws' },
+      where: { id: 'issue-1', workspaceId: 'ws', deletedAt: null },
     });
   });
 
@@ -292,14 +293,29 @@ describe('PrismaIssueStore', () => {
     const { db, store, issue } = prismaIssueDb();
     expect(await store.update('ws', 'issue-1', { title: 'X' })).toEqual(issue);
     expect(db.issueRecord.updateMany).toHaveBeenCalledWith({
-      where: { id: 'issue-1', workspaceId: 'ws' },
+      where: { id: 'issue-1', workspaceId: 'ws', deletedAt: null },
       data: { title: 'X' },
     });
     db.issueRecord.updateMany.mockResolvedValueOnce({ count: 0 });
     expect(await store.update('ws', 'missing', { title: 'X' })).toBeNull();
     expect(await store.remove('ws', 'issue-1')).toBe(true);
+    expect(db.issueRecord.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'issue-1', workspaceId: 'ws', deletedAt: null },
+    });
     db.issueRecord.deleteMany.mockResolvedValueOnce({ count: 0 });
     expect(await store.remove('ws', 'missing')).toBe(false);
+  });
+
+  it('soft deletes issues with runs so their cost history survives', async () => {
+    const { db, store } = prismaIssueDb();
+    db.agentRunRecord.count.mockResolvedValueOnce(2);
+    expect(await store.remove('ws', 'issue-1')).toBe(true);
+    expect(db.agentRunRecord.count).toHaveBeenCalledWith({ where: { issueId: 'issue-1' } });
+    expect(db.issueRecord.deleteMany).not.toHaveBeenCalled();
+    expect(db.issueRecord.updateMany).toHaveBeenCalledWith({
+      where: { id: 'issue-1', workspaceId: 'ws', deletedAt: null },
+      data: { deletedAt: expect.any(Date) },
+    });
   });
 
   it('stores comments, touches the issue and tracks inbox state', async () => {
@@ -318,7 +334,7 @@ describe('PrismaIssueStore', () => {
     expect(tx.issueRecord.update.mock.calls[0]![0]).toMatchObject({ where: { id: 'issue-1' } });
     await store.inboxStates('ws', 'user-1');
     expect(db.issueInboxRecord.findMany).toHaveBeenCalledWith({
-      where: { userId: 'user-1', issue: { workspaceId: 'ws' } },
+      where: { userId: 'user-1', issue: { workspaceId: 'ws', deletedAt: null } },
     });
     const changes = { readAt: new Date(), archivedAt: null };
     expect(await store.setInboxState('issue-1', 'user-1', changes)).toEqual({

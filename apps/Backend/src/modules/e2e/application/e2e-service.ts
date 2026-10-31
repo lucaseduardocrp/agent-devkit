@@ -5,6 +5,10 @@ import { decryptAccessToken, encryptAccessToken, type AccessServiceToken } from 
 import { resolveLocale } from '../../../shared/i18n.js';
 import type { AgentService } from '../../agents/application/agent-service.js';
 import {
+  HOOK_KINDS,
+  HOOK_INSTRUCTION_FIELDS,
+  HOOK_LABELS,
+  hookFilePath,
   normalizeScriptFolder,
   normalizeLocalBrowserOrigin,
   normalizeTargetUrl,
@@ -22,6 +26,8 @@ import {
   type E2eRepositoryProvider,
   type E2eRepositoryRef,
   type E2eScope,
+  type E2eScriptKind,
+  type E2eHookKind,
   type E2eTestCase,
   type E2eTestStatus,
 } from '../domain/e2e.js';
@@ -41,7 +47,7 @@ import type {
   TestManagementResolver,
 } from '../../test-management/application/test-management-provider.js';
 import type { E2eJobKind, E2eJobQueue } from './e2e-queue.js';
-import { MAX_E2E_TESTS, planRules, scriptRules } from './e2e-author.js';
+import { MAX_E2E_TESTS, hookRules, planRules, scriptRules } from './e2e-author.js';
 import {
   closeActiveTests,
   markInterrupted,
@@ -65,6 +71,9 @@ export interface HostPlanInput {
     readonly priority: E2ePriority;
     readonly steps: readonly string[];
     readonly script: string;
+    /** Before Run and After Run of the test, committed next to its spec. */
+    readonly beforeRun?: string | null;
+    readonly afterRun?: string | null;
     /** Keeps the test linked to its test management case (as returned by the brief). */
     readonly externalCase?: ExternalTestCase | null;
   }[];
@@ -156,13 +165,20 @@ export interface E2eHostBrief {
     | { readonly status: 'capturing' }
     | { readonly status: 'failed'; readonly capturedAt: string; readonly error: string }
     | { readonly status: 'ready'; readonly capturedAt: string; readonly data: E2eSnapshot };
-  readonly rules: { readonly plan: readonly string[]; readonly script: readonly string[] };
+  readonly rules: {
+    readonly plan: readonly string[];
+    readonly script: readonly string[];
+    readonly beforeRun: readonly string[];
+    readonly afterRun: readonly string[];
+  };
   readonly limits: { readonly maxTests: number; readonly maxScriptLength: number };
   readonly existingTests: readonly {
     readonly code: string;
     readonly title: string;
     readonly status: E2eTestStatus;
     readonly scriptPath: string | null;
+    readonly beforeRunInstructions: string | null;
+    readonly afterRunInstructions: string | null;
     readonly steps: readonly string[];
     /** Send it back in the plan to keep the test linked to its test management case. */
     readonly externalCase: ExternalTestCase | null;
@@ -212,6 +228,7 @@ export interface CreateE2eInput {
 }
 
 export interface E2eScriptView {
+  readonly kind: E2eScriptKind;
   readonly path: string;
   /** Null when the spec has not been written yet or was removed from the repository. */
   readonly content: string | null;
@@ -528,7 +545,12 @@ export class E2eService {
         : 'error' in stored
           ? { status: 'failed', capturedAt: stored.capturedAt, error: stored.error }
           : { status: 'ready', capturedAt: stored.capturedAt, data: stored.snapshot },
-      rules: { plan: planRules(creation), script: scriptRules(creation) },
+      rules: {
+        plan: planRules(creation),
+        script: scriptRules(creation),
+        beforeRun: hookRules(creation, 'beforeRun'),
+        afterRun: hookRules(creation, 'afterRun'),
+      },
       limits: { maxTests: MAX_E2E_TESTS, maxScriptLength: MAX_SCRIPT_LENGTH },
       existingTests: tests.map((test) => ({
         code: test.code,
@@ -537,6 +559,8 @@ export class E2eService {
         scriptPath: test.scriptPath,
         steps: test.steps,
         externalCase: test.externalCase,
+        beforeRunInstructions: test.beforeRunInstructions,
+        afterRunInstructions: test.afterRunInstructions,
       })),
       warnings,
     };
@@ -556,23 +580,47 @@ export class E2eService {
     const repository = requireRepository(creation);
     await this.assertIdle(creation);
     const rejected = input.tests.flatMap((test, index) => {
-      const check = checkScript(test.script);
-      return check.ok ? [] : [`${testCaseCode(index + 1)}: ${check.violations.join('; ')}`];
+      const violations = [
+        ...checkScript(test.script).violations,
+        ...HOOK_KINDS.flatMap((kind) => {
+          const hook = test[kind];
+          return hook?.trim()
+            ? checkScript(hook, 'hook').violations.map((v) => `${HOOK_LABELS[kind]}: ${v}`)
+            : [];
+        }),
+      ];
+      return violations.length ? [`${testCaseCode(index + 1)}: ${violations.join('; ')}`] : [];
     });
     if (rejected.length)
       throw new ApplicationError('E2E_SCRIPT_REJECTED', rejected.join(' | '), 422);
-    const cases = input.tests.map(({ script: _script, ...test }, index) => ({
-      ...test,
-      scriptPath: scriptFilePath(repository.path, { code: testCaseCode(index + 1), ...test }),
-    }));
-    for (const [index, test] of cases.entries())
+    const cases = input.tests.map(
+      ({ script: _script, beforeRun: _before, afterRun: _after, ...test }, index) => ({
+        ...test,
+        scriptPath: scriptFilePath(repository.path, { code: testCaseCode(index + 1), ...test }),
+      }),
+    );
+    for (const [index, test] of cases.entries()) {
+      const planned = input.tests[index]!;
+      const code = testCaseCode(index + 1);
       await this.options.scripts.writeFile(
         workspaceId,
         repository,
         test.scriptPath,
-        input.tests[index]!.script,
-        `test(e2e): add ${testCaseCode(index + 1)} - ${test.title}`,
+        planned.script,
+        `test(e2e): add ${code} - ${test.title}`,
       );
+      for (const kind of HOOK_KINDS) {
+        const hook = planned[kind];
+        if (hook?.trim())
+          await this.options.scripts.writeFile(
+            workspaceId,
+            repository,
+            hookFilePath(test.scriptPath, kind),
+            hook,
+            `test(e2e): add ${HOOK_LABELS[kind]} of ${code} - ${test.title}`,
+          );
+      }
+    }
     const previous = await this.options.store.listTests(workspaceId, id);
     const tests = await this.options.store.replaceTests(creation, cases);
     for (const test of previous)
@@ -648,38 +696,75 @@ export class E2eService {
     return this.options.scripts.listBranches(workspaceId, provider, repositoryId);
   }
 
-  /** Pulls the current spec of a test straight from its repository. */
-  async getScript(workspaceId: string, testId: string): Promise<E2eScriptView> {
+  /**
+   * Pulls one script of a test straight from its repository: the spec, or the Before Run or
+   * After Run kept next to it.
+   */
+  async getScript(
+    workspaceId: string,
+    testId: string,
+    kind: E2eScriptKind = 'spec',
+  ): Promise<E2eScriptView> {
     const test = await this.findTest(workspaceId, testId);
     const repository = requireRepository(await this.findCreation(workspaceId, test.creationId));
-    const path = test.scriptPath ?? scriptFilePath(repository.path, test);
+    const specPath = test.scriptPath ?? scriptFilePath(repository.path, test);
+    const path = kind === 'spec' ? specPath : hookFilePath(specPath, kind);
     const { scripts } = this.options;
     const [content, url] = await Promise.all([
-      test.scriptPath ? scripts.readFile(workspaceId, repository, path) : null,
+      // A spec being regenerated is unlinked; its hooks stay readable meanwhile.
+      kind !== 'spec' || test.scriptPath ? scripts.readFile(workspaceId, repository, path) : null,
       scripts.fileUrl(workspaceId, repository, path),
     ]);
-    return { path, content, url, repository };
+    return { kind, path, content, url, repository };
   }
 
-  /** Commits an edited spec to the run's branch; it is used by the next execution. */
-  async pushScript(workspaceId: string, testId: string, content: string): Promise<E2eScriptView> {
+  /**
+   * Commits an edited script to the run's branch; it is used by the next execution. An empty
+   * Before Run or After Run turns it off.
+   */
+  async pushScript(
+    workspaceId: string,
+    testId: string,
+    content: string,
+    kind: E2eScriptKind = 'spec',
+  ): Promise<E2eScriptView> {
     const test = await this.findTest(workspaceId, testId);
     const creation = await this.findCreation(workspaceId, test.creationId);
     const repository = requireRepository(creation);
     await this.assertIdle(creation);
-    const check = checkScript(content);
+    const check =
+      kind !== 'spec' && !content.trim()
+        ? { ok: true, violations: [] }
+        : checkScript(content, kind === 'spec' ? 'spec' : 'hook');
     if (!check.ok)
       throw new ApplicationError('E2E_SCRIPT_REJECTED', check.violations.join('; '), 422);
-    const path = test.scriptPath ?? scriptFilePath(repository.path, test);
+    const specPath = test.scriptPath ?? scriptFilePath(repository.path, test);
     await this.options.scripts.writeFile(
       workspaceId,
       repository,
-      path,
+      kind === 'spec' ? specPath : hookFilePath(specPath, kind),
       content,
-      `test(e2e): update ${test.code} - ${test.title}`,
+      kind === 'spec'
+        ? `test(e2e): update ${test.code} - ${test.title}`
+        : `test(e2e): update ${HOOK_LABELS[kind]} of ${test.code} - ${test.title}`,
     );
-    await this.options.store.updateTest(workspaceId, test.id, { scriptPath: path });
-    return this.getScript(workspaceId, testId);
+    if (kind === 'spec')
+      await this.options.store.updateTest(workspaceId, test.id, { scriptPath: specPath });
+    return this.getScript(workspaceId, testId, kind);
+  }
+
+  /** Saves what the user wants the AI to follow when writing the test's Before Run or After Run. */
+  async updateHookInstructions(
+    workspaceId: string,
+    testId: string,
+    kind: E2eHookKind,
+    instructions: string,
+  ) {
+    const test = await this.findTest(workspaceId, testId);
+    await this.options.store.updateTest(workspaceId, test.id, {
+      [HOOK_INSTRUCTION_FIELDS[kind]]: instructions.trim() || null,
+    });
+    return this.getTest(workspaceId, testId);
   }
 
   /**

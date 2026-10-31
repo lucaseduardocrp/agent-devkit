@@ -157,9 +157,9 @@ describe('ResponsePane', () => {
     expect(screen.getByText('content-type')).toBeTruthy();
     expect(screen.getByText('application/json')).toBeTruthy();
 
-    tab(/Linha do tempo/);
-    const timeline = screen.getByTestId('response-timeline');
-    const rows = within(timeline).getAllByRole('listitem');
+    tab(/Histórico/);
+    const history = screen.getByTestId('response-history');
+    const rows = within(history).getAllByRole('listitem');
     expect(rows).toHaveLength(4);
     expect(rows[1]!.textContent).toContain('404');
     expect(rows[2]!.textContent).toContain('—');

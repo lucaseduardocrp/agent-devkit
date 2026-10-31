@@ -103,12 +103,10 @@ describe('CodeEditor edge cases', () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
-  it('does not format plain text with Shift+Alt+F', () => {
+  it('does not format plain text with Ctrl+B', () => {
     render(<Harness language="text" />);
     put('a  b', 1);
-    expect(
-      fireEvent.keyDown(editor(), { key: 'F', code: 'KeyF', altKey: true, shiftKey: true }),
-    ).toBe(false);
+    expect(fireEvent.keyDown(editor(), { key: 'b', code: 'KeyB', ctrlKey: true })).toBe(false);
     expect(editor().value).toBe('a  b');
     expect(handle!.format()).toBe(false);
   });

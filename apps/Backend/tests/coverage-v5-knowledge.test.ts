@@ -69,7 +69,7 @@ describe('knowledge relations', () => {
 });
 
 describe('knowledge synchronization', () => {
-  it('archives a removed multi-chunk page with its chunks in order', async () => {
+  it('drops a removed multi-chunk page with every one of its chunks', async () => {
     const repository = new InMemoryKnowledgeChunkRepository();
     const removed = {
       id: 'gone',
@@ -83,9 +83,8 @@ describe('knowledge synchronization', () => {
       repository,
       context,
     );
-    expect(result.archived).toHaveLength(1);
-    const archived = await repository.all(context);
-    expect(archived.map((chunk) => chunk.content).join('')).toContain('abcdef');
+    expect(result.removed).toEqual([{ pageId: 'gone', source: removed.source }]);
+    expect(await repository.all(context)).toEqual([]);
   });
 });
 

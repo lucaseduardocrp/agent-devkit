@@ -25,17 +25,36 @@ ADK workers (`target: "remote"`, public URLs) or on the user's computer through 
    `{{$randomCEP}}`, `{{$randomPrice}}`, `{{$guid}}`... (the full list comes with
    `integration_prepare_generation`). Write numbers and booleans without quotes
    (`"age": {{$randomAge}}`); keep fixed values where an assertion needs to know the data.
-4. Credentials go in an environment as secret variables (`integration_save_environment`), with an
-   empty value: ask the user to type the secret in the web app, never in the chat.
+4. Credentials are **personal to each workspace member**: tokens, passwords and keys are never
+   shared in the workspace. Write them as `{{variables}}` everywhere (auth fields too, e.g.
+   `"token": "{{token}}"`) and declare those variables with `secret: true` and an empty value
+   (collection or environment, `integration_save_environment`). Each member types their own value
+   in the web app, never in the chat. Literal credentials saved in a collection are moved to the
+   saving user's private vault and blanked in the shared document.
+5. Reads (`integration_get_collection`, `integration_list_environments`) never return secret
+   values: `personalSecrets` lists the refs the user has set (`var:<key>`,
+   `auth:<owner>:<field>`, `proxy:<field>`, `cert:<index>:<field>`) and secret variables show
+   `hasValue`. `integration_clear_personal_secret` removes one of the user's own values.
 
 Existing collections: `integration_import { content }` reads Postman v2.1, Insomnia exports,
 OpenAPI 3 / Swagger 2 (JSON or YAML) and the ADK format. `integration_export { format }` writes
 `postman`, `insomnia`, `bruno` (the .bru files) or `adk`.
 
+CI pipeline: pick a repository and branch with `integration_list_repositories` and
+`integration_list_branches`, save them in the collection's `ci` settings (`repository`, `tool`:
+`bruno`, `postman` or `insomnia`, optional `environmentId`) with `integration_save_collection`,
+check the files with `integration_preview_pipeline`, then, once the user agrees, commit them with
+`integration_publish_pipeline`. Tell the user which CI secrets to create.
+
 ## Run and read results
 
-- `integration_run { collectionId, environmentId?, itemIds?, target }`, then poll
-  `integration_get_run` until the status is `passed`, `failed` or `error`.
+- `integration_run { collectionId, environmentId?, itemIds?, target, iterations?, data?, delayMs? }`,
+  then poll `integration_get_run` until the status is `passed`, `failed` or `error`. Runs use
+  the requesting user's own credentials. `data` is a list of rows (one iteration each, columns as
+  `{{variables}}`).
+- Captures and scripts leave runtime variables and cookies for the user's next sends (personal):
+  `integration_get_runtime` shows them, `integration_clear_runtime` resets them, and
+  `useRuntime: false` runs from a clean state.
 - Report each failed request with its status, failed assertions and the start of the response.
   Separate API bugs from test problems (wrong expectation, missing variable, environment down).
 - A remote run cannot reach `localhost`: use `target: "local"` and ask the user to keep

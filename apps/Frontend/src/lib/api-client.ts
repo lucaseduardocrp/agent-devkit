@@ -23,13 +23,17 @@ import type {
   ApiCollectionSummary,
   ApiEnvironment,
   ApiMockValue,
+  ApiRequestSpec,
   ApiRun,
   ApiRunTarget,
+  CiPreview,
+  CiPublication,
   ExportFormat,
   GenerationRequest,
   LoadProfileDefaults,
   LoadScenario,
   LoadScenarioInput,
+  RuntimeState,
 } from '../features/apitests/api-test-types.js';
 import type {
   Issue,
@@ -72,6 +76,7 @@ import type {
   E2eRepositoryProvider,
   E2eRepositoryWarning,
   E2eScript,
+  E2eScriptKind,
   E2eCreationView,
   E2eImportCasesInput,
   E2eImportResult,
@@ -123,10 +128,10 @@ export interface KnowledgeSyncResultDto {
   readonly success: boolean;
   readonly provider: string;
   readonly chunksCount: number;
-  readonly archived?: readonly {
+  /** Provider pages that no longer exist remotely and were dropped from the Brain. */
+  readonly removed?: readonly {
     readonly pageId: string;
-    readonly oldSource: string;
-    readonly newSource: string;
+    readonly source: string;
   }[];
 }
 
@@ -145,6 +150,8 @@ export interface KnowledgeDocumentDto {
   readonly totalCharacters: number;
   readonly updatedAt: string;
   readonly isCustom?: boolean;
+  /** Integration whose sidebar section holds the page; absent for application notes. */
+  readonly provider?: string;
   readonly parentPageId?: string;
   readonly pagePath?: string;
 }
@@ -595,6 +602,28 @@ export interface DesignMessageDto {
   readonly content: string;
   readonly createdAt: string;
   readonly images?: readonly DesignImageInput[];
+}
+export interface DesignSettingsDto {
+  readonly provider: 'github' | 'azure';
+  readonly repositoryId: string;
+  /** GitHub "owner/repo" or Azure DevOps "Project/Repo". */
+  readonly repositoryName: string;
+  readonly branch: string;
+}
+export interface DesignRepositoryDto {
+  readonly id: string;
+  readonly provider: 'github' | 'azure';
+  readonly name: string;
+  readonly defaultBranch: string;
+  readonly webUrl?: string;
+}
+export interface DesignRepositoryWarningDto {
+  readonly provider: 'github' | 'azure';
+  readonly code: string;
+}
+export interface DesignBranchDto {
+  readonly name: string;
+  readonly isDefault: boolean;
 }
 export interface DesignProjectDto {
   readonly id: string;
@@ -1564,6 +1593,36 @@ export class ApiClient {
     return response.text();
   }
 
+  /** Repository the Design module works in, chosen in its own settings. */
+  public async getDesignSettings(): Promise<DesignSettingsDto | null> {
+    return (await this.getJson<{ settings: DesignSettingsDto | null }>('/design/settings'))
+      .settings;
+  }
+  public async saveDesignSettings(input: {
+    provider: 'github' | 'azure';
+    repositoryId: string;
+    branch: string;
+  }): Promise<DesignSettingsDto> {
+    return (await this.sendJson<{ settings: DesignSettingsDto }>('/design/settings', 'PUT', input))
+      .settings;
+  }
+  /** Repositories of every connected provider, so Design can be pointed at any of them. */
+  public async getDesignRepositories(): Promise<{
+    repositories: readonly DesignRepositoryDto[];
+    warnings: readonly DesignRepositoryWarningDto[];
+  }> {
+    return this.getJson('/design/repositories');
+  }
+  public async getDesignBranches(
+    provider: 'github' | 'azure',
+    repositoryId: string,
+  ): Promise<readonly DesignBranchDto[]> {
+    return (
+      await this.getJson<{ branches: readonly DesignBranchDto[] }>(
+        `/design/repositories/branches?provider=${provider}&repositoryId=${encodeURIComponent(repositoryId)}`,
+      )
+    ).branches;
+  }
   public async getDesignProviders(): Promise<readonly ('github' | 'azure')[]> {
     return (await this.getJson<{ providers: readonly ('github' | 'azure')[] }>('/design/providers'))
       .providers;
@@ -1756,21 +1815,41 @@ export class ApiClient {
       )
     ).branches;
   }
-  /** Pulls the test's spec straight from its repository. */
-  public async getE2eScript(id: string): Promise<E2eScript> {
+  /** Pulls one script of the test (spec, Before Run or After Run) straight from its repository. */
+  public async getE2eScript(id: string, kind: E2eScriptKind = 'spec'): Promise<E2eScript> {
     return (
-      await this.issueRequest<{ script: E2eScript }>(`/e2e/tests/${encodeURIComponent(id)}/script`)
+      await this.issueRequest<{ script: E2eScript }>(
+        `/e2e/tests/${encodeURIComponent(id)}/script?kind=${kind}`,
+      )
     ).script;
   }
-  /** Commits an edited spec to the run's repository branch. */
-  public async pushE2eScript(id: string, content: string): Promise<E2eScript> {
+  /** Commits an edited script to the run's repository branch. */
+  public async pushE2eScript(
+    id: string,
+    content: string,
+    kind: E2eScriptKind = 'spec',
+  ): Promise<E2eScript> {
     return (
       await this.sendJson<{ script: E2eScript }>(
         `/e2e/tests/${encodeURIComponent(id)}/script`,
         'PUT',
-        { content },
+        { content, kind },
       )
     ).script;
+  }
+  /** Saves what the AI should follow when writing a test's Before Run or After Run. */
+  public async saveE2eHookInstructions(
+    id: string,
+    kind: Exclude<E2eScriptKind, 'spec'>,
+    instructions: string,
+  ): Promise<E2eTestDetail> {
+    return (
+      await this.sendJson<{ test: E2eTestDetail }>(
+        `/e2e/tests/${encodeURIComponent(id)}/hook-instructions`,
+        'PUT',
+        { kind, instructions },
+      )
+    ).test;
   }
   /** Syncs a run with the specs currently in its repository folder. */
   public async pullE2eCreation(id: string): Promise<E2ePullResult> {
@@ -2765,6 +2844,7 @@ export class ApiClient {
       signal,
     });
     if (!response.ok) return this.handleErrorResponse(response);
+    if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
   }
 
@@ -2841,6 +2921,43 @@ export class ApiClient {
     return { fileName, blob: await response.blob() };
   }
 
+  /** Repositories of the connected GitHub and Azure DevOps integrations, for pipelines. */
+  public async listApiTestRepositories(): Promise<{
+    readonly repositories: readonly E2eRepository[];
+    readonly warnings: readonly E2eRepositoryWarning[];
+  }> {
+    return this.apiTestRequest('GET', '/integration-tests/repositories');
+  }
+
+  public async listApiTestBranches(
+    provider: E2eRepositoryProvider,
+    repositoryId: string,
+  ): Promise<readonly E2eBranch[]> {
+    const query = new URLSearchParams({ provider, repositoryId });
+    return (
+      await this.apiTestRequest<{ branches: E2eBranch[] }>(
+        'GET',
+        `/integration-tests/repositories/branches?${query.toString()}`,
+      )
+    ).branches;
+  }
+
+  /** The files the pipeline of the saved collection would commit; nothing is written. */
+  public async previewApiCollectionCi(id: string): Promise<CiPreview> {
+    return this.apiTestRequest(
+      'GET',
+      `/integration-tests/collections/${encodeURIComponent(id)}/ci`,
+    );
+  }
+
+  /** Commits the saved collection and its pipeline to the repository of its CI settings. */
+  public async publishApiCollectionCi(id: string): Promise<CiPublication> {
+    return this.apiTestRequest(
+      'POST',
+      `/integration-tests/collections/${encodeURIComponent(id)}/ci`,
+    );
+  }
+
   /** The mock values (`{{$randomFullName}}`...) requests can use, each with a fresh sample. */
   public async listApiMockValues(signal?: AbortSignal): Promise<ApiMockValue[]> {
     return (
@@ -2886,15 +3003,66 @@ export class ApiClient {
     );
   }
 
+  /** What a run of the collection may carry beyond the saved collection. */
   public async startIntegrationRun(input: {
     collectionId: string;
     environmentId?: string | null;
     itemIds?: string[];
     target: ApiRunTarget;
     bail?: boolean;
+    /** Times the selected requests run; each iteration may take a row of `data`. */
+    iterations?: number;
+    /** Rows of the data file (CSV or JSON), one per iteration, as `{{column}}` variables. */
+    data?: Record<string, string>[];
+    delayMs?: number;
+    /** `grpc-reflect` lists the services of `request`'s server instead of calling it. */
+    mode?: 'run' | 'grpc-reflect';
+    /** Reads and writes the current user's runtime variables and cookies. */
+    useRuntime?: boolean;
+    /** Runs this request as it is in the editor, unsaved changes included. */
+    request?: ApiRequestSpec;
   }): Promise<ApiRun> {
     return (await this.apiTestRequest<{ run: ApiRun }>('POST', '/integration-tests/runs', input))
       .run;
+  }
+
+  /** Forgets the current user's own value of a personal secret (see `secretRef`). */
+  public async clearPersonalSecret(input: {
+    scope: 'collection' | 'environment';
+    scopeId: string;
+    ref: string;
+  }): Promise<void> {
+    await this.apiTestRequest('DELETE', '/integration-tests/personal-secrets', input);
+  }
+
+  /** The current user's runtime variables and cookies of a collection. */
+  public async getApiRuntime(collectionId: string, signal?: AbortSignal): Promise<RuntimeState> {
+    return (
+      await this.apiTestRequest<{ runtime: RuntimeState }>(
+        'GET',
+        `/integration-tests/collections/${encodeURIComponent(collectionId)}/runtime`,
+        undefined,
+        signal,
+      )
+    ).runtime;
+  }
+
+  public async setApiRuntime(collectionId: string, runtime: RuntimeState): Promise<RuntimeState> {
+    return (
+      await this.apiTestRequest<{ runtime: RuntimeState }>(
+        'PUT',
+        `/integration-tests/collections/${encodeURIComponent(collectionId)}/runtime`,
+        runtime,
+      )
+    ).runtime;
+  }
+
+  public async clearApiRuntime(collectionId: string): Promise<RuntimeState> {
+    const body = await this.apiTestRequest<{ runtime?: RuntimeState } | undefined>(
+      'DELETE',
+      `/integration-tests/collections/${encodeURIComponent(collectionId)}/runtime`,
+    );
+    return body?.runtime ?? { variables: [], cookies: [] };
   }
 
   public async listApiRuns(

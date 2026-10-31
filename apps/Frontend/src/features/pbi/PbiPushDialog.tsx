@@ -48,6 +48,12 @@ const copy = {
       status: 'Status',
       repository: 'Repositório (owner/nome)',
       project: 'Projeto',
+      descriptionFormat: 'Formato da descrição',
+    } as Record<string, string>,
+    /** Option labels by `field.option`, for options whose provider label is not localized. */
+    options: {
+      'descriptionFormat.html': 'Padrão (editor HTML)',
+      'descriptionFormat.markdown': 'Markdown',
     } as Record<string, string>,
   },
   'en-US': {
@@ -79,6 +85,12 @@ const copy = {
       status: 'Status',
       repository: 'Repository (owner/name)',
       project: 'Project',
+      descriptionFormat: 'Description format',
+    } as Record<string, string>,
+    /** Option labels by `field.option`, for options whose provider label is not localized. */
+    options: {
+      'descriptionFormat.html': 'Default (HTML editor)',
+      'descriptionFormat.markdown': 'Markdown',
     } as Record<string, string>,
   },
 } as const;
@@ -379,7 +391,8 @@ export function PbiPushDialog({ apiClient, item, providers, busy, onClose, onSub
                     <option value="">{field.required ? c.select : c.none}</option>
                     {field.options.map((option) => (
                       <option key={option.value} value={option.value}>
-                        {option.detail ? `${option.label} · ${option.detail}` : option.label}
+                        {c.options[`${field.key}.${option.value}`] ??
+                          (option.detail ? `${option.label} · ${option.detail}` : option.label)}
                       </option>
                     ))}
                   </Select>

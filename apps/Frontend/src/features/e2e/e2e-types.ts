@@ -139,7 +139,14 @@ export interface E2eBranch {
   readonly isDefault: boolean;
 }
 
+/**
+ * The scripts of a test: its spec, the Before Run that prepares its preconditions and the
+ * After Run that removes what it left behind.
+ */
+export type E2eScriptKind = 'spec' | 'beforeRun' | 'afterRun';
+
 export interface E2eScript {
+  readonly kind: E2eScriptKind;
   readonly path: string;
   readonly content: string | null;
   readonly url: string | null;
@@ -176,6 +183,9 @@ export interface E2eTestSummary {
   readonly priority: E2ePriority;
   /** Spec file in the run's repository; null until the AI writes it. */
   readonly scriptPath: string | null;
+  /** What the user tells the AI about how to write the Before Run; rich text. */
+  readonly beforeRunInstructions: string | null;
+  readonly afterRunInstructions: string | null;
   readonly status: E2eTestStatus;
   readonly error: string | null;
   readonly analysis: string | null;
@@ -351,6 +361,29 @@ export function splitStepText(text: string): E2eStepText {
   return match
     ? { action: match[1]!.trim(), expectedResult: match[2]!.trim() }
     : { action: text.trim(), expectedResult: '' };
+}
+
+/**
+ * Steps of a Before Run or After Run: the numbered list in its first block comment that has one,
+ * each item written as "action => expected result" like the planned steps of a test. An item may
+ * wrap onto the next lines; a blank line ends the list.
+ */
+export function hookStepTexts(content: string | null | undefined): readonly E2eStepText[] {
+  for (const block of (content ?? '').matchAll(/\/\*([\s\S]*?)\*\//g)) {
+    const items: string[] = [];
+    let open = false;
+    for (const raw of block[1]!.split('\n')) {
+      const line = raw.replace(/^\s*\*+/, '').trim();
+      const item = /^\d+[.)]\s+(.*)$/.exec(line);
+      if (item) {
+        items.push(item[1]!);
+        open = true;
+      } else if (!line) open = false;
+      else if (open) items[items.length - 1] += ` ${line}`;
+    }
+    if (items.length) return items.map(splitStepText);
+  }
+  return [];
 }
 
 /** Steps of a test with their expected results: the linked case's when there is one. */

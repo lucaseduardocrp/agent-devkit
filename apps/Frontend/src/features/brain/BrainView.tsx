@@ -8,6 +8,7 @@ import { Select } from '../../components/ui/select.js';
 import { Button } from '../../components/ui/button.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { useI18n } from '../../lib/i18n/index.js';
+import type { TranslationKey } from '../../lib/i18n/types.js';
 import { Skeleton, SkeletonRow } from '../../components/ui/skeleton.js';
 import type {
   ApiClient,
@@ -50,6 +51,16 @@ export interface OpenTabItem {
   readonly type: 'graph' | 'doc';
   readonly docId?: string;
 }
+
+/** Section for provider pages synced before the backend reported a provider. */
+const DEFAULT_PROVIDER = 'azure_devops_wiki';
+const PROVIDER_SECTION_KEYS: Readonly<Record<string, TranslationKey>> = {
+  azure_devops_wiki: 'brain.azureWiki',
+  wikijs: 'brain.wikiJsDocs',
+  github_projects: 'brain.githubProjectsDocs',
+  trello: 'brain.trelloDocs',
+  jira: 'brain.jiraDocs',
+};
 
 interface BrainAssistantMessage {
   readonly id: string;
@@ -140,7 +151,7 @@ export function BrainView({
   const canGenerateTestPlans = permissions.can('testplans', 'edit');
   const [tabs, setTabs] = useState<readonly OpenTabItem[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [isFolderExpanded, setIsFolderExpanded] = useState(true);
+  const [collapsedProviders, setCollapsedProviders] = useState<ReadonlySet<string>>(new Set());
   const [isAppFolderExpanded, setIsAppFolderExpanded] = useState(true);
   const [collapsedDocumentIds, setCollapsedDocumentIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -171,7 +182,7 @@ export function BrainView({
   const [assistantMessages, setAssistantMessages] = useState<readonly BrainAssistantMessage[]>([]);
   const [isAssistantWorking, setIsAssistantWorking] = useState(false);
   const [assistantError, setAssistantError] = useState<string | null>(null);
-  const [isResearchSidebarCollapsed, setIsResearchSidebarCollapsed] = useState(false);
+  const [isResearchSidebarCollapsed, setIsResearchSidebarCollapsed] = useState(true);
   const [researchMessage, setResearchMessage] = useState('');
   const [researchMessages, setResearchMessages] = useState<readonly BrainAssistantMessage[]>([]);
   const [isResearching, setIsResearching] = useState(false);
@@ -307,27 +318,19 @@ export function BrainView({
         chunksCount: updatedStats.chunksCount,
         lastSync: t('brain.justNow'),
       });
-      const archivedIds = new Map(
-        (res.archived ?? []).map((item) => [
-          `${item.oldSource}:${item.pageId}`,
-          `${item.newSource}:${item.pageId}`,
-        ]),
+      const removedIds = new Set(
+        (res.removed ?? []).map((item) => `${item.source}:${item.pageId}`),
       );
-      setTabs((current) =>
-        current.map((tab) => {
-          const nextId = archivedIds.get(tab.id);
-          return nextId ? { ...tab, id: nextId, docId: nextId } : tab;
-        }),
-      );
-      setActiveTabId((current) => archivedIds.get(current ?? '') ?? current);
+      setTabs((current) => current.filter((tab) => !removedIds.has(tab.id)));
+      setActiveTabId((current) => (removedIds.has(current ?? '') ? null : current));
       setDocuments(updatedDocs);
       setRelations(updatedRelations);
-      const archivedFeedback = res.archived?.length
-        ? ` ${res.archived.length} ${t('brain.archivedDocuments')}`
+      const removedFeedback = res.removed?.length
+        ? ` ${res.removed.length} ${t('brain.removedDocuments')}`
         : '';
       setSyncFeedback({
         type: 'success',
-        message: `${t('brain.syncSuccess')} ${res.chunksCount} ${t('brain.indexedChunks')}${archivedFeedback}`,
+        message: `${t('brain.syncSuccess')} ${res.chunksCount} ${t('brain.indexedChunks')}${removedFeedback}`,
       });
     } catch (error) {
       setSyncFeedback({
@@ -496,6 +499,28 @@ export function BrainView({
       doc.source === 'app' ||
       doc.source === 'local',
     );
+
+  const providerSections = (() => {
+    const groups = new Map<string, KnowledgeDocumentDto[]>([[DEFAULT_PROVIDER, []]]);
+    for (const doc of currentDocs) {
+      if (isAppDocument(doc)) continue;
+      const provider = doc.provider ?? DEFAULT_PROVIDER;
+      groups.set(provider, [...(groups.get(provider) ?? []), doc]);
+    }
+    return [...groups].map(([provider, docs]) => ({ provider, docs }));
+  })();
+  const providerSectionLabel = (provider: string): string => {
+    const key = PROVIDER_SECTION_KEYS[provider];
+    return key ? t(key) : provider;
+  };
+  const toggleProviderSection = (provider: string) => {
+    setCollapsedProviders((current) => {
+      const next = new Set(current);
+      if (next.has(provider)) next.delete(provider);
+      else next.add(provider);
+      return next;
+    });
+  };
 
   const handleStartCreateDocument = () => {
     discardDrafts({ content: editContent, attachments: editAttachments });
@@ -1119,94 +1144,100 @@ export function BrainView({
                 )}
               </div>
 
-              {/* 2. External Wiki / Integrations Section */}
-              <div>
-                <div
-                  onClick={() => setIsFolderExpanded(!isFolderExpanded)}
-                  title={t('brain.toggleSection')}
-                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 font-medium text-[#c5c5c5] transition hover:bg-[#242424] hover:text-white"
-                  data-testid="folder-external-docs"
-                >
-                  <i
-                    className={cn(
-                      'ti ti-chevron-down text-xs text-[#808080] transition-transform',
-                      !isFolderExpanded && '-rotate-90',
-                    )}
-                  />
-                  <span className="truncate">{t('brain.azureWiki')}</span>
-                  <span className="ml-auto text-xs text-[#707070]">
-                    {currentDocs.filter((d) => !isAppDocument(d)).length}
-                  </span>
-                </div>
+              {/* 2. One section per integration; its pages never mix with application notes */}
+              {providerSections.map(({ provider, docs: providerDocs }) => {
+                const isExpanded = !collapsedProviders.has(provider);
+                return (
+                  <div key={provider}>
+                    <div
+                      onClick={() => toggleProviderSection(provider)}
+                      title={t('brain.toggleSection')}
+                      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 font-medium text-[#c5c5c5] transition hover:bg-[#242424] hover:text-white"
+                      data-testid={
+                        provider === DEFAULT_PROVIDER
+                          ? 'folder-external-docs'
+                          : `folder-provider-docs-${provider}`
+                      }
+                    >
+                      <i
+                        className={cn(
+                          'ti ti-chevron-down text-xs text-[#808080] transition-transform',
+                          !isExpanded && '-rotate-90',
+                        )}
+                      />
+                      <span className="truncate">{providerSectionLabel(provider)}</span>
+                      <span className="ml-auto text-xs text-[#707070]">{providerDocs.length}</span>
+                    </div>
 
-                {isFolderExpanded && (
-                  <div className="space-y-0.5 pl-4 pt-1">
-                    {currentDocs.filter((d) => !isAppDocument(d)).length === 0 ? (
-                      <div className="px-2 py-1 text-xs text-[#666666]">
-                        {t('brain.noDocuments')}
-                      </div>
-                    ) : (
-                      orderedDocuments(
-                        currentDocs.filter((d) => !isAppDocument(d)),
-                        collapsedDocumentIds,
-                      ).map(({ doc, depth, hasChildren }) => {
-                        const isSelected = activeTab?.id === doc.id;
-
-                        return (
-                          <div
-                            key={`tree-${doc.id}`}
-                            style={{ paddingLeft: `${10 + depth * 20}px` }}
-                            onClick={() => openDocumentTab(doc)}
-                            className={cn(
-                              'flex cursor-pointer items-center justify-between rounded px-2.5 py-1.5 text-sm transition-colors hover:bg-[#242424] hover:text-[#f5f5f5]',
-                              isSelected
-                                ? 'bg-[#262626] font-semibold text-[#4a8fe8]'
-                                : 'text-[#a5a5a5]',
-                            )}
-                            data-testid={`tree-item-${doc.id}`}
-                          >
-                            <div className="flex items-center min-w-0 flex-1">
-                              {hasChildren ? (
-                                <button
-                                  type="button"
-                                  className="mr-1 flex h-4 w-4 shrink-0 items-center justify-center rounded text-[#808080] hover:bg-[#303030] hover:text-white"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    toggleDocumentExpansion(doc.id);
-                                  }}
-                                  aria-label={t(
-                                    collapsedDocumentIds.has(doc.id)
-                                      ? 'brain.expandDocument'
-                                      : 'brain.collapseDocument',
-                                    { title: doc.title },
-                                  )}
-                                  aria-expanded={!collapsedDocumentIds.has(doc.id)}
-                                  data-testid={`tree-toggle-${doc.id}`}
-                                >
-                                  <i
-                                    className={cn(
-                                      'ti ti-chevron-down text-xs transition-transform',
-                                      collapsedDocumentIds.has(doc.id) && '-rotate-90',
-                                    )}
-                                    aria-hidden="true"
-                                  />
-                                </button>
-                              ) : (
-                                <span className="mr-1 h-4 w-4 shrink-0" aria-hidden="true" />
-                              )}
-                              <i className="ti ti-file-text text-sm text-[#707070]" />
-                              <span className="ml-2 truncate">{doc.title}</span>
-                            </div>
-                            <span className="text-xs text-[#606060] shrink-0 ml-1">
-                              {doc.chunksCount}
-                            </span>
+                    {isExpanded && (
+                      <div className="space-y-0.5 pl-4 pt-1">
+                        {providerDocs.length === 0 ? (
+                          <div className="px-2 py-1 text-xs text-[#666666]">
+                            {t('brain.noDocuments')}
                           </div>
-                        );
-                      })
+                        ) : (
+                          orderedDocuments(providerDocs, collapsedDocumentIds).map(
+                            ({ doc, depth, hasChildren }) => {
+                              const isSelected = activeTab?.id === doc.id;
+
+                              return (
+                                <div
+                                  key={`tree-${doc.id}`}
+                                  style={{ paddingLeft: `${10 + depth * 20}px` }}
+                                  onClick={() => openDocumentTab(doc)}
+                                  className={cn(
+                                    'flex cursor-pointer items-center justify-between rounded px-2.5 py-1.5 text-sm transition-colors hover:bg-[#242424] hover:text-[#f5f5f5]',
+                                    isSelected
+                                      ? 'bg-[#262626] font-semibold text-[#4a8fe8]'
+                                      : 'text-[#a5a5a5]',
+                                  )}
+                                  data-testid={`tree-item-${doc.id}`}
+                                >
+                                  <div className="flex items-center min-w-0 flex-1">
+                                    {hasChildren ? (
+                                      <button
+                                        type="button"
+                                        className="mr-1 flex h-4 w-4 shrink-0 items-center justify-center rounded text-[#808080] hover:bg-[#303030] hover:text-white"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          toggleDocumentExpansion(doc.id);
+                                        }}
+                                        aria-label={t(
+                                          collapsedDocumentIds.has(doc.id)
+                                            ? 'brain.expandDocument'
+                                            : 'brain.collapseDocument',
+                                          { title: doc.title },
+                                        )}
+                                        aria-expanded={!collapsedDocumentIds.has(doc.id)}
+                                        data-testid={`tree-toggle-${doc.id}`}
+                                      >
+                                        <i
+                                          className={cn(
+                                            'ti ti-chevron-down text-xs transition-transform',
+                                            collapsedDocumentIds.has(doc.id) && '-rotate-90',
+                                          )}
+                                          aria-hidden="true"
+                                        />
+                                      </button>
+                                    ) : (
+                                      <span className="mr-1 h-4 w-4 shrink-0" aria-hidden="true" />
+                                    )}
+                                    <i className="ti ti-file-text text-sm text-[#707070]" />
+                                    <span className="ml-2 truncate">{doc.title}</span>
+                                  </div>
+                                  <span className="text-xs text-[#606060] shrink-0 ml-1">
+                                    {doc.chunksCount}
+                                  </span>
+                                </div>
+                              );
+                            },
+                          )
+                        )}
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
+                );
+              })}
             </>
           )}
         </div>

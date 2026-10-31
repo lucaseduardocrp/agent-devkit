@@ -16,6 +16,7 @@ import {
 } from '../../components/ui/card.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import { AgentModal, type AgentLlmModelOption } from './AgentModal.js';
+import { AgentWorkflowBoard } from './AgentWorkflowBoard.js';
 import { AgentTopology } from './AgentTopology.js';
 import { AgentHubPanel } from './AgentHubPanel.js';
 import type { AgentRun, Issue } from '../issues/issue-types.js';
@@ -27,18 +28,23 @@ import type {
   AgentRole,
   ExecuteAgentResponse,
   AgentWorkflowDto,
-  AgentWorkflowRuleDto,
-  AgentWorkflowStepDto,
   AgentWorkflowToolset,
 } from './agent-types.js';
 import { useActivityRunner } from '../activities/ActivityCenter.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { usePermissions } from '../workspaces/permissions.js';
 
+/** Submodule of Agents opened from the navigation; the catalog section also holds the hub. */
+export type AgentsSection = 'agents' | 'playground' | 'map' | 'workflow';
+
 export interface AgentsViewProps {
   readonly apiClient?: ApiClient;
   readonly activeWorkspaceId?: string | null;
   readonly isReadOnly?: boolean;
+  /** Set by the navigation; when given, the submodules come from the sidebar instead of tabs. */
+  readonly section?: AgentsSection;
+  /** Lets the navigation follow a section the view itself opens (e.g. testing an agent). */
+  readonly onSelectSection?: (section: AgentsSection) => void;
   readonly className?: string;
 }
 
@@ -192,6 +198,8 @@ export function AgentsView({
   apiClient = defaultApiClient,
   activeWorkspaceId,
   isReadOnly = false,
+  section,
+  onSelectSection,
   className,
 }: AgentsViewProps): React.JSX.Element {
   const { t } = useI18n();
@@ -209,7 +217,12 @@ export function AgentsView({
   const { runActivity } = useActivityRunner();
   const [activeViewTab, setActiveViewTab] = useState<
     'catalog' | 'hub' | 'playground' | 'map' | 'workflow'
-  >('catalog');
+  >(section && section !== 'agents' ? section : 'catalog');
+  // Navigating to another submodule leaves the catalog/hub choice of the Agents section behind.
+  useEffect(() => {
+    if (!section) return;
+    setActiveViewTab(section === 'agents' ? 'catalog' : section);
+  }, [section]);
   const [agents, setAgents] = useState<readonly CustomAgentDto[]>([]);
   const [topologyIssues, setTopologyIssues] = useState<readonly Issue[]>([]);
   const [topologyRuns, setTopologyRuns] = useState<readonly AgentRun[]>([]);
@@ -254,6 +267,7 @@ export function AgentsView({
   >([]);
   const [isWorkflowLoading, setIsWorkflowLoading] = useState(false);
   const [isWorkflowSaving, setIsWorkflowSaving] = useState(false);
+  const [isWorkflowDirty, setIsWorkflowDirty] = useState(false);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
 
@@ -326,6 +340,7 @@ export function AgentsView({
         apiClient.getTestManagementProviders().catch(() => []),
       ]);
       setWorkflow(savedWorkflow);
+      setIsWorkflowDirty(false);
       setWorkflowProviderOptions(
         [
           ...pbiProviders.map((provider) => ({
@@ -468,59 +483,6 @@ export function AgentsView({
     }
   };
 
-  const updateWorkflowStep = (stepId: string, update: Partial<AgentWorkflowStepDto>) => {
-    setWorkflow((current) => ({
-      ...current,
-      steps: current.steps.map((step) => (step.id === stepId ? { ...step, ...update } : step)),
-    }));
-    setWorkflowStatus(null);
-  };
-
-  const moveWorkflowStep = (index: number, offset: -1 | 1) => {
-    setWorkflow((current) => {
-      // The move buttons are disabled on the first and last step, so the target is always in range.
-      const target = index + offset;
-      const steps = [...current.steps];
-      [steps[index], steps[target]] = [steps[target]!, steps[index]!];
-      return { ...current, steps };
-    });
-    setWorkflowStatus(null);
-  };
-
-  const addWorkflowStep = () => {
-    const step: AgentWorkflowStepDto = {
-      id:
-        globalThis.crypto?.randomUUID?.() ??
-        `step-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      name: '',
-      instructions: '',
-      reviewRequired: false,
-    };
-    setWorkflow((current) => ({ ...current, steps: [...current.steps, step] }));
-    setWorkflowStatus(null);
-  };
-
-  const addWorkflowRule = () => {
-    const rule: AgentWorkflowRuleDto = {
-      id:
-        globalThis.crypto?.randomUUID?.() ??
-        `rule-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      name: `${t('agents.workflowRule')} ${workflow.rules.length + 1}`,
-      toolset: 'pbi',
-      effect: 'allow',
-    };
-    setWorkflow((current) => ({ ...current, rules: [...current.rules, rule] }));
-    setWorkflowStatus(null);
-  };
-
-  const updateWorkflowRule = (id: string, patch: Partial<AgentWorkflowRuleDto>) => {
-    setWorkflow((current) => ({
-      ...current,
-      rules: current.rules.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)),
-    }));
-    setWorkflowStatus(null);
-  };
-
   const saveWorkflow = async () => {
     if (workflow.enabled && workflow.steps.length === 0 && workflow.rules.length === 0) {
       setWorkflowError(t('agents.workflowNoSteps'));
@@ -544,6 +506,7 @@ export function AgentsView({
     try {
       const saved = await apiClient.saveAgentWorkflow(workflow);
       setWorkflow(saved);
+      setIsWorkflowDirty(false);
       setWorkflowStatus(t('agents.workflowSaved'));
     } catch (err) {
       setWorkflowError(err instanceof Error ? err.message : t('agents.workflowSaveFailed'));
@@ -556,6 +519,7 @@ export function AgentsView({
     setSelectedAgentId(agentId);
     setExecutionResult(null);
     setActiveViewTab('playground');
+    onSelectSection?.('playground');
   };
 
   // Filtered agents
@@ -573,9 +537,14 @@ export function AgentsView({
   const visibleTab = isReadOnly && activeViewTab === 'playground' ? 'catalog' : activeViewTab;
 
   return (
-    <div className={cn('flex flex-col gap-6 p-6', className)} data-testid="agents-view">
+    <div className={cn('flex min-h-full flex-col gap-6 p-6', className)} data-testid="agents-view">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div
+        className={cn(
+          'flex-col gap-4 sm:flex-row sm:items-center sm:justify-between',
+          visibleTab === 'catalog' || visibleTab === 'hub' ? 'flex' : 'hidden',
+        )}
+      >
         <div>
           <div className="flex items-center gap-2.5">
             <i className="ti ti-robot text-2xl text-[var(--fill-accent)]" aria-hidden="true" />
@@ -602,96 +571,102 @@ export function AgentsView({
         )}
       </div>
 
-      {/* Tabs Switcher: Catálogo vs Playground */}
-      <div className="flex items-center border-b border-[var(--border)] gap-6 text-sm font-medium">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => setActiveViewTab('catalog')}
-          className={cn(
-            'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
-            visibleTab === 'catalog'
-              ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
-              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-          )}
-          data-testid="tab-catalog"
-          leftIcon={<i className="ti ti-layout-grid text-base" aria-hidden="true" />}
-        >
-          <span>{t('runtime.agentCatalog')}</span>
-          <span className="ml-1 rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-xs text-[var(--text-muted)]">
-            {agents.length}
-          </span>
-        </Button>
-
-        {/* Running an agent is a write: members without edit access have no playground. */}
-        {!isReadOnly && (
+      {/* Submodule tabs; with the navigation driving the sections, only the Agents ones remain. */}
+      {(!section || section === 'agents') && (
+        <div className="flex items-center border-b border-[var(--border)] gap-6 text-sm font-medium">
           <Button
             type="button"
             variant="ghost"
-            onClick={() => setActiveViewTab('playground')}
+            onClick={() => setActiveViewTab('catalog')}
             className={cn(
               'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
-              visibleTab === 'playground'
+              visibleTab === 'catalog'
                 ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
                 : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
             )}
-            data-testid="tab-playground"
-            leftIcon={<i className="ti ti-terminal-2 text-base" aria-hidden="true" />}
+            data-testid="tab-catalog"
+            leftIcon={<i className="ti ti-layout-grid text-base" aria-hidden="true" />}
           >
-            <span>{t('agents.playground')}</span>
-            {selectedAgent && (
-              <span className="ml-1 max-w-[140px] truncate rounded bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-normal text-[var(--text-secondary)]">
-                {selectedAgent.name}
-              </span>
-            )}
+            <span>{t('runtime.agentCatalog')}</span>
+            <span className="ml-1 rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-xs text-[var(--text-muted)]">
+              {agents.length}
+            </span>
           </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => setActiveViewTab('map')}
-          className={cn(
-            'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
-            visibleTab === 'map'
-              ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
-              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+
+          {/* Running an agent is a write: members without edit access have no playground. */}
+          {!section && !isReadOnly && (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setActiveViewTab('playground')}
+              className={cn(
+                'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
+                visibleTab === 'playground'
+                  ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
+                  : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+              )}
+              data-testid="tab-playground"
+              leftIcon={<i className="ti ti-terminal-2 text-base" aria-hidden="true" />}
+            >
+              <span>{t('agents.playground')}</span>
+              {selectedAgent && (
+                <span className="ml-1 max-w-[140px] truncate rounded bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-normal text-[var(--text-secondary)]">
+                  {selectedAgent.name}
+                </span>
+              )}
+            </Button>
           )}
-          data-testid="tab-map"
-          leftIcon={<i className="ti ti-sitemap text-base" aria-hidden="true" />}
-        >
-          <span>{t('agents.map')}</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => setActiveViewTab('workflow')}
-          className={cn(
-            'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
-            visibleTab === 'workflow'
-              ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
-              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+          {!section && (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setActiveViewTab('map')}
+                className={cn(
+                  'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
+                  visibleTab === 'map'
+                    ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
+                    : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+                )}
+                data-testid="tab-map"
+                leftIcon={<i className="ti ti-sitemap text-base" aria-hidden="true" />}
+              >
+                <span>{t('agents.map')}</span>
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setActiveViewTab('workflow')}
+                className={cn(
+                  'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
+                  visibleTab === 'workflow'
+                    ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
+                    : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+                )}
+                data-testid="tab-workflow"
+                leftIcon={<i className="ti ti-route text-base" aria-hidden="true" />}
+              >
+                <span>{t('agents.workflow')}</span>
+              </Button>
+            </>
           )}
-          data-testid="tab-workflow"
-          leftIcon={<i className="ti ti-route text-base" aria-hidden="true" />}
-        >
-          <span>{t('agents.workflow')}</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => setActiveViewTab('hub')}
-          className={cn(
-            'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
-            visibleTab === 'hub'
-              ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
-              : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-          )}
-          data-testid="tab-hub"
-          leftIcon={<i className="ti ti-world-download text-base" aria-hidden="true" />}
-        >
-          <span>{t('agents.hubTab')}</span>
-        </Button>
-      </div>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setActiveViewTab('hub')}
+            className={cn(
+              'flex items-center gap-2 rounded-none border-b-2 px-1 pb-3 pt-2 font-medium transition-colors hover:bg-transparent',
+              visibleTab === 'hub'
+                ? 'border-[var(--fill-accent)] text-[var(--fill-accent)] font-semibold'
+                : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+            )}
+            data-testid="tab-hub"
+            leftIcon={<i className="ti ti-world-download text-base" aria-hidden="true" />}
+          >
+            <span>{t('agents.hubTab')}</span>
+          </Button>
+        </div>
+      )}
 
       {error && (
         <div
@@ -731,495 +706,55 @@ export function AgentsView({
       )}
 
       {visibleTab === 'workflow' && (
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-5" data-testid="workflow-panel">
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <i className="ti ti-route text-[var(--fill-accent)]" aria-hidden="true" />
-                    {t('agents.workflow')}
-                  </CardTitle>
-                </div>
-                <Button
-                  type="button"
-                  variant={workflow.enabled ? 'default' : 'outline'}
-                  aria-pressed={workflow.enabled}
-                  disabled={isReadOnly || isWorkflowLoading}
-                  onClick={() => {
-                    setWorkflow((current) => ({ ...current, enabled: !current.enabled }));
-                    setWorkflowStatus(null);
-                  }}
-                  data-testid="workflow-enabled-toggle"
-                >
-                  <i
-                    className={cn(
-                      'ti mr-2 text-base',
-                      workflow.enabled ? 'ti-toggle-right' : 'ti-toggle-left',
-                    )}
-                    aria-hidden="true"
-                  />
-                  {t('agents.workflowEnabled')}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <Card className="border-[var(--border)] bg-[var(--surface-1)]">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">{t('agents.workflowControls')}</CardTitle>
-                </CardHeader>
-                <CardContent className="grid items-start gap-4 md:grid-cols-2">
-                  <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                    {t('agents.workflowAutonomy')}
-                    <Select
-                      value={workflow.autonomy}
-                      disabled={isReadOnly || isWorkflowLoading}
-                      onChange={(event) =>
-                        setWorkflow((current) => ({
-                          ...current,
-                          autonomy: event.target.value as AgentWorkflowDto['autonomy'],
-                        }))
-                      }
-                    >
-                      <option value="supervised">{t('agents.workflowAutonomySupervised')}</option>
-                      <option value="balanced">{t('agents.workflowAutonomyBalanced')}</option>
-                      <option value="autonomous">{t('agents.workflowAutonomyAutonomous')}</option>
-                    </Select>
-                  </label>
-                  <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                    {t('agents.workflowUncertainty')}
-                    <Select
-                      value={workflow.uncertaintyBehavior}
-                      disabled={isReadOnly || isWorkflowLoading}
-                      onChange={(event) =>
-                        setWorkflow((current) => ({
-                          ...current,
-                          uncertaintyBehavior: event.target
-                            .value as AgentWorkflowDto['uncertaintyBehavior'],
-                        }))
-                      }
-                    >
-                      <option value="ask">{t('agents.workflowUncertaintyAsk')}</option>
-                      <option value="assume">{t('agents.workflowUncertaintyAssume')}</option>
-                    </Select>
-                  </label>
-                  <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                    {t('agents.workflowIssueCreation')}
-                    <Select
-                      value={workflow.issueCreationBehavior}
-                      disabled={isReadOnly || isWorkflowLoading}
-                      onChange={(event) =>
-                        setWorkflow((current) => ({
-                          ...current,
-                          issueCreationBehavior: event.target
-                            .value as AgentWorkflowDto['issueCreationBehavior'],
-                        }))
-                      }
-                    >
-                      <option value="ask">{t('agents.workflowIssueCreationAsk')}</option>
-                      <option value="allow">{t('agents.workflowIssueCreationAllow')}</option>
-                    </Select>
-                  </label>
-                  <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                    {t('agents.workflowDefaultAction')}
-                    <Select
-                      value={workflow.defaultAction}
-                      disabled={isReadOnly || isWorkflowLoading}
-                      onChange={(event) =>
-                        setWorkflow((current) => ({
-                          ...current,
-                          defaultAction: event.target.value as AgentWorkflowDto['defaultAction'],
-                        }))
-                      }
-                    >
-                      <option value="allow">{t('agents.workflowDefaultAllow')}</option>
-                      <option value="deny">{t('agents.workflowDefaultDeny')}</option>
-                    </Select>
-                  </label>
-                  <div className="flex flex-col items-start gap-2 text-sm text-[var(--text-secondary)]">
-                    {t('agents.workflowFinalReview')}
-                    <Button
-                      type="button"
-                      variant={workflow.finalReview ? 'default' : 'outline'}
-                      aria-pressed={workflow.finalReview}
-                      disabled={isReadOnly || isWorkflowLoading}
-                      onClick={() =>
-                        setWorkflow((current) => ({
-                          ...current,
-                          finalReview: !current.finalReview,
-                        }))
-                      }
-                    >
-                      <i
-                        className={cn(
-                          'ti mr-2',
-                          workflow.finalReview ? 'ti-shield-check' : 'ti-shield-off',
-                        )}
-                        aria-hidden="true"
-                      />
-                      {workflow.finalReview
-                        ? t('agents.workflowReviewRequired')
-                        : t('agents.workflowReviewOptional')}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-              {isReadOnly && (
-                <p className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300">
-                  {t('agents.workflowPermissionRequired')}
-                </p>
-              )}
-              {workflowError && (
-                <div
-                  role="alert"
-                  className="flex items-center justify-between gap-3 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300"
-                >
-                  <span>{workflowError}</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void loadWorkflow()}
-                  >
-                    {t('common.retry')}
-                  </Button>
-                </div>
-              )}
-              {workflowStatus && (
-                <p
-                  role="status"
-                  className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300"
-                >
-                  {workflowStatus}
-                </p>
-              )}
-              {isWorkflowLoading ? (
-                <div className="h-20 animate-pulse rounded-lg bg-[var(--surface-2)]" />
-              ) : (
-                workflow.steps.map((step, index) => (
-                  <Card key={step.id} className="border-[var(--border)] bg-[var(--surface-1)]">
-                    <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 pb-3">
-                      <CardTitle className="text-base">
-                        {t('agents.workflowStep', { number: index + 1 })}
-                      </CardTitle>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          aria-label={t('agents.moveWorkflowStepUp', { number: index + 1 })}
-                          disabled={isReadOnly || index === 0}
-                          onClick={() => moveWorkflowStep(index, -1)}
-                        >
-                          <i className="ti ti-arrow-up" aria-hidden="true" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          aria-label={t('agents.moveWorkflowStepDown', { number: index + 1 })}
-                          disabled={isReadOnly || index === workflow.steps.length - 1}
-                          onClick={() => moveWorkflowStep(index, 1)}
-                        >
-                          <i className="ti ti-arrow-down" aria-hidden="true" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-red-400"
-                          aria-label={t('agents.removeWorkflowStep', { number: index + 1 })}
-                          disabled={isReadOnly}
-                          onClick={() => {
-                            setWorkflow((current) => ({
-                              ...current,
-                              steps: current.steps.filter((item) => item.id !== step.id),
-                            }));
-                            setWorkflowStatus(null);
-                          }}
-                        >
-                          <i className="ti ti-trash" aria-hidden="true" />
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="grid gap-4 md:grid-cols-2">
-                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                        {t('agents.workflowStepName')}
-                        <Input
-                          value={step.name}
-                          placeholder={t('agents.workflowStepNamePlaceholder')}
-                          disabled={isReadOnly}
-                          onChange={(event) =>
-                            updateWorkflowStep(step.id, { name: event.target.value })
-                          }
-                        />
-                      </label>
-                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                        {t('agents.workflowAgent')}
-                        <Select
-                          value={step.agentId ?? ''}
-                          disabled={isReadOnly}
-                          onChange={(event) =>
-                            updateWorkflowStep(step.id, {
-                              agentId: event.target.value || undefined,
-                            })
-                          }
-                        >
-                          <option value="">{t('agents.workflowRequestedAgent')}</option>
-                          {agents.map((agent) => (
-                            <option key={agent.id} value={agent.id}>
-                              {agent.name}
-                            </option>
-                          ))}
-                        </Select>
-                      </label>
-                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)] md:col-span-2">
-                        {t('agents.workflowInstructions')}
-                        <Textarea
-                          value={step.instructions}
-                          rows={4}
-                          placeholder={t('agents.workflowInstructionsPlaceholder')}
-                          disabled={isReadOnly}
-                          onChange={(event) =>
-                            updateWorkflowStep(step.id, { instructions: event.target.value })
-                          }
-                        />
-                      </label>
-                      <div className="md:col-span-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={step.reviewRequired ? 'default' : 'outline'}
-                          aria-pressed={step.reviewRequired ?? false}
-                          disabled={isReadOnly}
-                          onClick={() =>
-                            updateWorkflowStep(step.id, {
-                              reviewRequired: !step.reviewRequired,
-                            })
-                          }
-                        >
-                          <i
-                            className={cn(
-                              'ti mr-2',
-                              step.reviewRequired ? 'ti-user-check' : 'ti-user-question',
-                            )}
-                            aria-hidden="true"
-                          />
-                          {t('agents.workflowStepReview')}
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
-              )}
-              <Card className="border-[var(--border)] bg-[var(--surface-1)]">
-                <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
-                  <CardTitle className="text-base">{t('agents.workflowRules')}</CardTitle>
-                  {!isReadOnly && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={addWorkflowRule}
-                      disabled={workflow.rules.length >= 100}
-                    >
-                      <i className="ti ti-plus mr-2" aria-hidden="true" />
-                      {t('agents.workflowAddRule')}
-                    </Button>
-                  )}
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {workflow.rules.map((rule) => (
-                    <div
-                      key={rule.id}
-                      className="grid items-start gap-3 rounded-lg border border-[var(--border)] p-3 md:grid-cols-2"
-                    >
-                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                        {t('agents.workflowRuleName')}
-                        <Input
-                          value={rule.name}
-                          disabled={isReadOnly}
-                          onChange={(event) =>
-                            updateWorkflowRule(rule.id, { name: event.target.value })
-                          }
-                        />
-                      </label>
-                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                        {t('agents.workflowRuleModule')}
-                        <Select
-                          value={rule.toolset}
-                          disabled={isReadOnly}
-                          onChange={(event) =>
-                            updateWorkflowRule(rule.id, {
-                              toolset: event.target.value as AgentWorkflowToolset,
-                            })
-                          }
-                        >
-                          <option value="all">{t('agents.workflowModuleAll')}</option>
-                          <option value="agents">{t('agents.workflowModuleAgents')}</option>
-                          <option value="integrations">
-                            {t('agents.workflowModuleIntegrations')}
-                          </option>
-                          <option value="brain">{t('agents.workflowModuleBrain')}</option>
-                          <option value="issues">{t('agents.workflowModuleIssues')}</option>
-                          <option value="pbi">{t('agents.workflowModulePbi')}</option>
-                          <option value="spec">{t('agents.workflowModuleSpec')}</option>
-                          <option value="testplans">{t('agents.workflowModuleTestPlans')}</option>
-                          <option value="design">{t('agents.workflowModuleDesign')}</option>
-                          <option value="e2e">{t('agents.workflowModuleE2e')}</option>
-                          <option value="releasenotes">
-                            {t('agents.workflowModuleReleaseNotes')}
-                          </option>
-                          <option value="integrationtests">
-                            {t('agents.workflowModuleIntegrationTests')}
-                          </option>
-                          <option value="loadtests">{t('agents.workflowModuleLoadTests')}</option>
-                          <option value="audit">{t('agents.workflowModuleAudit')}</option>
-                          <option value="workspaces">{t('agents.workflowModuleWorkspaces')}</option>
-                        </Select>
-                      </label>
-                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                        {t('agents.workflowRuleAction')}
-                        <Input
-                          value={rule.toolName ?? ''}
-                          list={`workflow-actions-${rule.id}`}
-                          placeholder={t('agents.workflowAllActions')}
-                          disabled={isReadOnly}
-                          onChange={(event) =>
-                            updateWorkflowRule(rule.id, {
-                              toolName: event.target.value.trim() || undefined,
-                            })
-                          }
-                        />
-                        <datalist id={`workflow-actions-${rule.id}`}>
-                          {workflowToolNames[rule.toolset].map((toolName) => (
-                            <option key={toolName} value={toolName} />
-                          ))}
-                        </datalist>
-                      </label>
-                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-                        {t('agents.workflowAllowedProviders')}
-                        <Input
-                          value={(rule.allowedProviders ?? []).join(', ')}
-                          list={`workflow-providers-${rule.id}`}
-                          placeholder={t('agents.workflowAllProviders')}
-                          disabled={isReadOnly || !rule.toolName}
-                          onChange={(event) => {
-                            const providers = event.target.value
-                              .split(',')
-                              .map((provider) => provider.trim())
-                              .filter(Boolean);
-                            updateWorkflowRule(rule.id, {
-                              allowedProviders: providers.length
-                                ? [...new Set(providers)]
-                                : undefined,
-                            });
-                          }}
-                        />
-                        <datalist id={`workflow-providers-${rule.id}`}>
-                          {workflowProviderOptions.map((provider) => (
-                            <option key={provider.id} value={provider.id}>
-                              {provider.name}
-                            </option>
-                          ))}
-                        </datalist>
-                      </label>
-                      <div className="flex flex-wrap gap-2 md:col-span-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={rule.requireApproval ? 'default' : 'outline'}
-                          aria-pressed={rule.requireApproval ?? false}
-                          disabled={isReadOnly}
-                          onClick={() =>
-                            updateWorkflowRule(rule.id, {
-                              requireApproval: !rule.requireApproval,
-                            })
-                          }
-                        >
-                          {t('agents.workflowRequireApproval')}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={rule.effect === 'deny' ? 'destructive' : 'default'}
-                          aria-pressed={rule.effect === 'deny'}
-                          disabled={isReadOnly}
-                          onClick={() =>
-                            updateWorkflowRule(rule.id, {
-                              effect: rule.effect === 'deny' ? 'allow' : 'deny',
-                            })
-                          }
-                        >
-                          {rule.effect === 'deny'
-                            ? t('agents.workflowActionBlocked')
-                            : t('agents.workflowActionAllowed')}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={rule.createIssueForAction ? 'default' : 'outline'}
-                          aria-pressed={rule.createIssueForAction ?? false}
-                          disabled={isReadOnly}
-                          onClick={() =>
-                            updateWorkflowRule(rule.id, {
-                              createIssueForAction: !rule.createIssueForAction,
-                            })
-                          }
-                        >
-                          {t('agents.workflowCreateIssuePerAction')}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-8 w-8 text-red-400"
-                          aria-label={t('agents.workflowRemoveRule', { name: rule.name })}
-                          disabled={isReadOnly}
-                          onClick={() =>
-                            setWorkflow((current) => ({
-                              ...current,
-                              rules: current.rules.filter((item) => item.id !== rule.id),
-                            }))
-                          }
-                        >
-                          <i className="ti ti-trash" aria-hidden="true" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-              {!isWorkflowLoading && workflow.steps.length === 0 && (
-                <p className="rounded-lg border border-dashed border-[var(--border)] p-5 text-center text-sm text-[var(--text-muted)]">
-                  {t('agents.workflowNoSteps')}
-                </p>
-              )}
-              {!isReadOnly && !isWorkflowLoading && (
-                <div className="flex flex-wrap justify-between gap-3">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={addWorkflowStep}
-                    disabled={workflow.steps.length >= 20}
-                  >
-                    <i className="ti ti-plus mr-2" aria-hidden="true" />
-                    {t('agents.addWorkflowStep')}
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => void saveWorkflow()}
-                    isLoading={isWorkflowSaving}
-                  >
-                    <i className="ti ti-device-floppy mr-2" aria-hidden="true" />
-                    {isWorkflowSaving ? t('agents.savingWorkflow') : t('agents.saveWorkflow')}
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+        <div className="flex w-full flex-col gap-5" data-testid="workflow-panel">
+          {isWorkflowLoading ? (
+            <div className="h-72 animate-pulse rounded-xl bg-[var(--surface-2)]" />
+          ) : (
+            <AgentWorkflowBoard
+              workflow={workflow}
+              agents={agents}
+              isReadOnly={isReadOnly}
+              isSaving={isWorkflowSaving}
+              isDirty={isWorkflowDirty}
+              toolNames={workflowToolNames}
+              providerOptions={workflowProviderOptions}
+              onChange={(next) => {
+                setWorkflow(next);
+                setIsWorkflowDirty(true);
+                setWorkflowStatus(null);
+              }}
+              onSave={() => void saveWorkflow()}
+            />
+          )}
+          {isReadOnly && (
+            <p className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300">
+              {t('agents.workflowPermissionRequired')}
+            </p>
+          )}
+          {workflowError && (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-3 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300"
+            >
+              <span>{workflowError}</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => void loadWorkflow()}>
+                {t('common.retry')}
+              </Button>
+            </div>
+          )}
+          {workflowStatus && (
+            <p
+              role="status"
+              className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300"
+            >
+              {workflowStatus}
+            </p>
+          )}
+          {!isWorkflowLoading && workflow.steps.length === 0 && (
+            <p className="rounded-lg border border-dashed border-[var(--border)] p-5 text-center text-sm text-[var(--text-muted)]">
+              {t('agents.workflowNoSteps')}
+            </p>
+          )}
         </div>
       )}
 
@@ -1421,7 +956,7 @@ export function AgentsView({
       {/* View Mode 2: Dedicated Playground Console */}
       {visibleTab === 'playground' && (
         <div
-          className="flex flex-col gap-6 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-6 shadow-sm"
+          className="flex flex-1 flex-col gap-6 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-6 shadow-sm"
           data-testid="playground-view-panel"
         >
           {/* Playground Header */}
@@ -1556,8 +1091,8 @@ export function AgentsView({
           )}
 
           {/* Prompt Input & Execution Form */}
-          <div className="flex flex-col gap-4">
-            <div>
+          <div className="flex min-h-0 flex-1 flex-col gap-4">
+            <div className="flex min-h-0 flex-1 flex-col">
               <div className="mb-2 flex items-center justify-between">
                 <label
                   htmlFor="playground-prompt"
@@ -1585,7 +1120,7 @@ export function AgentsView({
                 }}
                 placeholder={t('agents.detailedPromptPlaceholder')}
                 rows={5}
-                className="min-h-[120px] resize-y p-3.5 text-xs font-mono leading-relaxed"
+                className="min-h-[120px] flex-1 resize-y p-3.5 font-mono text-xs leading-relaxed"
                 data-testid="playground-prompt-input"
               />
             </div>

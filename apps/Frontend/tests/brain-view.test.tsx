@@ -772,19 +772,29 @@ describe('BrainView', () => {
     });
   });
 
-  it('triggers knowledge synchronization successfully and updates stats and documents', async () => {
+  it('triggers knowledge synchronization, keeps provider pages in their section and closes removed ones', async () => {
     const client = new ApiClient();
-    const oldSource = 'https://dev.azure.com/wiki?pagePath=%2FDocumento';
-    const newSource = 'app://local?title=Documento%20Sincronizado';
-    const oldDocument = {
-      id: `${oldSource}:doc1`,
+    const source = 'https://dev.azure.com/wiki?pagePath=%2FDocumento';
+    const keptSource = 'https://dev.azure.com/wiki?pagePath=%2FMantido';
+    const removedDocument = {
+      id: `${source}:doc1`,
       pageId: 'doc1',
-      source: oldSource,
-      title: 'Documento Sincronizado',
-      content: '# Documento Sincronizado',
+      source,
+      title: 'Documento Removido',
+      content: '# Documento Removido',
       chunksCount: 1,
       totalCharacters: 25,
       updatedAt: '2026-09-11T12:00:00.000Z',
+      isCustom: false,
+      provider: 'azure_devops_wiki',
+    };
+    const keptDocument = {
+      ...removedDocument,
+      id: `${keptSource}:doc2`,
+      pageId: 'doc2',
+      source: keptSource,
+      title: 'Documento Mantido',
+      content: '# Documento Mantido',
     };
     const syncSpy = vi
       .spyOn(client, 'syncKnowledge')
@@ -792,7 +802,7 @@ describe('BrainView', () => {
         success: true,
         provider: 'azure_devops_wiki',
         chunksCount: 25,
-        archived: [{ pageId: 'doc1', oldSource, newSource }],
+        removed: [{ pageId: 'doc1', source }],
       })
       .mockResolvedValueOnce({
         success: true,
@@ -804,31 +814,16 @@ describe('BrainView', () => {
       .mockResolvedValueOnce({ documentsCount: 1, chunksCount: 40 }) // after first sync
       .mockResolvedValueOnce({ documentsCount: 1, chunksCount: 1 }); // after second sync
     vi.spyOn(client, 'getKnowledgeDocuments')
-      .mockResolvedValueOnce([oldDocument]) // on mount
-      .mockResolvedValueOnce([
-        {
-          ...oldDocument,
-          id: `${newSource}:doc1`,
-          pageId: 'doc1',
-          source: newSource,
-          isCustom: true,
-        },
-      ]) // after first sync
-      .mockResolvedValueOnce([
-        {
-          ...oldDocument,
-          id: `${newSource}:doc1`,
-          source: newSource,
-          isCustom: true,
-        },
-      ]); // after second sync
+      .mockResolvedValueOnce([removedDocument, keptDocument]) // on mount
+      .mockResolvedValue([keptDocument]); // after each sync
     vi.spyOn(client, 'getKnowledgeRelations').mockResolvedValue([]);
 
-    const { getByTestId, findByTestId, queryByTestId, getByLabelText, getAllByText } = render(
+    const { getByTestId, findByTestId, queryByTestId, getByLabelText } = render(
       <BrainView apiClient={client} />,
     );
 
-    fireEvent.click(await findByTestId(`tree-item-${oldDocument.id}`));
+    fireEvent.click(await findByTestId(`tree-item-${keptDocument.id}`));
+    fireEvent.click(getByTestId(`tree-item-${removedDocument.id}`));
     const syncBtn = getByTestId('btn-sync-knowledge');
     fireEvent.click(syncBtn);
 
@@ -836,14 +831,16 @@ describe('BrainView', () => {
 
     const feedback = await findByTestId('sync-feedback');
     expect(feedback).toHaveTextContent(
-      'Documentos sincronizados com sucesso! 25 chunks indexados. 1 documento(s) preservado(s) em Notas da Aplicação.',
+      'Documentos sincronizados com sucesso! 25 chunks indexados. 1 documento(s) removido(s) por não existirem mais no provedor.',
     );
 
     await waitFor(() => {
-      expect(getAllByText('Documento Sincronizado').length).toBeGreaterThan(0);
-      expect(getByTestId('tab-active-doc')).toHaveTextContent('Documento Sincronizado');
-      expect(getByTestId(`tree-item-${newSource}:doc1`)).toBeInTheDocument();
+      expect(queryByTestId(`tree-item-${removedDocument.id}`)).not.toBeInTheDocument();
+      expect(getByTestId('brain-tabs-bar')).not.toHaveTextContent('Documento Removido');
     });
+    expect(getByTestId('folder-external-docs')).toHaveTextContent('1');
+    expect(getByTestId('folder-app-docs')).toHaveTextContent('0');
+    expect(getByTestId('brain-tabs-bar')).not.toHaveTextContent('Documento Removido');
     fireEvent.click(getByTestId('tab-brain-overview'));
     expect(getByTestId('card-documentos')).toHaveTextContent('1');
     expect(getByTestId('card-sync')).toHaveTextContent('Agora mesmo');
@@ -858,6 +855,44 @@ describe('BrainView', () => {
     const closeBtn = getByLabelText('Fechar aviso');
     fireEvent.click(closeBtn);
     expect(queryByTestId('sync-feedback')).not.toBeInTheDocument();
+  });
+
+  it('lists each provider in its own section and only native pages in application notes', async () => {
+    const page = (id: string, source: string, provider?: string) => ({
+      id: `${source}:${id}`,
+      pageId: id,
+      source,
+      title: `Title ${id}`,
+      chunksCount: 1,
+      totalCharacters: 10,
+      updatedAt: '2026-09-11T12:00:00.000Z',
+      isCustom: !provider,
+      ...(provider ? { provider } : {}),
+    });
+    const docs = [
+      page('native', 'app://local?title=Title%20native'),
+      page('wiki', 'https://dev.azure.com/wiki?pagePath=%2FWiki', 'azure_devops_wiki'),
+      page('card', 'adk-provider://trello/card-1?title=Title%20card', 'trello'),
+      page('issue', 'github:acme/repo', 'github_projects'),
+      page('legacy', 'https://dev.azure.com/wiki/legacy'),
+      page('custom', 'adk-provider://custom/x?title=x', 'custom'),
+    ];
+    docs[4] = { ...docs[4]!, isCustom: false };
+    const { getByTestId, queryByTestId } = render(<BrainView initialDocuments={docs} />);
+
+    expect(getByTestId('folder-app-docs')).toHaveTextContent('Notas da Aplicação1');
+    expect(getByTestId('folder-external-docs')).toHaveTextContent('Wiki (Azure DevOps)2');
+    expect(getByTestId('folder-provider-docs-trello')).toHaveTextContent('Trello1');
+    expect(getByTestId('folder-provider-docs-github_projects')).toHaveTextContent(
+      'GitHub Projects1',
+    );
+    expect(getByTestId('folder-provider-docs-custom')).toHaveTextContent('custom1');
+
+    fireEvent.click(getByTestId('folder-provider-docs-trello'));
+    expect(queryByTestId(`tree-item-${docs[2]!.id}`)).not.toBeInTheDocument();
+    expect(getByTestId(`tree-item-${docs[1]!.id}`)).toBeInTheDocument();
+    fireEvent.click(getByTestId('folder-provider-docs-trello'));
+    expect(getByTestId(`tree-item-${docs[2]!.id}`)).toBeInTheDocument();
   });
 
   it('handles synchronization failures (Error instance and unknown rejection)', async () => {
@@ -1597,7 +1632,8 @@ describe('BrainView', () => {
       expect(view.queryByTestId('btn-delete-document')).not.toBeInTheDocument();
       expect(view.queryByTestId('btn-sync-knowledge')).not.toBeInTheDocument();
       expect(view.queryByTestId('btn-create-document')).not.toBeInTheDocument();
-      // Asking the Brain only needs view access
+      // Asking the Brain only needs view access; the sidebar starts collapsed.
+      fireEvent.click(view.getByRole('button', { name: 'Abrir pesquisa no Brain' }));
       expect(view.getByRole('button', { name: 'Perguntar' })).toBeInTheDocument();
     });
   });

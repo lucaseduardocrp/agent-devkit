@@ -86,11 +86,11 @@ describe('E2E ApiClient methods', () => {
     expect(calls.map((call) => `${call.init?.method ?? 'GET'} ${call.url}`)).toEqual([
       'GET http://api/e2e/repositories',
       'GET http://api/e2e/repositories/branches?provider=azure_devops&repositoryId=guid+1',
-      'GET http://api/e2e/tests/t%201/script',
+      'GET http://api/e2e/tests/t%201/script?kind=spec',
       'PUT http://api/e2e/tests/t1/script',
       'POST http://api/e2e/creations/c1/pull',
     ]);
-    expect(calls[3]?.init?.body).toBe('{"content":"code"}');
+    expect(calls[3]?.init?.body).toBe('{"content":"code","kind":"spec"}');
   });
 
   it('asks for a signed video URL', async () => {
@@ -127,13 +127,13 @@ describe('E2E navigation', () => {
   it('adds E2E Automation under the Test menu', () => {
     const onSelect = vi.fn();
     const view = render(<Sidebar activeTab="brain" onSelectTab={onSelect} />);
-    fireEvent.click(view.getByRole('button', { name: /^Test$/i }));
+    fireEvent.click(view.getByRole('button', { name: /^Testes$/i }));
     fireEvent.click(view.getByTestId('sidebar-e2e-button'));
     expect(onSelect).toHaveBeenCalledWith('e2e');
     view.unmount();
 
     const active = render(<Sidebar activeTab="e2e" onSelectTab={onSelect} />);
-    expect(active.getByRole('button', { name: /^Test$/i })).toHaveAttribute(
+    expect(active.getByRole('button', { name: /^Testes$/i })).toHaveAttribute(
       'aria-expanded',
       'true',
     );
@@ -159,7 +159,7 @@ describe('E2E navigation', () => {
     fireEvent.click(view.getByRole('button', { name: /Nova execução/ }));
     // The sidebar also has an Agents entry; the form's shortcut is rendered last.
     await view.findByText(/Crie um agente em Agents/);
-    const links = view.getAllByRole('button', { name: 'Agents' });
+    const links = view.getAllByRole('button', { name: 'Agentes' });
     fireEvent.click(links[links.length - 1]!);
     await waitFor(() => expect(view.getByTestId('agents-view')).toBeInTheDocument());
 

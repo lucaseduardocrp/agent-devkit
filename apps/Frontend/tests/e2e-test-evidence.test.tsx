@@ -13,6 +13,8 @@ const test: E2eTestDetail = {
   description: 'Validar a tela',
   steps: ['Abrir grupos'],
   priority: 'high',
+  beforeRunInstructions: null,
+  afterRunInstructions: null,
   scriptPath: 'tests/tc001.spec.ts',
   status: 'passed',
   error: null,

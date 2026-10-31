@@ -6,6 +6,8 @@ import type {
   ApiRunStatus,
   LoadScenario,
 } from '../domain/api-test.js';
+import type { RuntimeState } from '../engine/types.js';
+import type { PersonalScope } from './personal-secrets.js';
 
 export type NewApiRun = Omit<
   ApiRun,
@@ -33,6 +35,19 @@ export interface RunOutcome {
   readonly status: Extract<ApiRunStatus, 'passed' | 'failed' | 'error'>;
   readonly result: ApiRun['result'];
   readonly error: string | null;
+}
+
+/** What an executor reports: integration runs also hand back the user's runtime state. */
+export interface ExecutorOutcome extends RunOutcome {
+  readonly runtime?: RuntimeState;
+}
+
+/** Identifies one user's personal values of a collection, an environment or a runtime state. */
+export interface PersonalValueScope {
+  readonly workspaceId: string;
+  readonly userId: string;
+  readonly scope: PersonalScope;
+  readonly scopeId: string;
 }
 
 /** Storage of collections, environments, load scenarios and runs (which double as the queue). */
@@ -72,6 +87,16 @@ export interface ApiTestStore {
   /** Running runs whose holder stopped heartbeating go back to the queue or end in error. */
   sweep(staleBefore: Date, maxAttempts: number): Promise<{ requeued: number; failed: number }>;
   deleteRun(workspaceId: string, id: string): Promise<boolean>;
+
+  /** The user's personal values of a scope: ref -> encrypted value. */
+  listPersonalValues(key: PersonalValueScope): Promise<Map<string, string>>;
+  /** Inserts or replaces the given refs (values already encrypted). */
+  upsertPersonalValues(key: PersonalValueScope, values: ReadonlyMap<string, string>): Promise<void>;
+  deletePersonalValue(key: PersonalValueScope, ref: string): Promise<boolean>;
+  /** Every user's values of a scope (the collection or environment was deleted). */
+  deletePersonalScope(workspaceId: string, scope: PersonalScope, scopeId: string): Promise<void>;
+  /** One user's values of a scope. */
+  deleteUserPersonalScope(key: PersonalValueScope): Promise<void>;
 }
 
 const ACTIVE = new Set<ApiRunStatus>(['queued', 'running']);
@@ -81,6 +106,12 @@ export class InMemoryApiTestStore implements ApiTestStore {
   private readonly environments = new Map<string, ApiEnvironment>();
   private readonly scenarios = new Map<string, LoadScenario>();
   private readonly runs = new Map<string, ApiRun>();
+  /** scope key -> ref -> encrypted value. */
+  private readonly personal = new Map<string, Map<string, string>>();
+
+  private static personalKey(key: PersonalValueScope) {
+    return JSON.stringify([key.workspaceId, key.userId, key.scope, key.scopeId]);
+  }
 
   private static inWorkspace<T extends { workspaceId: string; updatedAt?: Date }>(
     map: Map<string, T>,
@@ -280,5 +311,33 @@ export class InMemoryApiTestStore implements ApiTestStore {
     if (run?.workspaceId !== workspaceId || ACTIVE.has(run.status)) return Promise.resolve(false);
     this.runs.delete(id);
     return Promise.resolve(true);
+  }
+
+  listPersonalValues(key: PersonalValueScope) {
+    return Promise.resolve(new Map(this.personal.get(InMemoryApiTestStore.personalKey(key)) ?? []));
+  }
+  upsertPersonalValues(key: PersonalValueScope, values: ReadonlyMap<string, string>) {
+    if (!values.size) return Promise.resolve();
+    const id = InMemoryApiTestStore.personalKey(key);
+    const current = this.personal.get(id) ?? new Map<string, string>();
+    for (const [ref, value] of values) current.set(ref, value);
+    this.personal.set(id, current);
+    return Promise.resolve();
+  }
+  deletePersonalValue(key: PersonalValueScope, ref: string) {
+    return Promise.resolve(
+      this.personal.get(InMemoryApiTestStore.personalKey(key))?.delete(ref) ?? false,
+    );
+  }
+  deletePersonalScope(workspaceId: string, scope: PersonalScope, scopeId: string) {
+    for (const id of [...this.personal.keys()]) {
+      const [w, , s, i] = JSON.parse(id) as string[];
+      if (w === workspaceId && s === scope && i === scopeId) this.personal.delete(id);
+    }
+    return Promise.resolve();
+  }
+  deleteUserPersonalScope(key: PersonalValueScope) {
+    this.personal.delete(InMemoryApiTestStore.personalKey(key));
+    return Promise.resolve();
   }
 }

@@ -124,8 +124,9 @@ describe('PrismaApiTestStore collections', () => {
     expect(await store.getCollection('w1', 'c9')).toBeNull();
 
     db.apiCollectionRecord.upsert.mockResolvedValue(collectionRow);
+    const { definition: _definition, ...row } = collectionRow;
     const input = {
-      ...collectionRow,
+      ...row,
       variables: [{ key: 'k', value: undefined }],
       auth: { type: 'none' },
       items: [],

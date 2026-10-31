@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  hookFilePath,
   normalizeScriptFolder,
   normalizeLocalBrowserOrigin,
   normalizeTargetUrl,
@@ -125,6 +126,13 @@ describe('script locations', () => {
     expect(scriptFilePath('', { code: 'TC001', title: 'Home' })).toBe('tc001-home.spec.ts');
   });
 
+  it('keeps Before Run and After Run next to the spec, outside Playwright test files', () => {
+    expect(hookFilePath('tests/e2e/tc001-home.spec.ts', 'beforeRun')).toBe(
+      'tests/e2e/tc001-home.before.ts',
+    );
+    expect(hookFilePath('tc001-home.spec.js', 'afterRun')).toBe('tc001-home.after.ts');
+  });
+
   it('titles imported specs from their test name or file name', () => {
     expect(specTitle("test('TC010 - Checkout', () => {})", 'a/x.spec.ts')).toBe('Checkout');
     expect(specTitle('test("Login works", () => {})', 'a/x.spec.ts')).toBe('Login works');
@@ -185,6 +193,28 @@ test('TC001 - checkout process', async ({ page, request }) => {
         `import { test } from '@playwright/test';\ntest('x', () => {});\n//${'a'.repeat(60_001)}`,
       ).violations,
     ).toEqual(['script is too long']);
+  });
+
+  it('accepts Before Run and After Run modules that export one function and declare no test', () => {
+    const hook = `import { expect, type APIRequestContext } from '@playwright/test';
+export default async function beforeRun({ request }: { request: APIRequestContext }) {
+  const response = await request.post('/api/events', { data: { name: 'E2E TC001' } });
+  expect(response.ok()).toBeTruthy();
+}`;
+    expect(checkScript(hook, 'hook')).toEqual({ ok: true, violations: [] });
+    // A test or Playwright hook inside it would run outside the runner's control.
+    expect(checkScript(`${hook}\ntest('x', async () => {});`, 'hook').violations).toEqual([
+      'hook must not declare tests or hooks',
+    ]);
+    expect(checkScript(`${hook}\ntest.afterAll(async () => {});`, 'hook').violations).toEqual([
+      'hook must not declare tests or hooks',
+    ]);
+    expect(checkScript('const a = 1;', 'hook').violations).toEqual([
+      'hook must export default async function',
+    ]);
+    expect(checkScript(`${hook}\nimport fs from 'node:fs';`, 'hook').violations).toContain(
+      'import from "node:fs" is not allowed',
+    );
   });
 
   it('strips Markdown fences', () => {

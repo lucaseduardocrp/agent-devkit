@@ -17,7 +17,7 @@ describe('Sidebar work and core navigation', () => {
     const button = view.getByTestId(testId);
     expect(button).toHaveAttribute('aria-current', 'page');
     expect(button.className).toContain('bg-[var(--fill-ghost-selected)]');
-    expect(view.getByRole('button', { name: 'Brain' })).not.toHaveAttribute('aria-current');
+    expect(view.getByRole('button', { name: 'Cérebro' })).not.toHaveAttribute('aria-current');
 
     fireEvent.click(button);
     expect(onSelect).toHaveBeenCalledWith(tab);
@@ -51,7 +51,7 @@ describe('Sidebar work and core navigation', () => {
     const view = render(<Sidebar activeTab="brain" onSelectTab={vi.fn()} inboxUnreadCount={3} />);
     expect(view.getByTestId('sidebar-inbox-button')).toHaveTextContent('3');
     expect(view.getByLabelText('3 unread')).toBeInTheDocument();
-    expect(view.getByTestId('sidebar-dashboard-button').textContent).toBe('Dashboard');
+    expect(view.getByTestId('sidebar-dashboard-button').textContent).toBe('Painel');
 
     view.rerender(<Sidebar activeTab="brain" onSelectTab={vi.fn()} inboxUnreadCount={0} />);
     expect(view.queryByLabelText('0 unread')).not.toBeInTheDocument();

@@ -43,6 +43,10 @@ const FORBIDDEN: readonly { pattern: RegExp; reason: string }[] = [
   },
 ];
 
+/** The runner wires hooks around the test itself; a hook module only holds plain actions. */
+const HOOK_DECLARATIONS =
+  /\btest\s*(\.\s*(only|skip|fixme|describe|beforeEach|afterEach|beforeAll|afterAll))?\s*\(/;
+
 export interface ScriptGuardResult {
   readonly ok: boolean;
   readonly violations: readonly string[];
@@ -55,10 +59,20 @@ function hasStringMemberAccess(script: string): boolean {
   return false;
 }
 
-export function checkScript(script: string): ScriptGuardResult {
+/**
+ * `spec` is the test itself. `hook` is a Before Run or After Run module: it exports one default
+ * async function the runner calls around the test and declares no test of its own.
+ */
+export type ScriptRole = 'spec' | 'hook';
+
+export function checkScript(script: string, role: ScriptRole = 'spec'): ScriptGuardResult {
   if (!script.trim()) return { ok: false, violations: ['script is empty'] };
   const violations: string[] = [];
   if (script.length > 60_000) violations.push('script is too long');
+  if (role === 'hook') {
+    if (!/\bexport\s+default\s+async\s+function\b/.test(script))
+      violations.push('hook must export default async function');
+  }
 
   const imports = [...script.matchAll(/\bimport\b[^;'"]*?\bfrom\s*['"]([^'"]+)['"]/g)].map(
     (match) => match[1] as string,
@@ -69,12 +83,17 @@ export function checkScript(script: string): ScriptGuardResult {
   for (const source of [...imports, ...bareImports]) {
     if (source !== '@playwright/test') violations.push(`import from "${source}" is not allowed`);
   }
-  if (!imports.includes('@playwright/test')) violations.push('script must import @playwright/test');
-  if (!/\btest\s*\(/.test(script)) violations.push('script must declare a test()');
+  if (role === 'spec') {
+    if (!imports.includes('@playwright/test'))
+      violations.push('script must import @playwright/test');
+    if (!/\btest\s*\(/.test(script)) violations.push('script must declare a test()');
+  }
 
   const code = script
     .replace(ALLOWED_ENV, 'E2E_ENV')
     .replace(STRINGS_AND_COMMENTS, (token) => (token.startsWith('/') ? ' ' : '""'));
+  if (role === 'hook' && HOOK_DECLARATIONS.test(code))
+    violations.push('hook must not declare tests or hooks');
   if (hasStringMemberAccess(code))
     violations.push('computed member access with strings is not allowed');
   for (const rule of FORBIDDEN) {

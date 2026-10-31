@@ -10,6 +10,7 @@ import { ModeSwitch } from '../../components/ui/mode-switch.js';
 import { useActivityRunner } from '../activities/ActivityCenter.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { usePermissions } from '../workspaces/permissions.js';
+import { DesignRepositoryPicker } from './DesignRepositoryPicker.js';
 import type {
   ApiClient,
   DesignFileDto,
@@ -189,6 +190,9 @@ export function DesignView({
   const [toast, setToast] = useState<ToastState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DesignProjectDto | null>(null);
 
+  const [reloadToken, setReloadToken] = useState(0);
+  const reload = () => setReloadToken((token) => token + 1);
+
   useEffect(() => {
     let mounted = true;
     setLoading(true);
@@ -233,7 +237,7 @@ export function DesignView({
     return () => {
       mounted = false;
     };
-  }, [apiClient, activeWorkspaceId, t]);
+  }, [apiClient, activeWorkspaceId, reloadToken, t]);
 
   const activeFile =
     selected?.files.find((file) => file.name === selectedFile) ?? selected?.files[0];
@@ -798,34 +802,19 @@ export function DesignView({
             </header>
             {!isReadOnly && (
               <div className="space-y-4 rounded-xl border border-border bg-surface-1 p-5">
-                <div>
-                  <label htmlFor="design-provider" className="mb-1.5 block text-sm font-medium">
-                    {t('design.repository')}
-                  </label>
-                  <Select
-                    id="design-provider"
-                    value={provider}
-                    disabled={providers.length === 0}
-                    onChange={(event) => setProvider(event.target.value as 'github' | 'azure')}
-                  >
-                    {providers.length === 0 && (
-                      <option value="github">{t('runtime.configureIntegration')}</option>
-                    )}
-                    {providers.includes('github') && <option value="github">GitHub</option>}
-                    {providers.includes('azure') && <option value="azure">Azure DevOps</option>}
-                  </Select>
-                  {onManageRepositories && canManageRepositories && (
-                    <Button
-                      className="mt-2"
-                      size="sm"
-                      variant="ghost"
-                      onClick={onManageRepositories}
-                    >
-                      <i className="ti ti-settings" aria-hidden="true" />{' '}
-                      {t('design.manageRepositories')}
-                    </Button>
-                  )}
-                </div>
+                <DesignRepositoryPicker
+                  apiClient={apiClient}
+                  isReadOnly={isReadOnly}
+                  onSaved={(saved) => {
+                    setProvider(saved.provider);
+                    setProviders([saved.provider]);
+                    void reload();
+                  }}
+                  onError={(error) => setToast({ message: error, variant: 'error' })}
+                  {...(onManageRepositories && canManageRepositories
+                    ? { onManageIntegrations: onManageRepositories }
+                    : {})}
+                />
                 <div>
                   <label htmlFor="design-title" className="mb-1.5 block text-sm font-medium">
                     {t('design.projectName')}

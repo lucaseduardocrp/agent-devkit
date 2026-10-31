@@ -203,6 +203,7 @@ function runInput(input: E2eRunInput): E2eRunnerTaskInput {
   return {
     kind: 'run',
     script: input.script,
+    hooks: input.hooks ?? null,
     mode: input.mode,
     baseUrl: input.localOrigin || input.baseUrl,
     locale: input.locale,
