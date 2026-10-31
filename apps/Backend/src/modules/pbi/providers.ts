@@ -8,6 +8,7 @@ import {
   type StateCategory,
 } from './push-contract.js';
 import type { PbiLinkType } from './pbi-relations.js';
+import { descriptionAs } from './description-format.js';
 import { attachmentKindFromName, type Attachment } from '../shared/attachment.js';
 import type { FieldDefinition, FieldValue } from '../field-mapping/field-mapping.js';
 
@@ -805,6 +806,27 @@ export function createPbiProvider(
             suggested: matchState(item.status, states),
             source: item.status,
           }),
+          // Azure cannot turn a Markdown description back into HTML, so Markdown items stay so.
+          item.sourceData.descriptionFormat === 'markdown'
+            ? selectField({
+                key: 'descriptionFormat',
+                label: 'Description format',
+                required: true,
+                options: [{ value: 'markdown', label: 'Markdown' }],
+                suggested: 'markdown',
+                readOnly: true,
+              })
+            : selectField({
+                key: 'descriptionFormat',
+                label: 'Description format',
+                required: true,
+                options: [
+                  { value: 'html', label: 'HTML', detail: 'default editor' },
+                  { value: 'markdown', label: 'Markdown' },
+                ],
+                chosen: values.descriptionFormat,
+                suggested: 'html',
+              }),
         ];
       },
       async push(item, options) {
@@ -814,10 +836,25 @@ export function createPbiProvider(
           options.issueType ||
           text(item.sourceData?.type) ||
           (item.kind === 'pbi' ? 'Product Backlog Item' : 'Task');
+        const descriptionFormat =
+          fields.descriptionFormat === 'markdown' ||
+          item.sourceData?.descriptionFormat === 'markdown'
+            ? 'markdown'
+            : 'html';
         const patch: { op: string; path: string; value: unknown }[] = [
           { op: 'add', path: '/fields/System.Title', value: item.title },
-          { op: 'add', path: '/fields/System.Description', value: item.description },
+          {
+            op: 'add',
+            path: '/fields/System.Description',
+            value: descriptionAs(item.description, descriptionFormat),
+          },
         ];
+        if (descriptionFormat === 'markdown')
+          patch.push({
+            op: 'add',
+            path: '/multilineFieldsFormat/System.Description',
+            value: 'Markdown',
+          });
         if (fields.iterationPath)
           patch.push({
             op: 'add',
@@ -882,6 +919,7 @@ export function createPbiProvider(
           boardId: project,
           sourceData: {
             type,
+            ...(descriptionFormat === 'markdown' ? { descriptionFormat } : {}),
             ...(fields.iterationPath ? { iterationPath: fields.iterationPath } : {}),
             ...(fields.areaPath ? { areaPath: fields.areaPath } : {}),
             ...(fields.assignee ? { assignedTo: fields.assignee } : {}),
@@ -1129,7 +1167,7 @@ export function createPbiProvider(
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               name: item.title,
-              desc: item.description,
+              desc: descriptionAs(item.description, 'markdown'),
               idList: listId,
               ...(fields.member ? { idMembers: [fields.member] } : {}),
             }),
@@ -1988,7 +2026,7 @@ export function createPbiProvider(
                 input: {
                   draftIssueId: options.externalId,
                   title: item.title,
-                  body: item.description,
+                  body: descriptionAs(item.description, 'markdown'),
                   ...(assigneeIds ? { assigneeIds } : {}),
                 },
               },
@@ -2009,7 +2047,7 @@ export function createPbiProvider(
                 input: {
                   id: options.externalId,
                   title: item.title,
-                  body: item.description,
+                  body: descriptionAs(item.description, 'markdown'),
                   ...(assigneeIds ? { assigneeIds } : {}),
                 },
               },
@@ -2059,7 +2097,7 @@ export function createPbiProvider(
             input: {
               repositoryId: repoData.repository.id,
               title: item.title,
-              body: item.description,
+              body: descriptionAs(item.description, 'markdown'),
               ...(assigneeIds ? { assigneeIds } : {}),
             },
           },

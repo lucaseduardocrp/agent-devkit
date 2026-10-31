@@ -209,6 +209,7 @@ describe('E2eService', () => {
       ['tests/e2e/tc002-vote-once.spec.ts', 'test(e2e): add TC002 - Vote once', 'main'],
     ]);
     expect(await service.getScript('ws', first!.id)).toEqual({
+      kind: 'spec',
       path: 'tests/e2e/tc001-submit-question.spec.ts',
       content: VALID,
       url: 'https://example.test/acme/demo-app/blob/main/tests/e2e/tc001-submit-question.spec.ts',
@@ -318,6 +319,116 @@ describe('E2eService', () => {
     const after = (await service.get('ws', created.id)).tests;
     expect(after[1]).toMatchObject({ status: 'error' });
     expect(after[1]?.error).toContain('import from "node:fs" is not allowed');
+  });
+
+  it('writes Before Run and After Run from the test case and runs them around the spec', async () => {
+    const before = `import { type Page } from '@playwright/test';
+export default async function beforeRun({ page }: { page: Page }) {
+  await page.goto('/events/new');
+}`;
+    const after = `import { type APIRequestContext } from '@playwright/test';
+export default async function afterRun({ request }: { request: APIRequestContext }) {
+  await request.delete('/api/events/E2E TC001');
+}`;
+    const writeHook = vi
+      .fn()
+      .mockImplementation(({ kind }: { kind: string }) =>
+        Promise.resolve(kind === 'beforeRun' ? before : null),
+      );
+    const { service, scripts, author, runner } = setup({ writeHook });
+    const created = await service.create(context, input);
+    await service.idle();
+    const [first] = (await service.get('ws', created.id)).tests;
+    expect(scripts.commits.slice(0, 2).map((commit) => [commit.path, commit.message])).toEqual([
+      [
+        'tests/e2e/tc001-submit-question.before.ts',
+        'test(e2e): add Before Run of TC001 - Submit question',
+      ],
+      ['tests/e2e/tc001-submit-question.spec.ts', 'test(e2e): add TC001 - Submit question'],
+    ]);
+    // The spec is written knowing what Before Run already prepares.
+    expect(author.writeScript.mock.calls[0]?.[0].hooks).toEqual({
+      beforeRun: before,
+      afterRun: null,
+    });
+    expect(runner.run.mock.calls[0]?.[0].hooks).toEqual({ beforeRun: before, afterRun: null });
+
+    // A person adds the After Run; the next execution runs the repository's version.
+    expect(await service.pushScript('ws', first!.id, after, 'afterRun')).toMatchObject({
+      kind: 'afterRun',
+      path: 'tests/e2e/tc001-submit-question.after.ts',
+      content: after,
+    });
+    expect(scripts.commits.at(-1)?.message).toBe(
+      'test(e2e): update After Run of TC001 - Submit question',
+    );
+    await expect(service.pushScript('ws', first!.id, VALID, 'beforeRun')).rejects.toMatchObject({
+      code: 'E2E_SCRIPT_REJECTED',
+    });
+    writeHook.mockClear();
+    runner.run.mockClear();
+    await service.rerunTest('ws', first!.id);
+    await service.idle();
+    expect(writeHook).not.toHaveBeenCalled();
+    expect(runner.run.mock.calls[0]?.[0].hooks).toEqual({ beforeRun: before, afterRun: after });
+
+    // An empty Before Run turns it off.
+    await service.pushScript('ws', first!.id, '', 'beforeRun');
+    expect(await service.getScript('ws', first!.id, 'beforeRun')).toMatchObject({ content: '' });
+    runner.run.mockClear();
+    await service.rerunTest('ws', first!.id);
+    await service.idle();
+    expect(runner.run.mock.calls[0]?.[0].hooks).toEqual({ beforeRun: null, afterRun: after });
+  });
+
+  it('passes the saved hook instructions to the author that writes the hook', async () => {
+    const writeHook = vi.fn().mockResolvedValue(null);
+    const { service } = setup({ writeHook });
+    const created = await service.create(context, input);
+    await service.idle();
+    const [first] = (await service.get('ws', created.id)).tests;
+
+    const saved = await service.updateHookInstructions(
+      'ws',
+      first!.id,
+      'beforeRun',
+      '<p>Ir para /eventos e clicar em Novo</p>',
+    );
+    expect(saved).toMatchObject({
+      beforeRunInstructions: '<p>Ir para /eventos e clicar em Novo</p>',
+      afterRunInstructions: null,
+    });
+
+    writeHook.mockClear();
+    await service.rerunTest('ws', first!.id, true);
+    await service.idle();
+    expect(writeHook.mock.calls[0]?.[0].test).toMatchObject({
+      beforeRunInstructions: '<p>Ir para /eventos e clicar em Novo</p>',
+    });
+
+    // Blank instructions clear them again.
+    expect(await service.updateHookInstructions('ws', first!.id, 'beforeRun', '   ')).toMatchObject(
+      { beforeRunInstructions: null },
+    );
+  });
+
+  it('blocks unsafe hooks committed to the repository', async () => {
+    const { service, scripts, runner } = setup();
+    const created = await service.create(context, input);
+    await service.idle();
+    const [first] = (await service.get('ws', created.id)).tests;
+    scripts.seed(
+      created.repository!,
+      'tests/e2e/tc001-submit-question.before.ts',
+      "import fs from 'node:fs';\nexport default async function beforeRun() {}",
+    );
+    runner.run.mockClear();
+    await service.rerunTest('ws', first!.id);
+    await service.idle();
+    expect(runner.run).not.toHaveBeenCalled();
+    const after = await service.getTest('ws', first!.id);
+    expect(after).toMatchObject({ status: 'error' });
+    expect(after.error).toContain('Before Run: import from "node:fs" is not allowed');
   });
 
   it('rewrites specs that were deleted from the repository', async () => {

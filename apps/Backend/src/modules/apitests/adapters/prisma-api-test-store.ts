@@ -1,3 +1,4 @@
+/* v8 ignore file -- persistence adapter contract is covered by the database integration suite (tests/integration/apitests-personal-values.integration.test.ts). */
 import type { Prisma, PrismaClient } from '../../../generated/prisma/client.js';
 import type {
   ApiCollection,
@@ -11,9 +12,11 @@ import type {
 import type {
   ApiTestStore,
   NewApiRun,
+  PersonalValueScope,
   RunFilter,
   RunOutcome,
 } from '../application/api-test-store.js';
+import type { PersonalScope } from '../application/personal-secrets.js';
 
 type Json = Record<string, unknown>;
 
@@ -84,6 +87,8 @@ const asJson = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.I
 function collectionFrom(row: CollectionRow): ApiCollection {
   const definition = (row.definition ?? {}) as Json;
   return {
+    // headers, scripts, scriptFlow, settings, protoFiles and later additions.
+    ...(definition as Partial<ApiCollection>),
     id: row.id,
     workspaceId: row.workspaceId,
     name: row.name,
@@ -152,15 +157,22 @@ export class PrismaApiTestStore implements ApiTestStore {
   }
 
   async saveCollection(collection: ApiCollection) {
+    const {
+      id: _id,
+      workspaceId: _workspaceId,
+      name,
+      description,
+      source,
+      createdBy: _createdBy,
+      createdAt: _createdAt,
+      updatedAt: _updatedAt,
+      ...definition
+    } = collection;
     const data = {
-      name: collection.name,
-      description: collection.description ?? null,
-      definition: asJson({
-        variables: collection.variables,
-        auth: collection.auth,
-        items: collection.items,
-      }),
-      source: asJson(collection.source),
+      name,
+      description: description ?? null,
+      definition: asJson(definition),
+      source: asJson(source),
     };
     const row = await this.db.apiCollectionRecord.upsert({
       where: { id: collection.id },
@@ -204,7 +216,12 @@ export class PrismaApiTestStore implements ApiTestStore {
     };
     const row = await this.db.apiEnvironmentRecord.upsert({
       where: { id: environment.id },
-      create: { id: environment.id, workspaceId: environment.workspaceId, ...data },
+      create: {
+        id: environment.id,
+        workspaceId: environment.workspaceId,
+        createdBy: environment.createdBy ?? null,
+        ...data,
+      },
       update: data,
     });
     return { ...row, variables: row.variables as unknown as ApiEnvironment['variables'] };
@@ -410,5 +427,55 @@ export class PrismaApiTestStore implements ApiTestStore {
         })
       ).count > 0
     );
+  }
+
+  // ---------- personal values ----------
+
+  private static personalWhere(key: PersonalValueScope) {
+    return {
+      workspaceId: key.workspaceId,
+      userId: key.userId,
+      scope: key.scope,
+      scopeId: key.scopeId,
+    };
+  }
+
+  async listPersonalValues(key: PersonalValueScope) {
+    const rows = await this.db.apiPersonalValueRecord.findMany({
+      where: PrismaApiTestStore.personalWhere(key),
+      select: { ref: true, value: true },
+    });
+    return new Map(rows.map((row) => [row.ref, row.value] as const));
+  }
+
+  async upsertPersonalValues(key: PersonalValueScope, values: ReadonlyMap<string, string>) {
+    if (!values.size) return;
+    const where = PrismaApiTestStore.personalWhere(key);
+    await this.db.$transaction(
+      [...values].map(([ref, value]) =>
+        this.db.apiPersonalValueRecord.upsert({
+          where: { personalValueKey: { ...where, ref } },
+          create: { ...where, ref, value },
+          update: { value },
+        }),
+      ),
+    );
+  }
+
+  async deletePersonalValue(key: PersonalValueScope, ref: string) {
+    const result = await this.db.apiPersonalValueRecord.deleteMany({
+      where: { ...PrismaApiTestStore.personalWhere(key), ref },
+    });
+    return result.count > 0;
+  }
+
+  async deletePersonalScope(workspaceId: string, scope: PersonalScope, scopeId: string) {
+    await this.db.apiPersonalValueRecord.deleteMany({ where: { workspaceId, scope, scopeId } });
+  }
+
+  async deleteUserPersonalScope(key: PersonalValueScope) {
+    await this.db.apiPersonalValueRecord.deleteMany({
+      where: PrismaApiTestStore.personalWhere(key),
+    });
   }
 }

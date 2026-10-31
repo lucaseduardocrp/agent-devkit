@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { APIResponse } from 'playwright';
-import { chromiumHostArgs, hostAccessFetch } from '../../../shared/host-access.js';
 import type { E2eMode } from '../domain/e2e-mode.js';
 import {
   accessHeaders,
@@ -83,10 +82,11 @@ export interface PlaywrightE2eRunnerOptions {
   readonly executor?: ProcessExecutor;
   readonly loadPlaywright?: () => Promise<PlaywrightModule>;
   /**
-   * Host access of a local install: `localhost` targets open on the user's computer through this
-   * alias, keeping their localhost origin (see shared/host-access.ts).
+   * Extra Chromium arguments. Host access of a local install passes its host resolver rules here
+   * and the matching `fetcher` (see shared/host-access.ts): the composition root builds both, so
+   * this file keeps to Playwright and Node built-ins and `devkit runner` vendors it as it is.
    */
-  readonly hostAlias?: string | null;
+  readonly browserArgs?: readonly string[];
 }
 
 const MAX_LOG = 60_000;
@@ -99,6 +99,10 @@ export const EVIDENCE_MODULE = 'adk-evidence';
 export const SLOW_MO_MS = 600;
 /** How long the final screen stays on the recording after the last step. */
 export const FINAL_HOLD_MS = 2500;
+/** Time each Before Run or After Run adds to the test's own timeout. */
+export const HOOK_TIMEOUT_MS = 90_000;
+/** Runtime-only files the spec imports to call its Before Run and After Run. */
+export const HOOK_MODULES = { beforeRun: 'adk-before-run', afterRun: 'adk-after-run' } as const;
 const API_SPEC_PATHS = [
   '/openapi.json',
   '/swagger.json',
@@ -123,11 +127,10 @@ export class PlaywrightE2eRunner implements E2eRunner {
     this.workspaceRoot = options.workspaceRoot ?? path.join(this.packageRoot, '.e2e-workspaces');
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.maxPages = options.maxPages ?? 5;
-    this.fetcher =
-      options.fetcher ?? (options.hostAlias ? hostAccessFetch(options.hostAlias) : fetch);
+    this.fetcher = options.fetcher ?? fetch;
     this.executor = options.executor ?? runProcess;
     this.loadPlaywright = options.loadPlaywright ?? (() => import('playwright'));
-    this.browserArgs = chromiumHostArgs(options.hostAlias ?? null);
+    this.browserArgs = [...(options.browserArgs ?? [])];
   }
 
   async explore(input: {
@@ -287,11 +290,19 @@ export class PlaywrightE2eRunner implements E2eRunner {
     try {
       await fs.mkdir(path.join(workspace, 'tests'), { recursive: true });
       await fs.mkdir(path.join(workspace, 'tmp'), { recursive: true });
+      const hooks = presentHooks(input);
+      const timeoutMs = this.timeoutMs + Object.keys(hooks).length * HOOK_TIMEOUT_MS;
       await fs.writeFile(
         path.join(workspace, 'tests', 'e2e.spec.ts'),
-        withRecordingHold(withStepEvidence(input.script), input.mode),
+        withRecordingHold(withHooks(withStepEvidence(input.script), hooks, input.mode), input.mode),
         'utf8',
       );
+      for (const [kind, content] of Object.entries(hooks) as [HookKind, string][])
+        await fs.writeFile(
+          path.join(workspace, 'tests', `${HOOK_MODULES[kind]}.ts`),
+          withStepEvidence(content),
+          'utf8',
+        );
       await fs.writeFile(
         path.join(workspace, 'tests', `${EVIDENCE_MODULE}.ts`),
         evidenceModule(input.mode),
@@ -318,7 +329,7 @@ export class PlaywrightE2eRunner implements E2eRunner {
         ],
         cwd: workspace,
         env: childEnvironment(workspace, input),
-        timeoutMs: this.timeoutMs,
+        timeoutMs,
         signal: input.signal,
       });
       const durationMs = Date.now() - started;
@@ -333,7 +344,7 @@ export class PlaywrightE2eRunner implements E2eRunner {
       const report = await readReport(path.join(workspace, 'report.json'));
       const outcome = summarizeReport(report);
       const error = output.timedOut
-        ? `Test run exceeded ${Math.round(this.timeoutMs / 1000)}s and was stopped.`
+        ? `Test run exceeded ${Math.round(timeoutMs / 1000)}s and was stopped.`
         : (outcome.error ?? (outcome.passed ? null : lastLines(logs)));
       return {
         status: outcome.passed && !output.timedOut ? 'passed' : 'failed',
@@ -651,6 +662,12 @@ let currentPage: Page | null = null;
 let depth = 0;
 let position = 0;
 let browserDiagnostics: string[] = [];
+// Before Run and After Run are not steps of the test: their steps leave no evidence.
+let phase: 'beforeRun' | 'test' | 'afterRun' = 'test';
+
+export function setRunPhase(next: typeof phase): void {
+  phase = next;
+}
 
 function recordBrowserDiagnostic(message: string): void {
   browserDiagnostics.push(message);
@@ -892,7 +909,7 @@ const runStep = extended.step as unknown as (title: string, body: StepBody, opti
 
 async function step(title: string, body: StepBody, options?: unknown): Promise<unknown> {
   // Nested steps belong to the evidence of the top-level step that contains them.
-  if (depth > 0) return runStep(title, body, options);
+  if (depth > 0 || phase !== 'test') return runStep(title, body, options);
   depth += 1;
   browserDiagnostics = [];
   asserted = [];
@@ -959,6 +976,56 @@ export const test = new Proxy(extended, {
   get: (target, property, receiver) =>
     property === 'step' ? step : Reflect.get(target, property, receiver),
 });
+`;
+}
+
+type HookKind = keyof typeof HOOK_MODULES;
+
+/** The Before Run and After Run of the input that have code; blank ones are skipped. */
+export function presentHooks(input: Pick<E2eRunInput, 'hooks'>): Partial<Record<HookKind, string>> {
+  const hooks: Partial<Record<HookKind, string>> = {};
+  for (const kind of Object.keys(HOOK_MODULES) as HookKind[]) {
+    const content = input.hooks?.[kind];
+    if (content?.trim()) hooks[kind] = content;
+  }
+  return hooks;
+}
+
+/**
+ * Appended to the spec at run time (never pushed to the repository): calls Before Run before
+ * the test and After Run after it, even when the test or Before Run failed, so the data they
+ * created is always removed. Their steps leave no evidence and their errors name the phase.
+ * API tests get only `request`, so no browser starts for them.
+ */
+export function withHooks(
+  script: string,
+  hooks: Partial<Record<HookKind, string>>,
+  mode: E2eMode,
+): string {
+  const kinds = (Object.keys(HOOK_MODULES) as HookKind[]).filter((kind) => hooks[kind]);
+  if (!kinds.length) return script;
+  const fixtures = mode === 'frontend' ? '{ page, request }' : '{ request }';
+  const calls = kinds.map((kind) => {
+    const hook = kind === 'beforeRun' ? 'beforeEach' : 'afterEach';
+    const label = kind === 'beforeRun' ? 'Before Run' : 'After Run';
+    return `__adkHooks.${hook}(async (${fixtures}, testInfo) => {
+  testInfo.setTimeout(testInfo.timeout + ${HOOK_TIMEOUT_MS});
+  __adkSetRunPhase(${JSON.stringify(kind)});
+  try {
+    await __adk_${kind}(${fixtures});
+  } catch (error) {
+    if (error instanceof Error) error.message = ${JSON.stringify(`${label}: `)} + error.message;
+    throw error;
+  } finally {
+    __adkSetRunPhase('test');
+  }
+});`;
+  });
+  return `${script}
+
+import { test as __adkHooks, setRunPhase as __adkSetRunPhase } from './${EVIDENCE_MODULE}';
+${kinds.map((kind) => `import __adk_${kind} from './${HOOK_MODULES[kind]}';`).join('\n')}
+${calls.join('\n')}
 `;
 }
 

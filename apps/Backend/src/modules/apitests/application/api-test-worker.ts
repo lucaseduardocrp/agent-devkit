@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ApiRun } from '../domain/api-test.js';
 import { executeRun } from '../engine/run-executor.js';
 import type { ApiTestService } from './api-test-service.js';
-import { hostAccessFetch } from '../../../shared/host-access.js';
+import { isLoopbackName } from '../../../shared/host-access.js';
 import { remoteTargetGuard } from './target-guard.js';
 
 export interface ApiTestWorkerOptions {
@@ -24,6 +24,7 @@ export interface ApiTestWorkerOptions {
    * (see shared/host-access.ts). Null or absent keeps localhost blocked.
    */
   readonly hostAlias?: string | null;
+  /** Replaces the requests' fetch (tests only). */
   readonly fetch?: typeof fetch;
   /** Replaces the network guard (tests only). */
   readonly guard?: (url: URL) => Promise<void>;
@@ -40,13 +41,18 @@ export class ApiTestWorker {
   private draining: Promise<void> | null = null;
   private wakeRequested = false;
 
-  /** The requests' fetch: the given one, the host-access one, or the global fetch (undefined). */
-  private readonly fetch: typeof fetch | undefined;
+  /**
+   * Host access: connections to `localhost` go to the host alias, while the URL, the Host header
+   * and the TLS server name stay `localhost`. Null when host access is off.
+   */
+  private readonly connectHost: ((hostname: string) => string) | null;
 
   constructor(private readonly options: ApiTestWorkerOptions) {
     this.workerId = options.workerId ?? `api-worker-${randomUUID()}`;
-    this.fetch =
-      options.fetch ?? (options.hostAlias ? hostAccessFetch(options.hostAlias) : undefined);
+    const alias = options.hostAlias;
+    this.connectHost = alias
+      ? (hostname: string) => (isLoopbackName(hostname) ? alias : hostname)
+      : null;
   }
 
   get status() {
@@ -107,7 +113,8 @@ export class ApiTestWorker {
             allowPrivateNetwork: this.options.allowPrivateNetwork,
             hostAlias: this.options.hostAlias,
           }),
-        ...(this.fetch ? { fetch: this.fetch } : {}),
+        ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
+        ...(this.connectHost ? { connectHost: this.connectHost } : {}),
       });
     } catch (error) {
       outcome = {
@@ -117,7 +124,7 @@ export class ApiTestWorker {
       };
     }
     // A cancelled run is not overwritten: finish only applies to runs this worker still holds.
-    await service.finish(run.id, this.workerId, outcome).catch((error: unknown) => {
+    await service.finish(run, this.workerId, outcome).catch((error: unknown) => {
       console.error('[ApiTestWorker] Could not finish run:', error);
     });
   }

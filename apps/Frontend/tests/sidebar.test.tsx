@@ -28,13 +28,13 @@ describe('Sidebar', () => {
     expect(getByRole('button', { name: 'Integrações' })).toBeInTheDocument();
     expect(queryByText('Configuração')).not.toBeInTheDocument();
 
-    const brainBtn = getByRole('button', { name: 'Brain' });
+    const brainBtn = getByRole('button', { name: 'Cérebro' });
     expect(brainBtn).toHaveAttribute('aria-current', 'page');
     const navigationButtons = getByRole('navigation').querySelectorAll('button');
     expect(navigationButtons[0]).toHaveTextContent('Issues');
     expect(navigationButtons[1]).toHaveTextContent('PBIs');
-    expect(navigationButtons[2]).toHaveTextContent('Inbox');
-    expect(navigationButtons[3]).toHaveTextContent('Dashboard');
+    expect(navigationButtons[2]).toHaveTextContent('Caixa de entrada');
+    expect(navigationButtons[3]).toHaveTextContent('Painel');
 
     const settingsFooterBtn = getByTestId('sidebar-settings-footer-button');
     expect(settingsFooterBtn).toBeInTheDocument();
@@ -53,10 +53,10 @@ describe('Sidebar', () => {
     const onSelect = vi.fn();
     const { getByRole, getByTestId } = render(<Sidebar activeTab="brain" onSelectTab={onSelect} />);
 
-    fireEvent.click(getByRole('button', { name: 'Brain' }));
+    fireEvent.click(getByRole('button', { name: 'Cérebro' }));
     expect(onSelect).toHaveBeenCalledWith('brain');
 
-    fireEvent.click(getByRole('button', { name: 'Agents' }));
+    fireEvent.click(getByTestId('sidebar-agents-button'));
     expect(onSelect).toHaveBeenCalledWith('agents');
 
     fireEvent.click(getByRole('button', { name: 'Spec' }));
@@ -71,9 +71,9 @@ describe('Sidebar', () => {
 
   it('renders and highlights Agents tab when activeTab is agents', () => {
     const onSelect = vi.fn();
-    const { getByRole } = render(<Sidebar activeTab="agents" onSelectTab={onSelect} />);
+    const { getByTestId } = render(<Sidebar activeTab="agents" onSelectTab={onSelect} />);
 
-    const agentsBtn = getByRole('button', { name: 'Agents' });
+    const agentsBtn = getByTestId('sidebar-agents-button');
     expect(agentsBtn).toHaveAttribute('aria-current', 'page');
     expect(agentsBtn.className).toContain('bg-[var(--fill-ghost-selected)]');
   });
@@ -82,7 +82,7 @@ describe('Sidebar', () => {
     const onSelect = vi.fn();
     const { getByRole } = render(<Sidebar activeTab="brain" onSelectTab={onSelect} />);
 
-    const testBtn = getByRole('button', { name: /^Test$/i });
+    const testBtn = getByRole('button', { name: /^Testes$/i });
     expect(testBtn).toHaveAttribute('aria-expanded', 'false');
 
     // Click to expand
@@ -105,7 +105,7 @@ describe('Sidebar', () => {
       <Sidebar activeTab="testplans" onSelectTab={onSelect} />,
     );
 
-    const testBtn = getByRole('button', { name: /^Test$/i });
+    const testBtn = getByRole('button', { name: /^Testes$/i });
     expect(testBtn).toHaveAttribute('aria-expanded', 'true');
 
     const testPlansBtn = getByRole('button', { name: /Planos de Teste/i });
@@ -171,7 +171,7 @@ describe('Sidebar', () => {
     release();
     expect(view.getByRole('complementary')).toHaveAttribute('data-collapsed', 'true');
     // Only icons: the module name is the accessible label, without a visible text.
-    expect(view.getByRole('button', { name: 'Brain' }).textContent).toBe('');
+    expect(view.getByRole('button', { name: 'Cérebro' }).textContent).toBe('');
     expect(window.localStorage.getItem('adk.sidebar.collapsed')).toBe('1');
 
     // Released just below the minimum, it springs back to the minimum instead of folding.
@@ -179,7 +179,7 @@ describe('Sidebar', () => {
     moveTo(280);
     release();
     expect(view.getByRole('complementary')).not.toHaveAttribute('data-collapsed');
-    expect(view.getByRole('button', { name: 'Brain' }).textContent).toBe('Brain');
+    expect(view.getByRole('button', { name: 'Cérebro' }).textContent).toBe('Cérebro');
     pressAt(edge(), 280);
     moveTo(220);
     release();

@@ -8,7 +8,7 @@ import { useI18n } from '../../../lib/i18n/index.js';
 import { cn } from '../../../lib/utils.js';
 import { TreeRowSkeleton } from '../ApiTestSkeletons.js';
 import type { ApiCollection, ApiCollectionSummary, ApiItem } from '../api-test-types.js';
-import { itemMatches } from './integration-model.js';
+import { KIND_SHORT } from './integration-model.js';
 import { MethodLabel } from './integration-parts.js';
 
 export interface SidebarActions {
@@ -18,10 +18,25 @@ export interface SidebarActions {
   readonly onNewFolder: (collectionId: string, folderId: string | null) => void;
   readonly onRun: (collectionId: string, itemId: string | null) => void;
   readonly onSettings: (collectionId: string) => void;
+  readonly onFolderSettings: (collectionId: string, folderId: string) => void;
   readonly onRenameCollection: (collectionId: string) => void;
   readonly onRename: (collectionId: string, item: ApiItem) => void;
   readonly onClone: (collectionId: string, item: ApiItem) => void;
   readonly onDelete: (collectionId: string, item: ApiItem | null) => void;
+}
+
+/** Name, method, URL or protocol (`grpc`, `ws`...) has the text; folders match by their content. */
+function itemMatches(item: ApiItem, filter: string): boolean {
+  if (!filter) return true;
+  const text = filter.toLowerCase();
+  if (item.type === 'folder')
+    return (
+      item.name.toLowerCase().includes(text) ||
+      item.items.some((child) => itemMatches(child, filter))
+    );
+  const kind = item.kind ?? 'http';
+  const protocol = kind === 'http' ? '' : `${kind} ${KIND_SHORT[kind]}`;
+  return `${item.method} ${item.name} ${item.url} ${protocol}`.toLowerCase().includes(text);
 }
 
 const ROW = 'group flex h-8 items-center gap-1.5 pr-1 text-xs hover:bg-[var(--fill-ghost-hover)]';
@@ -100,6 +115,14 @@ function TreeRows({
                     </MenuItem>
                   </>
                 )}
+                {item.type === 'folder' && (
+                  <MenuItem
+                    icon="ti-settings"
+                    onClick={() => actions.onFolderSettings(collectionId, item.id)}
+                  >
+                    {t('apiTests.ui.settings')}
+                  </MenuItem>
+                )}
                 {!readOnly && (
                   <MenuItem
                     icon="ti-player-play"
@@ -155,7 +178,7 @@ function TreeRows({
                     />
                     <span className="truncate">{item.name}</span>
                   </button>
-                  {!readOnly && menu}
+                  {menu}
                 </div>
                 {open && (
                   <TreeRows
@@ -184,7 +207,7 @@ function TreeRows({
                   onClick={() => actions.onOpenRequest(collectionId, item.id)}
                   data-testid={`tree-request-${item.name}`}
                 >
-                  <MethodLabel method={item.method} className="w-8 text-right" />
+                  <MethodLabel method={item.method} kind={item.kind} className="w-8 text-right" />
                   <span
                     className={cn(
                       'truncate',
@@ -377,9 +400,21 @@ export function CollectionsSidebar({
                     actions={actions}
                   />
                   {!collection.items.length && (
-                    <p className="py-1.5 pl-9 text-xs text-[var(--text-muted)]">
-                      {t('apiTests.ui.noRequestsYet')}
-                    </p>
+                    <div className="flex items-center gap-2 py-1.5 pl-9 pr-2 text-xs text-[var(--text-muted)]">
+                      <span className="flex-1">{t('apiTests.ui.noRequestsYet')}</span>
+                      {!readOnly && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs"
+                          onClick={() => actions.onNewRequest(summary.id, null)}
+                          data-testid="empty-new-request"
+                        >
+                          <i className="ti ti-plus" aria-hidden="true" />
+                          {t('apiTests.ui.newRequest')}
+                        </Button>
+                      )}
+                    </div>
                   )}
                 </>
               )}

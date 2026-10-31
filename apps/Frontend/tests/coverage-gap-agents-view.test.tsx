@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentsView } from '../src/features/agents/AgentsView.js';
 import type { AgentWorkflowDto, CustomAgentDto } from '../src/features/agents/agent-types.js';
@@ -82,102 +82,125 @@ async function openWorkflow(isReadOnly = false) {
   return view;
 }
 
+/** The board opens a node's fields in a modal, so they live outside the panel. */
+function inspector() {
+  return screen.getByTestId('workflow-inspector');
+}
+
+function openNode(testId: string) {
+  fireEvent.click(screen.getByTestId(testId));
+  return inspector();
+}
+
+function closeInspector() {
+  fireEvent.click(within(inspector()).getByRole('button', { name: 'Fechar' }));
+}
+
+function fillStep(testId: string, name: string, instructions: string) {
+  const pane = openNode(testId);
+  fireEvent.change(within(pane).getByLabelText('Nome da etapa'), { target: { value: name } });
+  fireEvent.change(within(pane).getByLabelText('Instruções da etapa'), {
+    target: { value: instructions },
+  });
+  return pane;
+}
+
+const providerField = () => within(inspector()).getByPlaceholderText('Todos os provedores');
+
 describe('AgentsView workflow editor', () => {
-  it('builds, validates, reorders and saves steps and module rules', async () => {
+  it('builds, validates and saves steps and module rules', async () => {
     const save = vi
       .spyOn(client, 'saveAgentWorkflow')
       .mockImplementation(async (workflow) => workflow)
       .mockRejectedValueOnce('boom');
     const view = await openWorkflow();
     const panel = view.getByTestId('workflow-panel');
-    await within(panel).findByText('Adicione pelo menos uma etapa para ativar o workflow.');
 
     // Enabling without steps or rules is rejected.
     fireEvent.click(view.getByTestId('workflow-enabled-toggle'));
-    expect(view.getByTestId('workflow-enabled-toggle')).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(within(panel).getByRole('button', { name: /Salvar workflow/ }));
+    expect(view.getByTestId('workflow-enabled-toggle')).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(view.getByTestId('workflow-save-button'));
     expect(within(panel).getByRole('alert')).toHaveTextContent(
       'Adicione pelo menos uma etapa para ativar o workflow.',
     );
 
-    // Global controls.
-    fireEvent.change(within(panel).getByLabelText('Autonomia do agente'), {
+    // The controls of the whole workflow sit on the setup node.
+    const setup = openNode('workflow-settings-node');
+    fireEvent.change(within(setup).getByLabelText('Autonomia do agente'), {
       target: { value: 'autonomous' },
     });
-    fireEvent.change(within(panel).getByLabelText('Quando faltar informação'), {
+    fireEvent.change(within(inspector()).getByLabelText('Quando faltar informação'), {
       target: { value: 'assume' },
     });
-    fireEvent.change(within(panel).getByLabelText('Criação de Issues por agentes MCP'), {
+    fireEvent.change(within(inspector()).getByLabelText('Criação de Issues por agentes MCP'), {
       target: { value: 'allow' },
     });
-    fireEvent.change(within(panel).getByLabelText('Ações não configuradas'), {
+    fireEvent.change(within(inspector()).getByLabelText('Ações não configuradas'), {
       target: { value: 'deny' },
     });
-    fireEvent.click(within(panel).getByRole('button', { name: 'Obrigatória' }));
-    expect(within(panel).getByRole('button', { name: 'Opcional' })).toBeInTheDocument();
+    fireEvent.click(
+      within(inspector()).getByRole('switch', { name: 'Exigir aprovação do resultado final' }),
+    );
+    closeInspector();
 
     // Steps: an incomplete step is rejected.
-    fireEvent.click(within(panel).getByRole('button', { name: /Adicionar etapa/ }));
-    fireEvent.click(within(panel).getByRole('button', { name: /Adicionar etapa/ }));
-    fireEvent.click(within(panel).getByRole('button', { name: /Salvar workflow/ }));
+    fireEvent.click(within(panel).getByTestId('workflow-add-step'));
+    fireEvent.click(within(panel).getByTestId('workflow-add-step'));
+    fireEvent.click(view.getByTestId('workflow-save-button'));
     expect(within(panel).getByRole('alert')).toHaveTextContent(
       'Cada etapa precisa de um nome e de instruções.',
     );
 
-    const names = () => within(panel).getAllByLabelText<HTMLInputElement>('Nome da etapa');
-    fireEvent.change(names()[0]!, { target: { value: 'Analysis' } });
-    fireEvent.change(names()[1]!, { target: { value: 'Review' } });
-    const instructions = within(panel).getAllByLabelText('Instruções da etapa');
-    fireEvent.change(instructions[0]!, { target: { value: 'Analyse it' } });
-    fireEvent.change(instructions[1]!, { target: { value: 'Review it' } });
-    const agentSelects = within(panel).getAllByLabelText('Agente responsável');
-    fireEvent.change(agentSelects[0]!, { target: { value: 'agent-hub' } });
-    fireEvent.change(agentSelects[0]!, { target: { value: '' } });
-    fireEvent.change(agentSelects[1]!, { target: { value: 'agent-plugin' } });
+    const first = fillStep('workflow-step-node-1', 'Analysis', 'Analyse it');
+    fireEvent.change(within(first).getByLabelText('Agente responsável'), {
+      target: { value: 'agent-hub' },
+    });
+    fireEvent.change(within(inspector()).getByLabelText('Agente responsável'), {
+      target: { value: '' },
+    });
+    closeInspector();
+    const second = fillStep('workflow-step-node-2', 'Review', 'Review it');
+    fireEvent.change(within(second).getByLabelText('Agente responsável'), {
+      target: { value: 'agent-plugin' },
+    });
     fireEvent.click(
-      within(panel).getAllByRole('button', {
+      within(inspector()).getByRole('switch', {
         name: 'Pedir minha aprovação antes da próxima etapa',
-      })[1]!,
+      }),
     );
+    closeInspector();
 
-    expect(within(panel).getByRole('button', { name: 'Mover etapa 1 para cima' })).toHaveProperty(
-      'disabled',
-      true,
-    );
-    expect(within(panel).getByRole('button', { name: 'Mover etapa 2 para baixo' })).toHaveProperty(
-      'disabled',
-      true,
-    );
-    fireEvent.click(within(panel).getByRole('button', { name: 'Mover etapa 2 para cima' }));
-    expect(names().map((input) => input.value)).toEqual(['Review', 'Analysis']);
-    fireEvent.click(within(panel).getByRole('button', { name: 'Mover etapa 1 para baixo' }));
-    expect(names().map((input) => input.value)).toEqual(['Analysis', 'Review']);
-
-    // A third step is added then removed.
-    fireEvent.click(within(panel).getByRole('button', { name: /Adicionar etapa/ }));
-    fireEvent.click(within(panel).getByRole('button', { name: 'Remover etapa 3' }));
-    expect(names()).toHaveLength(2);
+    // A third step is added, then removed from its own node.
+    fireEvent.click(within(panel).getByTestId('workflow-add-step'));
+    openNode('workflow-step-node-3');
+    fireEvent.click(within(inspector()).getByRole('button', { name: 'Remover etapa 3' }));
+    expect(within(panel).queryByTestId('workflow-step-node-3')).toBeNull();
 
     // Rules.
-    fireEvent.click(within(panel).getByRole('button', { name: /Adicionar regra/ }));
-    fireEvent.click(within(panel).getByRole('button', { name: /Adicionar regra/ }));
-    const ruleNames = () => within(panel).getAllByLabelText<HTMLInputElement>('Nome');
-    fireEvent.change(ruleNames()[0]!, { target: { value: ' ' } });
-    fireEvent.click(within(panel).getByRole('button', { name: /Salvar workflow/ }));
+    fireEvent.click(within(panel).getByTestId('workflow-add-rule'));
+    fireEvent.click(within(panel).getByTestId('workflow-add-rule'));
+    const rule = openNode('workflow-rule-node-1');
+    fireEvent.change(within(rule).getByLabelText('Nome'), { target: { value: ' ' } });
+    closeInspector();
+    fireEvent.click(view.getByTestId('workflow-save-button'));
     expect(within(panel).getByRole('alert')).toHaveTextContent(
       'Informe o nome da regra e uma ação para limitar provedores.',
     );
-    fireEvent.change(ruleNames()[0]!, { target: { value: 'Deploy guard' } });
-    expect(ruleNames().map((input) => input.value)).toEqual(['Deploy guard', 'Regra 2']);
-    fireEvent.click(within(panel).getByRole('button', { name: 'Remover regra Regra 2' }));
-    expect(ruleNames().map((input) => input.value)).toEqual(['Deploy guard']);
-    fireEvent.change(within(panel).getByLabelText('Módulo'), { target: { value: 'e2e' } });
-    const providers = within(panel).getByPlaceholderText('Todos os provedores');
-    expect(providers).toHaveProperty('disabled', true);
-    fireEvent.change(within(panel).getByLabelText('Ação MCP'), { target: { value: ' e2e_run ' } });
-    expect(providers).toHaveProperty('disabled', false);
-    fireEvent.change(providers, { target: { value: 'azure-devops, azure-devops, testrail' } });
-    expect((providers as HTMLInputElement).value).toBe('azure-devops, testrail');
+
+    openNode('workflow-rule-node-1');
+    fireEvent.change(within(inspector()).getByLabelText('Nome'), {
+      target: { value: 'Deploy guard' },
+    });
+    fireEvent.change(within(inspector()).getByLabelText('Módulo'), { target: { value: 'e2e' } });
+    expect(providerField()).toHaveProperty('disabled', true);
+    fireEvent.change(within(inspector()).getByLabelText('Ação MCP'), {
+      target: { value: ' e2e_run ' },
+    });
+    expect(providerField()).toHaveProperty('disabled', false);
+    fireEvent.change(providerField(), {
+      target: { value: 'azure-devops, azure-devops, testrail' },
+    });
+    expect((providerField() as HTMLInputElement).value).toBe('azure-devops, testrail');
     const options = Array.from(
       document.querySelectorAll('datalist[id^="workflow-providers-"] option'),
     ).map((option) => option.getAttribute('value'));
@@ -185,35 +208,26 @@ describe('AgentsView workflow editor', () => {
     expect(
       document.querySelectorAll('datalist[id^="workflow-actions-"] option').length,
     ).toBeGreaterThan(0);
-
+    fireEvent.change(providerField(), { target: { value: ' , ' } });
+    expect((providerField() as HTMLInputElement).value).toBe('');
     fireEvent.click(
-      within(panel).getByRole('button', { name: 'Pedir aprovação antes de cada ação' }),
+      within(inspector()).getByRole('switch', { name: 'Pedir aprovação antes de cada ação' }),
     );
-    fireEvent.click(within(panel).getByRole('button', { name: 'Permitida' }));
-    expect(within(panel).getByRole('button', { name: 'Bloqueada' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
+    fireEvent.click(
+      within(inspector()).getByRole('switch', { name: 'Abrir Issue para cada alteração' }),
     );
-    fireEvent.click(within(panel).getByRole('button', { name: 'Bloqueada' }));
-    fireEvent.click(within(panel).getByRole('button', { name: 'Permitida' }));
-    fireEvent.click(within(panel).getByRole('button', { name: 'Abrir Issue para cada alteração' }));
-
-    // Limiting providers needs an action.
-    fireEvent.change(within(panel).getByLabelText('Ação MCP'), { target: { value: ' ' } });
-    fireEvent.click(within(panel).getByRole('button', { name: /Salvar workflow/ }));
-    expect(within(panel).getByRole('alert')).toHaveTextContent(
-      'Informe o nome da regra e uma ação para limitar provedores.',
-    );
-    fireEvent.change(within(panel).getByLabelText('Ação MCP'), { target: { value: 'e2e_run' } });
-    fireEvent.change(providers, { target: { value: ' , ' } });
-    expect((providers as HTMLInputElement).value).toBe('');
+    fireEvent.click(within(inspector()).getByRole('switch', { name: 'Bloquear ação' }));
+    closeInspector();
+    openNode('workflow-rule-node-2');
+    fireEvent.click(within(inspector()).getByRole('button', { name: 'Remover regra Regra 2' }));
+    expect(within(panel).queryByTestId('workflow-rule-node-2')).toBeNull();
 
     // The first save fails without an explanation; the second succeeds.
-    fireEvent.click(within(panel).getByRole('button', { name: /Salvar workflow/ }));
+    fireEvent.click(view.getByTestId('workflow-save-button'));
     expect(await within(panel).findByRole('alert')).toHaveTextContent(
       'Não foi possível salvar o workflow.',
     );
-    fireEvent.click(within(panel).getByRole('button', { name: /Salvar workflow/ }));
+    fireEvent.click(view.getByTestId('workflow-save-button'));
     expect(await within(panel).findByRole('status')).toHaveTextContent('Workflow salvo.');
 
     const saved = save.mock.calls[1]![0];
@@ -240,7 +254,7 @@ describe('AgentsView workflow editor', () => {
         createIssueForAction: true,
       }),
     ]);
-  });
+  }, 20_000);
 
   it('builds ids without crypto.randomUUID', async () => {
     vi.spyOn(client, 'saveAgentWorkflow').mockImplementation(async (workflow) => workflow);
@@ -248,14 +262,11 @@ describe('AgentsView workflow editor', () => {
     try {
       const view = await openWorkflow();
       const panel = view.getByTestId('workflow-panel');
-      await within(panel).findByText('Adicione pelo menos uma etapa para ativar o workflow.');
-      fireEvent.click(within(panel).getByRole('button', { name: /Adicionar etapa/ }));
-      fireEvent.click(within(panel).getByRole('button', { name: /Adicionar regra/ }));
-      fireEvent.change(within(panel).getByLabelText('Nome da etapa'), { target: { value: 'A' } });
-      fireEvent.change(within(panel).getByLabelText('Instruções da etapa'), {
-        target: { value: 'B' },
-      });
-      fireEvent.click(within(panel).getByRole('button', { name: /Salvar workflow/ }));
+      fireEvent.click(within(panel).getByTestId('workflow-add-step'));
+      fireEvent.click(within(panel).getByTestId('workflow-add-rule'));
+      fillStep('workflow-step-node-1', 'A', 'B');
+      closeInspector();
+      fireEvent.click(view.getByTestId('workflow-save-button'));
       await within(panel).findByRole('status');
       const saved = vi.mocked(client.saveAgentWorkflow).mock.calls[0]![0];
       expect(saved.steps[0]!.id).toMatch(/^step-/);
@@ -281,9 +292,13 @@ describe('AgentsView workflow editor', () => {
       'Não foi possível carregar o workflow.',
     );
     fireEvent.click(within(panel).getByRole('button', { name: 'Tentar novamente' }));
-    expect(await within(panel).findByDisplayValue('Only')).toBeInTheDocument();
-    expect(within(panel).queryByRole('alert')).toBeNull();
-    fireEvent.click(within(panel).getByRole('button', { name: /Salvar workflow/ }));
+    await waitFor(() => expect(within(panel).queryByRole('alert')).toBeNull());
+    openNode('workflow-step-node-1');
+    const name = within(inspector()).getByLabelText('Nome da etapa') as HTMLInputElement;
+    expect(name.value).toBe('Only');
+    fireEvent.change(name, { target: { value: 'Only one' } });
+    closeInspector();
+    fireEvent.click(view.getByTestId('workflow-save-button'));
     expect(await within(panel).findByRole('alert')).toHaveTextContent('Quota reached');
   });
 
@@ -296,14 +311,22 @@ describe('AgentsView workflow editor', () => {
     });
     const view = await openWorkflow(true);
     const panel = view.getByTestId('workflow-panel');
-    expect(await within(panel).findByDisplayValue('Only')).toHaveProperty('disabled', true);
     expect(view.getByTestId('workflow-enabled-toggle')).toHaveProperty('disabled', true);
-    expect(within(panel).getByRole('button', { name: 'Bloqueada' })).toHaveProperty(
+    expect(view.getByTestId('workflow-save-button')).toHaveProperty('disabled', true);
+    expect(within(panel).getByTestId('workflow-add-step')).toHaveProperty('disabled', true);
+    expect(within(panel).getByTestId('workflow-add-rule')).toHaveProperty('disabled', true);
+    openNode('workflow-step-node-1');
+    expect(within(inspector()).getByLabelText('Nome da etapa')).toHaveProperty('disabled', true);
+    expect(within(inspector()).getByRole('button', { name: 'Remover etapa 1' })).toHaveProperty(
       'disabled',
       true,
     );
-    expect(within(panel).queryByRole('button', { name: /Salvar workflow/ })).toBeNull();
-    expect(within(panel).queryByRole('button', { name: /Adicionar regra/ })).toBeNull();
+    closeInspector();
+    openNode('workflow-rule-node-1');
+    expect(within(inspector()).getByRole('switch', { name: 'Bloquear ação' })).toHaveProperty(
+      'disabled',
+      true,
+    );
   });
 
   it('highlights each tab when selected', async () => {

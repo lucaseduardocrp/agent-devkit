@@ -64,6 +64,7 @@ model UserRecord {
   oauthIdentities   OAuthIdentityRecord[]
   createdWorkspaces WorkspaceRecord[]
   memberships       WorkspaceMemberRecord[]
+  apiPersonalValues ApiPersonalValueRecord[]
 
   @@map("users")
 }
@@ -164,6 +165,7 @@ model WorkspaceRecord {
   llmUsageEvents   LlmUsageEventRecord[]
   permissionGroups PermissionGroupRecord[]
   agentWorkflow    AgentWorkflowRecord?
+  apiPersonalValues ApiPersonalValueRecord[]
 
   @@index([ownerId], map: "workspaces_owner_id_idx")
   @@map("workspaces")
@@ -194,6 +196,8 @@ model IssueRecord {
   updatedAt       DateTime @updatedAt @map("updated_at")
   activeRunId     String?  @map("active_run_id")
   pbiItemId       String?  @map("pbi_item_id")
+  /// Set instead of deleting an issue that has agent runs, so its run and cost history survive.
+  deletedAt       DateTime? @map("deleted_at")
 
   workspace WorkspaceRecord      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   comments  IssueCommentRecord[]
@@ -660,6 +664,20 @@ model E2eCreationRecord {
   @@map("e2e_creations")
 }
 
+/// Repository the Design module keeps its prototypes and design systems in.
+model DesignSettingsRecord {
+  workspaceId    String   @id @map("workspace_id")
+  provider       String
+  repositoryId   String   @map("repository_id")
+  /// GitHub "owner/repo" or Azure DevOps "Project/Repo".
+  repositoryName String   @map("repository_name")
+  branch         String
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("design_settings")
+}
+
 model E2eTestCaseRecord {
   id           String    @id @default(uuid())
   creationId   String    @map("creation_id")
@@ -671,6 +689,8 @@ model E2eTestCaseRecord {
   steps        Json      @default("[]")
   priority     String    @default("medium")
   scriptPath   String?   @map("script_path")
+  beforeRunInstructions String? @map("before_run_instructions") @db.Text
+  afterRunInstructions  String? @map("after_run_instructions") @db.Text
   /// JSON: the test management case this test automates (ExternalTestCase).
   externalCase String?   @map("external_case") @db.Text
   stepResults  Json      @default("[]") @map("step_results")
@@ -777,7 +797,8 @@ model ApiCollectionRecord {
   workspaceId String   @map("workspace_id")
   name        String
   description String?  @db.Text
-  /// { variables, auth, items }; secret variable values are AES-GCM encrypted.
+  /// { variables, auth, items, headers, scripts, settings, ... }; credentials are personal
+  /// (api_personal_values): secret variables and credential fields are kept empty here.
   definition  Json
   /// { kind: manual|adk|postman|insomnia|openapi|generated, detail? }
   source      Json
@@ -792,12 +813,14 @@ model ApiCollectionRecord {
   @@map("api_collections")
 }
 
-/// Variables shared by integration and load runs (base URLs, credentials); secrets encrypted.
+/// Variables shared by integration and load runs (base URLs); secret values are personal.
 model ApiEnvironmentRecord {
   id          String   @id @default(uuid())
   workspaceId String   @map("workspace_id")
   name        String
   variables   Json     @default("[]")
+  /// Null for environments created before owners were recorded.
+  createdBy   String?  @map("created_by")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -805,6 +828,31 @@ model ApiEnvironmentRecord {
 
   @@index([workspaceId], map: "api_environments_workspace_idx")
   @@map("api_environments")
+}
+
+/// Personal values of integration tests: each member's own credentials (secret variables, auth
+/// fields, proxy and certificate secrets) of a collection or environment, and their runtime state
+/// (variables and cookies left by previous sends). Never shared with other members.
+model ApiPersonalValueRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  /// collection | environment | runtime
+  scope       String
+  /// Collection or environment id (runtime: collection id).
+  scopeId     String   @map("scope_id")
+  /// var:<key>, auth:<owner>:<field>, proxy:<field>, cert:<index>:<field>, or state (runtime).
+  ref         String
+  /// AES-GCM encrypted.
+  value       String   @db.Text
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      UserRecord      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, scope, scopeId, ref], name: "personalValueKey", map: "api_personal_values_key")
+  @@index([scope, scopeId], map: "api_personal_values_scope_idx")
+  @@map("api_personal_values")
 }
 
 /// Overload tests: requests of a collection replayed under a load profile with thresholds.

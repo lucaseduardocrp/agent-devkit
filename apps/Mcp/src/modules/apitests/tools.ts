@@ -30,6 +30,9 @@ const sources = z
   .describe(
     'ADK items to generate from: saved test plans or suites (testplans_list), Brain pages (brain_list_documents pageId), specs (spec_list), PBIs (pbi_list).',
   );
+const personalNote =
+  'Credentials are personal to each workspace member: secret variables and auth credentials are never shared or returned (personalSecrets lists the refs the user set), so write them as {{variables}} marked secret and let each user type their own value in the web app.';
+
 const generationFields = {
   sources,
   instructions: z
@@ -70,8 +73,7 @@ export const integrationTestsModule: McpModule = {
     defineTool({
       name: 'integration_get_collection',
       title: 'Get API test collection',
-      description:
-        'Returns a collection with its folders, requests, assertions, captures and variables (secret values are never returned).',
+      description: `Returns a collection with its folders, requests, assertions, captures, scripts and variables. ${personalNote}`,
       toolset: 'integrationtests',
       access: 'read',
       routes: ['GET /integration-tests/collections/:id'],
@@ -87,8 +89,7 @@ export const integrationTestsModule: McpModule = {
     defineTool({
       name: 'integration_save_collection',
       title: 'Save API test collection',
-      description:
-        'Creates a collection, or replaces one when collectionId is given. The collection uses the ADK format returned by integration_prepare_generation (ids are optional). Secret variables saved with an empty value keep their current value.',
+      description: `Creates a collection, or replaces one when collectionId is given. The collection uses the ADK format returned by integration_prepare_generation (ids are optional). Empty secret values keep the user's own value; literal credentials are moved to the saving user's personal vault and never shared. ${personalNote}`,
       toolset: 'integrationtests',
       access: 'write',
       routes: ['POST /integration-tests/collections', 'PUT /integration-tests/collections/:id'],
@@ -96,7 +97,9 @@ export const integrationTestsModule: McpModule = {
         collectionId: collectionId.optional(),
         collection: z
           .record(z.string(), z.unknown())
-          .describe('{ name, description?, variables, auth, items: [folders and requests] }'),
+          .describe(
+            '{ name, description?, variables, auth, items: [folders and requests], ci? } where ci is { repository: { provider, id, name, branch, path }, tool: bruno|postman|insomnia, environmentId? } (see integration_list_repositories)',
+          ),
       },
       run: async (input, { api }) =>
         json(
@@ -180,10 +183,78 @@ export const integrationTestsModule: McpModule = {
         ),
     }),
     defineTool({
+      name: 'integration_list_repositories',
+      openWorld: true,
+      title: 'Pipeline repositories',
+      description:
+        'Lists the GitHub and Azure DevOps repositories the workspace integrations can access, to choose where a collection and its CI pipeline are committed (the "ci" settings of integration_save_collection). Warnings explain providers that are missing or unreachable.',
+      toolset: 'integrationtests',
+      access: 'read',
+      routes: ['GET /integration-tests/repositories'],
+      input: {},
+      run: async (_, { api }) =>
+        json(await api.request({ method: 'GET', path: '/integration-tests/repositories' })),
+    }),
+    defineTool({
+      name: 'integration_list_branches',
+      openWorld: true,
+      title: 'Pipeline repository branches',
+      description: 'Lists the branches of a repository returned by integration_list_repositories.',
+      toolset: 'integrationtests',
+      access: 'read',
+      routes: ['GET /integration-tests/repositories/branches'],
+      input: {
+        provider: z.enum(['github', 'azure_devops']),
+        repositoryId: id('Repository id from integration_list_repositories (not its name).'),
+      },
+      run: async (query, { api }) =>
+        json(
+          await api.request({
+            method: 'GET',
+            path: '/integration-tests/repositories/branches',
+            query,
+          }),
+        ),
+    }),
+    defineTool({
+      name: 'integration_preview_pipeline',
+      title: 'Preview CI pipeline',
+      description:
+        'Shows the files that integration_publish_pipeline would commit for a saved collection with "ci" settings: the collection in the chosen tool\'s format (bruno, postman for Newman, insomnia for Inso), the GitHub Actions workflow or Azure Pipelines file, and the CI secrets to create for its secret variables. Nothing is written.',
+      toolset: 'integrationtests',
+      access: 'read',
+      routes: ['GET /integration-tests/collections/:id/ci'],
+      input: { collectionId },
+      run: async ({ collectionId: collection }, { api }) =>
+        json(
+          await api.request({
+            method: 'GET',
+            path: `/integration-tests/collections/${segment(collection)}/ci`,
+          }),
+        ),
+    }),
+    defineTool({
+      name: 'integration_publish_pipeline',
+      openWorld: true,
+      title: 'Commit CI pipeline',
+      description:
+        'Commits the saved collection and its CI pipeline, in one commit, to the repository, branch and folder of its "ci" settings, removing files an earlier generation wrote that are gone now. Secret values are never committed: the result lists the CI secrets to create. Confirm with the user before calling: it writes to their repository.',
+      toolset: 'integrationtests',
+      access: 'write',
+      routes: ['POST /integration-tests/collections/:id/ci'],
+      input: { collectionId },
+      run: async ({ collectionId: collection }, { api }) =>
+        json(
+          await api.request({
+            method: 'POST',
+            path: `/integration-tests/collections/${segment(collection)}/ci`,
+          }),
+        ),
+    }),
+    defineTool({
       name: 'integration_list_environments',
       title: 'List API test environments',
-      description:
-        'Lists the environments (variables such as base URLs and credentials); secret values are never returned.',
+      description: `Lists the environments (variables such as base URLs). ${personalNote}`,
       toolset: 'integrationtests',
       access: 'read',
       routes: ['GET /integration-tests/environments'],
@@ -195,7 +266,7 @@ export const integrationTestsModule: McpModule = {
       name: 'integration_save_environment',
       title: 'Save API test environment',
       description:
-        'Creates an environment, or replaces one when environmentId is given. Mark credentials with secret: true; ask the user to type secret values in the web app rather than through the chat.',
+        'Creates an environment, or replaces one when environmentId is given. Mark credentials with secret: true and an empty value: secret values are personal to each member, so ask the user to type theirs in the web app rather than through the chat.',
       toolset: 'integrationtests',
       access: 'write',
       routes: ['POST /integration-tests/environments', 'PUT /integration-tests/environments/:id'],
@@ -282,7 +353,7 @@ export const integrationTestsModule: McpModule = {
       name: 'integration_run',
       title: 'Run API tests',
       description:
-        'Runs a collection (or some folders/requests) with an environment. Requests run in order and share captured variables. Poll integration_get_run for the result.',
+        "Runs a collection (or some folders/requests) with an environment, using the requesting user's own credentials and runtime variables. Requests run in order and share captured variables. Poll integration_get_run for the result.",
       toolset: 'integrationtests',
       access: 'write',
       routes: ['POST /integration-tests/runs'],
@@ -296,9 +367,92 @@ export const integrationTestsModule: McpModule = {
           .describe('Folder or request ids to run; empty runs everything.'),
         target,
         bail: z.boolean().default(false).describe('Stop at the first failing request.'),
+        iterations: z
+          .number()
+          .int()
+          .min(1)
+          .max(1_000)
+          .optional()
+          .describe('Runs the selection this many times.'),
+        data: z
+          .array(z.record(z.string(), z.string().max(10_000)))
+          .max(1_000)
+          .optional()
+          .describe(
+            'Data-driven run: one iteration per row; the columns are variables ({{column}}).',
+          ),
+        delayMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(60_000)
+          .optional()
+          .describe('Pause between requests, in milliseconds.'),
+        useRuntime: z
+          .boolean()
+          .optional()
+          .describe(
+            "Start from the user's runtime variables and cookies of previous sends (default true).",
+          ),
       },
       run: async (input, { api }) =>
         json(await api.request({ method: 'POST', path: '/integration-tests/runs', body: input })),
+    }),
+    defineTool({
+      name: 'integration_get_runtime',
+      title: 'Get API test runtime variables',
+      description:
+        "Returns the user's own runtime variables and cookies of a collection (set by captures and scripts in previous sends; personal, never shared). Values may be tokens: do not repeat them to the user unless asked.",
+      toolset: 'integrationtests',
+      access: 'read',
+      routes: ['GET /integration-tests/collections/:id/runtime'],
+      input: { collectionId },
+      run: async (input, { api }) =>
+        json(
+          await api.request({
+            method: 'GET',
+            path: `/integration-tests/collections/${segment(input.collectionId)}/runtime`,
+          }),
+        ),
+    }),
+    defineTool({
+      name: 'integration_clear_runtime',
+      title: 'Clear API test runtime variables',
+      description:
+        "Clears the user's own runtime variables and cookies of a collection, so the next run starts fresh.",
+      toolset: 'integrationtests',
+      access: 'destructive',
+      routes: ['DELETE /integration-tests/collections/:id/runtime'],
+      input: { collectionId },
+      run: async (input, { api }) =>
+        json(
+          await api.request({
+            method: 'DELETE',
+            path: `/integration-tests/collections/${segment(input.collectionId)}/runtime`,
+          }),
+        ),
+    }),
+    defineTool({
+      name: 'integration_clear_personal_secret',
+      title: 'Clear a personal API test credential',
+      description:
+        "Removes the user's own value of a secret variable or credential (a ref from personalSecrets, e.g. var:token or auth:collection:token). Other members' values are not affected.",
+      toolset: 'integrationtests',
+      access: 'destructive',
+      routes: ['DELETE /integration-tests/personal-secrets'],
+      input: {
+        scope: z.enum(['collection', 'environment']),
+        scopeId: z.string().trim().min(1).max(100).describe('Collection or environment id.'),
+        ref: z.string().trim().min(1).max(500).describe('Ref from personalSecrets.'),
+      },
+      run: async (input, { api }) =>
+        json(
+          await api.request({
+            method: 'DELETE',
+            path: '/integration-tests/personal-secrets',
+            body: input,
+          }),
+        ),
     }),
     defineTool({
       name: 'integration_list_runs',

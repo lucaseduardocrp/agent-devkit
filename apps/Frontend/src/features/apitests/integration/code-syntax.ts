@@ -1,8 +1,8 @@
-// Colors for request bodies. The tokenizer is forgiving (a body is usually half written) and
+// Colors for request bodies, GraphQL queries and scripts. The tokenizer is forgiving (a body is usually half written) and
 // never loses a character: joining the tokens gives back the text, which is what keeps the colored
 // layer exactly under the textarea it decorates.
 
-export type CodeLanguage = 'json' | 'xml' | 'text';
+export type CodeLanguage = 'json' | 'xml' | 'text' | 'javascript' | 'graphql';
 
 export type TokenKind =
   | 'key'
@@ -162,9 +162,184 @@ function tokenizeXml(text: string): Token[] {
   return tokens;
 }
 
+const JS_KEYWORDS = new Set([
+  'async',
+  'await',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'debugger',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'export',
+  'extends',
+  'false',
+  'finally',
+  'for',
+  'function',
+  'if',
+  'import',
+  'in',
+  'instanceof',
+  'let',
+  'new',
+  'null',
+  'of',
+  'return',
+  'super',
+  'switch',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'typeof',
+  'undefined',
+  'var',
+  'void',
+  'while',
+  'with',
+  'yield',
+]);
+const IDENTIFIER = /[A-Za-z_$][\w$]*/y;
+const JS_NUMBER = /(?:0[xX][\da-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?n?|\.\d+)/y;
+
+/** Scripts: keywords, strings, template literals, comments and numbers. No `{{variables}}`. */
+function tokenizeJavascript(text: string): Token[] {
+  const tokens: Token[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === '/' && text[index + 1] === '/') {
+      const next = text.indexOf('\n', index);
+      const end = next === -1 ? text.length : next;
+      push(tokens, 'comment', text.slice(index, end));
+      index = end;
+    } else if (char === '/' && text[index + 1] === '*') {
+      const next = text.indexOf('*/', index + 2);
+      const end = next === -1 ? text.length : next + 2;
+      push(tokens, 'comment', text.slice(index, end));
+      index = end;
+    } else if (char === '"' || char === "'" || char === '`') {
+      // Quotes end at the line break; template literals may span lines.
+      let end = index + 1;
+      while (end < text.length && text[end] !== char && (char === '`' || text[end] !== '\n')) {
+        end += text[end] === '\\' ? 2 : 1;
+      }
+      end = Math.min(text[end] === char ? end + 1 : end, text.length);
+      push(tokens, 'string', text.slice(index, end));
+      index = end;
+    } else if (/[A-Za-z_$]/.test(char)) {
+      const word = at(IDENTIFIER, text, index)!;
+      push(tokens, JS_KEYWORDS.has(word) ? 'keyword' : 'text', word);
+      index += word.length;
+    } else if (/\d/.test(char) || (char === '.' && /\d/.test(text[index + 1] ?? ''))) {
+      // A digit, or a dot followed by one, always matches.
+      const number = at(JS_NUMBER, text, index)!;
+      tokens.push({ kind: 'number', text: number });
+      index += number.length;
+    } else if ('{}[]().,;:?=+-*/%!<>&|^~'.includes(char)) {
+      tokens.push({ kind: 'punct', text: char });
+      index += 1;
+    } else {
+      push(tokens, 'text', char);
+      index += 1;
+    }
+  }
+  return tokens;
+}
+
+const GRAPHQL_KEYWORDS = new Set([
+  'query',
+  'mutation',
+  'subscription',
+  'fragment',
+  'on',
+  'true',
+  'false',
+  'null',
+  'schema',
+  'type',
+  'input',
+  'enum',
+  'interface',
+  'union',
+  'scalar',
+  'extend',
+  'implements',
+  'directive',
+]);
+const GRAPHQL_NAME = /[_A-Za-z][_0-9A-Za-z]*/y;
+
+/**
+ * GraphQL queries: keywords, `$variables` (attr), `@directives` (tag), argument and alias names
+ * (key), strings, block strings, numbers and `#` comments; `{{variables}}` as in the bodies.
+ */
+function tokenizeGraphql(text: string): Token[] {
+  const tokens: Token[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index]!;
+    const variable = char === '{' ? at(VARIABLE, text, index) : null;
+    if (variable) {
+      tokens.push({ kind: 'variable', text: variable });
+      index += variable.length;
+    } else if (char === '#') {
+      const next = text.indexOf('\n', index);
+      const end = next === -1 ? text.length : next;
+      push(tokens, 'comment', text.slice(index, end));
+      index = end;
+    } else if (text.startsWith('"""', index)) {
+      const next = text.indexOf('"""', index + 3);
+      const end = next === -1 ? text.length : next + 3;
+      withVariables(tokens, 'string', text.slice(index, end));
+      index = end;
+    } else if (char === '"') {
+      let end = index + 1;
+      while (end < text.length && text[end] !== '"' && text[end] !== '\n') {
+        end += text[end] === '\\' && text[end + 1] !== '\n' ? 2 : 1;
+      }
+      end = Math.min(text[end] === '"' ? end + 1 : end, text.length);
+      withVariables(tokens, 'string', text.slice(index, end));
+      index = end;
+    } else if ((char === '$' || char === '@') && /[_A-Za-z]/.test(text[index + 1] ?? '')) {
+      const name = at(GRAPHQL_NAME, text, index + 1)!;
+      tokens.push({ kind: char === '$' ? 'attr' : 'tag', text: char + name });
+      index += name.length + 1;
+    } else if (/[_A-Za-z]/.test(char)) {
+      const name = at(GRAPHQL_NAME, text, index)!;
+      let after = index + name.length;
+      while (text[after] === ' ' || text[after] === '\t') after += 1;
+      const kind = GRAPHQL_KEYWORDS.has(name) ? 'keyword' : text[after] === ':' ? 'key' : 'text';
+      tokens.push({ kind, text: name });
+      index += name.length;
+    } else if (/[-\d]/.test(char) && at(NUMBER, text, index)) {
+      const number = at(NUMBER, text, index)!;
+      tokens.push({ kind: 'number', text: number });
+      index += number.length;
+    } else if (text.startsWith('...', index)) {
+      tokens.push({ kind: 'punct', text: '...' });
+      index += 3;
+    } else if ('{}()[]:!=,|&'.includes(char)) {
+      tokens.push({ kind: 'punct', text: char });
+      index += 1;
+    } else {
+      push(tokens, 'text', char);
+      index += 1;
+    }
+  }
+  return tokens;
+}
+
 export function tokenize(text: string, language: CodeLanguage): Token[] {
   if (language === 'json') return tokenizeJson(text);
   if (language === 'xml') return tokenizeXml(text);
+  if (language === 'javascript') return tokenizeJavascript(text);
+  if (language === 'graphql') return tokenizeGraphql(text);
   const tokens: Token[] = [];
   withVariables(tokens, 'text', text);
   return tokens;

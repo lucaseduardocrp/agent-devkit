@@ -3,12 +3,12 @@
 
 import {
   flattenItems,
-  type ApiCollection,
   type ApiItem,
   type ApiRequestSpec,
   type ApiRun,
   type HttpMethod,
   type KeyValue,
+  type RequestKind,
   type RequestResult,
 } from '../api-test-types.js';
 
@@ -28,6 +28,23 @@ export const METHOD_COLOR: Record<HttpMethod, string> = {
 export const METHOD_SHORT: Partial<Record<HttpMethod, string>> = {
   DELETE: 'DEL',
   OPTIONS: 'OPT',
+};
+
+/** Label of the requests that are not plain HTTP, in place of the method. */
+export const KIND_SHORT: Record<Exclude<RequestKind, 'http'>, string> = {
+  graphql: 'GQL',
+  grpc: 'gRPC',
+  websocket: 'WS',
+  sse: 'SSE',
+  socket: 'TCP',
+};
+
+export const KIND_COLOR: Record<Exclude<RequestKind, 'http'>, string> = {
+  graphql: 'text-pink-400',
+  grpc: 'text-teal-400',
+  websocket: 'text-[var(--text-pro)]',
+  sse: 'text-orange-400',
+  socket: 'text-[var(--text-warning)]',
 };
 
 export const STATUS_PHRASES: Record<number, string> = {
@@ -82,6 +99,44 @@ export function prettyBody(text: string): { code: string; language: string } {
     return { code: text, language: /^\s*</.test(text) ? 'xml' : 'plaintext' };
   }
 }
+
+/** gRPC status codes by number (0 is OK). */
+export const GRPC_STATUS = [
+  'OK',
+  'CANCELLED',
+  'UNKNOWN',
+  'INVALID_ARGUMENT',
+  'DEADLINE_EXCEEDED',
+  'NOT_FOUND',
+  'ALREADY_EXISTS',
+  'PERMISSION_DENIED',
+  'RESOURCE_EXHAUSTED',
+  'FAILED_PRECONDITION',
+  'ABORTED',
+  'OUT_OF_RANGE',
+  'UNIMPLEMENTED',
+  'INTERNAL',
+  'UNAVAILABLE',
+  'DATA_LOSS',
+  'UNAUTHENTICATED',
+] as const;
+
+export const grpcStatusLine = (status: number) => `${status} ${GRPC_STATUS[status] ?? ''}`.trim();
+
+/** Whether a status means success for the kind: gRPC and sockets use 0, the others HTTP codes. */
+export function isOkStatus(kind: RequestKind | undefined, status: number | null): boolean {
+  if (status === null) return false;
+  if (kind === 'grpc' || kind === 'socket') return status === 0;
+  return status < 400;
+}
+
+/** A header of a response, whatever the case of its name. */
+export const headerValue = (headers: Readonly<Record<string, string>>, name: string) =>
+  Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
+
+/** Whether the body is an HTML page (the response can then be previewed). */
+export const isHtml = (contentType: string | undefined, body: string) =>
+  /html/i.test(contentType ?? '') || /^\s*<(!doctype html|html)[\s>]/i.test(body);
 
 // ---------- tree ----------
 
@@ -255,43 +310,6 @@ export function writeLayout(layout: PaneLayout): void {
   } catch {
     // Private windows may block storage: the layout just is not remembered.
   }
-}
-
-// ---------- code generation ----------
-
-const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-
-/** The request as a cURL command. Variables stay as {{name}}: they are resolved when sent. */
-export function toCurl(request: ApiRequestSpec, collection: Pick<ApiCollection, 'auth'>): string {
-  const query = request.query.filter((row) => row.enabled !== false && row.key);
-  const path = fillPathParams(request.url, request.pathParams);
-  const url = query.length
-    ? `${path}${path.includes('?') ? '&' : '?'}${query.map((row) => `${row.key}=${row.value}`).join('&')}`
-    : path;
-  const lines = [`curl -X ${request.method} ${shellQuote(url)}`];
-  const auth = request.auth.type === 'inherit' ? collection.auth : request.auth;
-  if (auth.type === 'bearer') lines.push(`-H ${shellQuote(`Authorization: Bearer ${auth.token}`)}`);
-  if (auth.type === 'basic') lines.push(`-u ${shellQuote(`${auth.username}:${auth.password}`)}`);
-  if (auth.type === 'apikey' && auth.in === 'header')
-    lines.push(`-H ${shellQuote(`${auth.key}: ${auth.value}`)}`);
-  for (const header of request.headers.filter((row) => row.enabled !== false && row.key))
-    lines.push(`-H ${shellQuote(`${header.key}: ${header.value}`)}`);
-  const body = request.body;
-  if (body.mode === 'json' || body.mode === 'text' || body.mode === 'xml') {
-    const type = { json: 'application/json', text: 'text/plain', xml: 'application/xml' }[
-      body.mode
-    ];
-    if (!request.headers.some((row) => row.key.toLowerCase() === 'content-type'))
-      lines.push(`-H ${shellQuote(`Content-Type: ${type}`)}`);
-    if (body.content) lines.push(`--data-raw ${shellQuote(body.content)}`);
-  } else if (body.mode === 'urlencoded') {
-    for (const field of body.fields.filter((row) => row.enabled !== false && row.key))
-      lines.push(`--data-urlencode ${shellQuote(`${field.key}=${field.value}`)}`);
-  } else if (body.mode === 'form') {
-    for (const field of body.fields.filter((row) => row.enabled !== false && row.key))
-      lines.push(`-F ${shellQuote(`${field.key}=${field.value}`)}`);
-  }
-  return lines.join(' \\\n  ');
 }
 
 // ---------- query in the URL ----------

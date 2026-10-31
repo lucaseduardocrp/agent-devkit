@@ -132,6 +132,12 @@ async function nameDialog(value?: string) {
   fireEvent.click(screen.getByTestId('name-dialog-submit'));
 }
 
+async function newRequestDialog(name: string) {
+  const input = await screen.findByTestId('new-request-name');
+  fireEvent.change(input, { target: { value: name } });
+  fireEvent.click(screen.getByTestId('new-request-submit'));
+}
+
 async function confirmDialog() {
   const dialog = await screen.findByRole('alertdialog');
   fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir' }));
@@ -248,7 +254,7 @@ describe('IntegrationTestsView shortcuts and sending', () => {
     expect(api.getApiRun).toHaveBeenCalledTimes(2);
   }, 20_000);
 
-  it('shows send failures, and does not send when saving fails', async () => {
+  it('shows send failures, and sends an edited request without saving it first', async () => {
     const api = client();
     api.startIntegrationRun.mockRejectedValueOnce(new Error('no worker'));
     const { view } = await mount(api);
@@ -260,8 +266,9 @@ describe('IntegrationTestsView shortcuts and sending', () => {
     api.saveApiCollection.mockRejectedValueOnce('conflict');
     editUrl('{{baseUrl}}/x');
     fireEvent.click(view.getByTestId('run-request'));
-    expect((await view.findByRole('alert')).textContent).toContain('conflict');
-    expect(api.startIntegrationRun).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.startIntegrationRun).toHaveBeenCalledTimes(2));
+    // Sending no longer writes the collection first, so a failing save cannot hold it back.
+    expect(api.saveApiCollection).not.toHaveBeenCalled();
   });
 
   it('never sends for read-only members', async () => {
@@ -413,16 +420,15 @@ describe('IntegrationTestsView sidebar actions', () => {
     const { view } = await mount();
     // A new request at the root of the collection and in a folder.
     await menu('Orders API', 'Nova requisição');
-    expect(await view.findByTestId('tree-request-Nova requisição')).toBeTruthy();
+    await newRequestDialog('At root');
+    expect(await view.findByTestId('tree-request-At root')).toBeTruthy();
     fireEvent.click(view.getByText('Orders'));
     await menu('Orders', 'Nova requisição');
-    await waitFor(() =>
-      expect(view.getAllByTestId('tree-request-Nova requisição')).toHaveLength(2),
-    );
+    await newRequestDialog('In folder');
+    expect(await view.findByTestId('tree-request-In folder')).toBeTruthy();
     fireEvent.click(view.getByTestId('add-request'));
-    await waitFor(() =>
-      expect(view.getAllByTestId('tree-request-Nova requisição')).toHaveLength(3),
-    );
+    await newRequestDialog('From toolbar');
+    expect(await view.findByTestId('tree-request-From toolbar')).toBeTruthy();
 
     await menu('Orders API', 'Nova pasta');
     await nameDialog('Admin');

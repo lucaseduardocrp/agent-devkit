@@ -49,7 +49,9 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 /** The workers see https://api.example.test; requests go to the local test server. */
 const tunnel: typeof fetch = (input, init) =>
-  fetch(String(input).replace('https://api.example.test', local), init);
+  input instanceof Request
+    ? fetch(new Request(input.url.replace('https://api.example.test', local), input), init)
+    : fetch(String(input).replace('https://api.example.test', local), init);
 
 const collectionBody = (baseUrl: string) => ({
   name: 'Orders API',

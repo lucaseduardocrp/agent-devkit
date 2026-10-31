@@ -7,9 +7,10 @@ import { sanitizeRichText, testCaseFields, testCaseOrigin } from './test-case-fi
 import type { TestCase } from './TestPlansView.js';
 import { AttachmentPanel } from '../shared/AttachmentPanel.js';
 import type { Attachment } from '../shared/attachment-types.js';
+import { RichTextEditor } from '../shared/RichTextEditor.js';
+import { RICH_TEXT } from '../shared/rich-text.js';
 import {
   discardDrafts,
-  editorHtml,
   saveWithDrafts,
   useInlineImages,
   useMediaClient,
@@ -82,9 +83,6 @@ const copy = {
   },
 } as const;
 
-const RICH_TEXT =
-  'text-sm leading-6 text-[var(--text-primary)] [&_h1]:my-3 [&_h1]:text-lg [&_h1]:font-bold [&_h2]:my-3 [&_h2]:font-bold [&_h3]:my-2 [&_h3]:font-semibold [&_li]:my-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6';
-
 /**
  * A single test case in its own window, like PBIs and issues: title and actions on top,
  * description and steps on the left, and on the right where the case came from with every
@@ -143,15 +141,6 @@ export function TestCaseModal({
     } finally {
       setCommitting(false);
     }
-  };
-
-  const format = (command: string, value?: string) => {
-    // The toolbar is rendered right above the editor, so the editor is mounted.
-    const node = editor.current!;
-    node.focus();
-    if (value === undefined) document.execCommand(command, false);
-    else document.execCommand(command, false, value);
-    setDraft({ ...draft, scenario: sanitizeRichText(editorHtml(node)) });
   };
 
   return (
@@ -243,62 +232,16 @@ export function TestCaseModal({
                 <i className="ti ti-align-left mr-2 text-[var(--text-accent)]" aria-hidden="true" />
                 {t('testplans.caseScenarioLabel')}
               </h3>
-              <div className="overflow-hidden rounded-md border border-[var(--border)] bg-[var(--surface-2)]">
-                {!readOnly && (
-                  <div className="flex flex-wrap items-center gap-1 border-b border-[var(--border)] p-1.5">
-                    {(
-                      [
-                        ['bold', 'ti-bold', t('testplans.toolbarBold')],
-                        ['italic', 'ti-italic', t('testplans.toolbarItalic')],
-                        ['underline', 'ti-underline', t('testplans.toolbarUnderline')],
-                        ['insertUnorderedList', 'ti-list', t('testplans.toolbarList')],
-                      ] as const
-                    ).map(([command, icon, label]) => (
-                      <button
-                        key={command}
-                        type="button"
-                        className="flex h-8 w-8 items-center justify-center rounded text-muted hover:bg-surface-1 hover:text-[var(--text-primary)]"
-                        aria-label={label}
-                        title={label}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => format(command)}
-                      >
-                        <i className={`ti ${icon}`} aria-hidden="true" />
-                      </button>
-                    ))}
-                    <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-                    <button
-                      type="button"
-                      className="flex h-8 items-center gap-1 rounded px-2 text-xs text-muted hover:bg-surface-1 hover:text-[var(--text-primary)]"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => format('formatBlock', 'h3')}
-                      aria-label={t('testplans.toolbarHeading')}
-                    >
-                      <i className="ti ti-heading" aria-hidden="true" /> H
-                    </button>
-                  </div>
-                )}
-                <div
-                  ref={editor}
-                  contentEditable={!readOnly}
-                  suppressContentEditableWarning
-                  role="textbox"
-                  aria-multiline="true"
-                  aria-readonly={readOnly}
-                  aria-label={t('testplans.caseScenarioLabel')}
-                  data-testid="input-edit-test-scenario"
-                  className={`min-h-56 overflow-x-auto whitespace-pre-wrap p-4 outline-none ${RICH_TEXT}`}
-                  dangerouslySetInnerHTML={{ __html: sanitizeRichText(testCase.scenario) }}
-                  onInput={(event) =>
-                    setDraft({
-                      ...draft,
-                      scenario: sanitizeRichText(editorHtml(event.currentTarget)),
-                    })
-                  }
-                  onPaste={readOnly ? undefined : scenarioImages.onPaste}
-                  onDrop={readOnly ? undefined : scenarioImages.onDrop}
-                />
-              </div>
+              <RichTextEditor
+                editorRef={editor}
+                initialHtml={testCase.scenario}
+                readOnly={readOnly}
+                ariaLabel={t('testplans.caseScenarioLabel')}
+                data-testid="input-edit-test-scenario"
+                onChange={(scenario) => setDraft((current) => ({ ...current, scenario }))}
+                onPaste={scenarioImages.onPaste}
+                onDrop={scenarioImages.onDrop}
+              />
             </section>
 
             <section>

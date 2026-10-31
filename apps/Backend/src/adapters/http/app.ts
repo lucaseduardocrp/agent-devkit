@@ -12,6 +12,7 @@ import { getHealthStatus } from '../../application/health/get-health-status.js';
 import type { KnowledgeSearchPort } from '../../modules/knowledge/application/knowledge-search.js';
 import { createRequestContext } from '../../shared/context.js';
 import { ApplicationError, toErrorResponse } from '../../shared/errors.js';
+import { chromiumHostArgs, hostAccessFetch } from '../../shared/host-access.js';
 import { consoleLogger, createRequestLogger, type Logger } from '../../shared/observability.js';
 import { noCache, type Cache } from '../../shared/cache.js';
 import { cachedKnowledgeRepository } from '../../modules/knowledge/application/knowledge-cache.js';
@@ -97,6 +98,10 @@ import { AgentSpecCollaborator } from '../../modules/spec/adapters/agent-spec-co
 import { DesignService } from '../../modules/design/application/design-service.js';
 import type { DesignRemoteStore } from '../../modules/design/application/design-service.js';
 import { RemoteDesignStore } from '../../modules/design/adapters/remote-design-store.js';
+import {
+  InMemoryDesignSettingsStore,
+  type DesignSettingsStore,
+} from '../../modules/design/application/design-settings-store.js';
 import { createDesignRouter } from './design-routes.js';
 import {
   InMemoryTestSuiteStore,
@@ -182,6 +187,7 @@ export interface AppOptions {
   readonly testSuites?: TestSuiteStore;
   readonly specRepository?: SpecRepository;
   readonly designStore?: DesignRemoteStore;
+  readonly designSettings?: DesignSettingsStore;
   readonly e2eStore?: E2eStore;
   readonly e2eRunner?: E2eRunner;
   readonly e2eArtifacts?: E2eArtifactStore;
@@ -421,18 +427,22 @@ export function createApp(options: AppOptions = {}) {
       contextResolver,
     ),
   );
+  const e2eStore = options.e2eStore ?? new InMemoryE2eStore();
+  const e2eQueue = options.e2eQueue ?? new InMemoryE2eJobQueue();
+  const e2eScripts = options.e2eScripts ?? new GitScriptRepository(integrationsService);
+  // Design browses repositories through the same Git access the E2E specs use.
+  const designSettings = options.designSettings ?? new InMemoryDesignSettingsStore();
   app.use(
     createDesignRouter(
       new DesignService(
-        options.designStore ?? new RemoteDesignStore(integrationsService),
+        options.designStore ?? new RemoteDesignStore(integrationsService, fetch, designSettings),
         agentService,
+        designSettings,
+        e2eScripts,
       ),
       contextResolver,
     ),
   );
-  const e2eStore = options.e2eStore ?? new InMemoryE2eStore();
-  const e2eQueue = options.e2eQueue ?? new InMemoryE2eJobQueue();
-  const e2eScripts = options.e2eScripts ?? new GitScriptRepository(integrationsService);
   const e2eRunnerTasks = options.e2eRunnerTasks ?? new InMemoryE2eRunnerTaskStore();
   const testManagement =
     options.testManagement ?? new IntegrationTestManagementResolver(integrationsService);
@@ -445,7 +455,12 @@ export function createApp(options: AppOptions = {}) {
       concurrency: options.e2eWorkerConcurrency,
       executor: new E2eExecutor({
         store: e2eStore,
-        runner: options.e2eRunner ?? new PlaywrightE2eRunner({ hostAlias: options.hostAlias }),
+        runner:
+          options.e2eRunner ??
+          new PlaywrightE2eRunner({
+            browserArgs: chromiumHostArgs(options.hostAlias ?? null),
+            ...(options.hostAlias ? { fetcher: hostAccessFetch(options.hostAlias) } : {}),
+          }),
         localRunner: new LocalE2eRunner({ tasks: e2eRunnerTasks, artifacts: e2eArtifacts }),
         transcoder: options.e2eTranscoder,
         scripts: e2eScripts,
@@ -507,6 +522,8 @@ export function createApp(options: AppOptions = {}) {
     dispatcher: { wake: () => apiTestDispatcher!.wake() },
     dynamicProviderFactory,
     defaultLlm: options.defaultLlm,
+    // Pipelines are committed through the same Git access the E2E specs use.
+    repositories: e2eScripts,
   });
   if (!apiTestDispatcher) {
     // Without a remote worker the API executes remote runs itself (local development).

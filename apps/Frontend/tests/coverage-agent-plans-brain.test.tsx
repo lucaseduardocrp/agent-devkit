@@ -70,6 +70,8 @@ describe('BrainView assistants', () => {
     const client = createClient([appDoc]);
     const query = vi.spyOn(client, 'queryBrain');
     const view = render(<BrainView apiClient={client} initialDocuments={[appDoc]} />);
+    // The research sidebar starts collapsed.
+    fireEvent.click(view.getByRole('button', { name: 'Abrir pesquisa no Brain' }));
     const sidebar = view.getByTestId('brain-research-sidebar');
     const prompt = within(sidebar).getByLabelText('Pergunte algo sobre o Brain…');
     fireEvent.change(prompt, { target: { value: '   ' } });

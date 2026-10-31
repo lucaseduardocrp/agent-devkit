@@ -7,9 +7,15 @@ import {
 } from '../../agents/application/agent-service.js';
 import { PromptInjectionGuard } from '../../agents/application/prompt-injection-guard.js';
 import type { DynamicProviderFactory } from '../../integrations/application/dynamic-provider-factory.js';
-import type { E2eCreation, E2eTestCase, E2eVerdict } from '../domain/e2e.js';
+import {
+  HOOK_INSTRUCTION_FIELDS,
+  type E2eCreation,
+  type E2eHookKind,
+  type E2eTestCase,
+  type E2eVerdict,
+} from '../domain/e2e.js';
 import type { NewE2eTestCase } from './e2e-store.js';
-import type { E2eSnapshot } from './e2e-runner.js';
+import type { E2eRunHooks, E2eSnapshot } from './e2e-runner.js';
 import { stripCodeFence } from './script-guard.js';
 
 export const MAX_E2E_TESTS = 10;
@@ -30,6 +36,20 @@ export interface E2eScriptRequest {
   readonly snapshot: E2eSnapshot | null;
   /** Present when repairing: the rejected or failing previous attempt. */
   readonly previous?: { readonly script: string; readonly problem: string };
+  /** Before Run and After Run of the test: the spec must not repeat what they do. */
+  readonly hooks?: E2eRunHooks | null;
+  readonly signal?: AbortSignal;
+}
+
+export interface E2eHookRequest {
+  readonly creation: E2eCreation;
+  readonly test: E2eTestCase;
+  readonly kind: E2eHookKind;
+  readonly snapshot: E2eSnapshot | null;
+  /** The Before Run already written, so After Run removes exactly what it created. */
+  readonly beforeRun?: string | null;
+  /** Present when repairing: the rejected previous attempt. */
+  readonly previous?: { readonly script: string; readonly problem: string };
   readonly signal?: AbortSignal;
 }
 
@@ -40,10 +60,16 @@ export interface E2eAuthor {
     signal?: AbortSignal;
   }): Promise<E2ePlan>;
   writeScript(input: E2eScriptRequest): Promise<string>;
+  /**
+   * Writes the Before Run or After Run of a test from its preconditions and the data it
+   * creates; null when the test needs none. Authors without it leave tests without hooks.
+   */
+  writeHook?(input: E2eHookRequest): Promise<string | null>;
   analyze(input: {
     creation: E2eCreation;
     test: E2eTestCase;
     script: string;
+    hooks?: E2eRunHooks | null;
     error: string;
     logs: string;
     signal?: AbortSignal;
@@ -119,6 +145,7 @@ export const planRules = (creation: E2eCreation): string[] => [
     : 'Scope: CODEBASE. Cover the most important journeys of the whole product.',
   'Prefer critical journeys, validation rules, permissions and edge cases stated in the PRD. Use only facts from the PRD and the snapshot; never invent features.',
   'Each test starts from the application URL; when a test needs to be authenticated it logs in with the provided test account.',
+  'Data or configuration a test needs beforehand (e.g. a record that must exist or be edited first) is built by the Before Run of the test, and what it creates is removed by its After Run; both are written separately, so state them as preconditions and postconditions in the description, not as steps.',
   `Write every text value in ${languageName(creation.locale)}.`,
 ];
 
@@ -146,8 +173,43 @@ export const scriptRules = (creation: E2eCreation): string[] => [
     ? '- When login is needed, use process.env.E2E_USERNAME and process.env.E2E_PASSWORD. Never hardcode credentials.'
     : '- No test account was provided: do not attempt to log in; verify only behavior reachable without authentication.',
   '- Forbidden: other imports, require, Node APIs, process (except the two env vars), file paths, test.use, launching browsers, computed member access with strings (obj["x"]), eval.',
+  '- When beforeRunPreparesPreconditions is given, those preconditions are ready when the test starts: do not create them again, and find the records by the names it uses. Leave cleanup to afterRunCleansUp.',
   `- Write exactly one top-level await test.step(...) per listed test step, in the same order, named "${creation.locale === 'en-US' ? 'Step' : 'Passo'} N - <short action>" (N starting at 1), and assert the step's expected result inside it. Each top-level step becomes the step result and screenshot evidence published to the test management platform; nested steps are allowed but count as part of their parent. Keep it under 150 lines.`,
 ];
+
+/** Answer of the AI when a test needs no Before Run or After Run. */
+export const NO_HOOK = 'NONE';
+
+/** How to write a test's Before Run or After Run; the same rules the script guard enforces. */
+export const hookRules = (creation: E2eCreation, kind: E2eHookKind): string[] => {
+  const fixtures =
+    creation.mode === 'frontend'
+      ? '{ page, request }: { page: Page; request: APIRequestContext }'
+      : '{ request }: { request: APIRequestContext }';
+  return [
+    kind === 'beforeRun'
+      ? '- Before Run runs right before the test and builds every precondition it needs (e.g. the employee, the event, its edition, configuration), so the test starts from them instead of doing that work itself.'
+      : '- After Run runs right after the test, even when the test or Before Run failed, and removes every trace of it (records created by Before Run or by the test, changed configuration restored), so no other test is affected.',
+    `- Write one module whose only import is from '@playwright/test' (test, expect and types such as Page and APIRequestContext) and that exports exactly: export default async function ${kind}(${fixtures}) { ... }`,
+    `- Start the file with a block comment that lists its ${kind === 'beforeRun' ? 'setup' : 'cleanup'} steps for people reading the test, numbered from 1, one per line as "action => expected result" (e.g. "/**\\n * ${kind === 'beforeRun' ? 'Before Run' : 'After Run'} steps:\\n * 1. Create the employee \\"E2E TC001 - Ana\\" through the API => The employee is created\\n */"). Write the steps in ${languageName(creation.locale)}.`,
+    '- Implement each listed step as one top-level await test.step("N - <short action>", ...) in the same order, asserting its expected result inside it. Do not declare test(...), test.describe or hooks: the runner calls the function. These steps are not evidence of the test.',
+    creation.mode === 'frontend'
+      ? '- Prefer the `request` fixture against the application API when the specification documents the endpoints; otherwise use the UI through `page`, starting with page.goto on a relative path.'
+      : '- Use the `request` fixture against the application API.',
+    '- When userInstructions is given, it is how the user wants this script written (screens to open, buttons to click, routes, records to use): follow it over your own choices, as long as it respects the other rules.',
+    '- Modules cannot share variables. Name every record the test needs with the test code (e.g. "E2E TC001 - ...") so the test and After Run find it by that name.',
+    kind === 'beforeRun'
+      ? '- Make it repeatable: when a record with that name is left from an earlier run, reuse or recreate it. Assert with expect that each precondition is in place.'
+      : '- Find each record by name before removing it and skip what does not exist, so the cleanup never fails because the test stopped early.',
+    creation.username && creation.passwordSecret
+      ? '- When login is needed, use process.env.E2E_USERNAME and process.env.E2E_PASSWORD. Never hardcode credentials.'
+      : '- No test account was provided: use only what is reachable without authentication.',
+    '- Forbidden: other imports, require, Node APIs, process (except the two env vars), file paths, launching browsers, computed member access with strings (obj["x"]), eval.',
+    kind === 'beforeRun'
+      ? `- When the test has no precondition to prepare, answer exactly ${NO_HOOK}.`
+      : `- When the test and its Before Run create or change nothing, answer exactly ${NO_HOOK}.`,
+  ];
+};
 
 const PLAN_TASK = (creation: E2eCreation) =>
   [
@@ -160,6 +222,13 @@ const SCRIPT_TASK = (creation: E2eCreation) =>
     'Write ONE Playwright Test file in TypeScript for the given test case.',
     ...scriptRules(creation),
     '- Return only the code, without Markdown fences or explanations.',
+  ].join('\n');
+
+const HOOK_TASK = (creation: E2eCreation, kind: E2eHookKind) =>
+  [
+    `Write the ${kind === 'beforeRun' ? 'Before Run' : 'After Run'} of the given end-to-end test case in TypeScript, from its description (preconditions, input data, postconditions) and steps.`,
+    ...hookRules(creation, kind),
+    `- Return only the code (or ${NO_HOOK}), without Markdown fences or explanations.`,
   ].join('\n');
 
 const ANALYSIS_TASK = (creation: E2eCreation) =>
@@ -212,6 +281,10 @@ export class AgentE2eAuthor implements E2eAuthor {
           steps: input.test.steps,
         },
         applicationSnapshot: input.snapshot,
+        ...(input.hooks?.beforeRun
+          ? { beforeRunPreparesPreconditions: input.hooks.beforeRun }
+          : {}),
+        ...(input.hooks?.afterRun ? { afterRunCleansUp: input.hooks.afterRun } : {}),
         ...(input.previous
           ? {
               previousAttempt: input.previous.script,
@@ -222,6 +295,33 @@ export class AgentE2eAuthor implements E2eAuthor {
       input.signal,
     );
     return stripCodeFence(text);
+  }
+
+  async writeHook(input: E2eHookRequest): Promise<string | null> {
+    const text = await this.complete(
+      input.creation,
+      HOOK_TASK(input.creation, input.kind),
+      {
+        ...creationContext(input.creation),
+        testCase: {
+          code: input.test.code,
+          title: input.test.title,
+          description: input.test.description,
+          steps: input.test.steps,
+        },
+        applicationSnapshot: input.snapshot,
+        ...(input.test[HOOK_INSTRUCTION_FIELDS[input.kind]]
+          ? { userInstructions: input.test[HOOK_INSTRUCTION_FIELDS[input.kind]] }
+          : {}),
+        ...(input.beforeRun ? { beforeRun: input.beforeRun } : {}),
+        ...(input.previous
+          ? { previousAttempt: input.previous.script, problemToFix: input.previous.problem }
+          : {}),
+      },
+      input.signal,
+    );
+    const code = stripCodeFence(text);
+    return !code || code === NO_HOOK ? null : code;
   }
 
   async analyze(input: Parameters<E2eAuthor['analyze']>[0]): Promise<E2eAnalysis> {
@@ -238,6 +338,8 @@ export class AgentE2eAuthor implements E2eAuthor {
         mode: input.creation.mode,
         targetUrl: `${input.creation.localOrigin ?? input.creation.baseUrl}${input.creation.path}`,
         script: input.script,
+        ...(input.hooks?.beforeRun ? { beforeRun: input.hooks.beforeRun } : {}),
+        ...(input.hooks?.afterRun ? { afterRun: input.hooks.afterRun } : {}),
         error: input.error.slice(0, 8_000),
         runnerLog: input.logs.slice(-12_000),
       },

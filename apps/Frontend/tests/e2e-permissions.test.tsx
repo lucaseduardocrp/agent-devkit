@@ -16,6 +16,8 @@ const TEST: E2eTestDetail = {
   description: 'Verify the public page.',
   steps: ['Open the page'],
   priority: 'high',
+  beforeRunInstructions: null,
+  afterRunInstructions: null,
   scriptPath: 'tests/e2e/tc001-access.spec.ts',
   status: 'passed',
   error: null,
@@ -135,7 +137,7 @@ describe('E2eView permissions', () => {
   it('links to Agents and Integrations only for members who can open them', async () => {
     const allowed = await view(access({ agents: 'view', integrations: 'view' }));
     fireEvent.click(allowed.ui.getByRole('button', { name: /Nova execução/ }));
-    fireEvent.click(await allowed.ui.findByRole('button', { name: 'Agents' }));
+    fireEvent.click(await allowed.ui.findByRole('button', { name: 'Agentes' }));
     fireEvent.click(await allowed.ui.findByRole('button', { name: 'Integrações' }));
     expect(allowed.onOpenAgents).toHaveBeenCalled();
     expect(allowed.onOpenIntegrations).toHaveBeenCalled();
@@ -145,7 +147,7 @@ describe('E2eView permissions', () => {
     fireEvent.click(denied.ui.getByRole('button', { name: /Nova execução/ }));
     expect(await denied.ui.findByText(/Crie um agente em Agents/)).toBeInTheDocument();
     expect(await denied.ui.findByText(/Nenhum repositório encontrado/)).toBeInTheDocument();
-    expect(denied.ui.queryByRole('button', { name: 'Agents' })).toBeNull();
+    expect(denied.ui.queryByRole('button', { name: 'Agentes' })).toBeNull();
     expect(denied.ui.queryByRole('button', { name: 'Integrações' })).toBeNull();
   });
 

@@ -8,6 +8,11 @@ import {
   MAX_SCRIPT_LENGTH,
   type E2eService,
 } from '../../modules/e2e/application/e2e-service.js';
+import {
+  E2E_SCRIPT_KINDS,
+  HOOK_KINDS,
+  MAX_HOOK_INSTRUCTIONS_LENGTH,
+} from '../../modules/e2e/domain/e2e.js';
 import { TEST_MANAGEMENT_PROVIDERS } from '../../modules/test-management/domain/test-run.js';
 import { requireAuth, requireModulePermission } from './auth-middleware.js';
 import type { RequestContextResolver } from './compatibility-routes.js';
@@ -119,7 +124,15 @@ const branchQuery = z.object({
   repositoryId: z.string().trim().min(1).max(200),
 });
 const script = z.string().min(1).max(MAX_SCRIPT_LENGTH);
-const scriptFields = z.object({ content: script });
+const scriptKind = z.enum(E2E_SCRIPT_KINDS).default('spec');
+const scriptQuery = z.object({ kind: scriptKind });
+// An empty Before Run or After Run turns it off; the service rejects an empty spec.
+const scriptFields = z.object({ content: z.string().max(MAX_SCRIPT_LENGTH), kind: scriptKind });
+const hookInstructionFields = z.object({
+  kind: z.enum(HOOK_KINDS as ['beforeRun', 'afterRun']),
+  instructions: z.string().max(MAX_HOOK_INSTRUCTIONS_LENGTH),
+});
+const hook = z.string().max(MAX_SCRIPT_LENGTH).nullable().optional();
 const briefFields = z.object({ refresh: z.boolean().default(false) });
 const tunnelCheckFields = z.object({
   url: z.string().trim().min(1).max(500),
@@ -137,6 +150,8 @@ const planFields = z.object({
         priority: z.enum(['high', 'medium', 'low']).default('medium'),
         steps: z.array(z.string().trim().min(1).max(1_000)).max(200).default([]),
         script,
+        beforeRun: hook,
+        afterRun: hook,
         externalCase: externalCaseFields.nullable().optional(),
       }),
     )
@@ -224,7 +239,8 @@ export function createE2eRouter(service: E2eService, contextResolver?: RequestCo
   router.get('/e2e/tests/:id/script', requireAuth, read, async (request, response, next) => {
     try {
       const { id } = parseParams(idParams, request);
-      response.json({ script: await service.getScript(workspaceId(request), id) });
+      const { kind } = parseQuery(scriptQuery, request);
+      response.json({ script: await service.getScript(workspaceId(request), id, kind) });
     } catch (error) {
       next(error);
     }
@@ -233,12 +249,29 @@ export function createE2eRouter(service: E2eService, contextResolver?: RequestCo
   router.put('/e2e/tests/:id/script', requireAuth, write, async (request, response, next) => {
     try {
       const { id } = parseParams(idParams, request);
-      const { content } = parseBody(scriptFields, request);
-      response.json({ script: await service.pushScript(workspaceId(request), id, content) });
+      const { content, kind } = parseBody(scriptFields, request);
+      response.json({ script: await service.pushScript(workspaceId(request), id, content, kind) });
     } catch (error) {
       next(error);
     }
   });
+
+  router.put(
+    '/e2e/tests/:id/hook-instructions',
+    requireAuth,
+    write,
+    async (request, response, next) => {
+      try {
+        const { id } = parseParams(idParams, request);
+        const { kind, instructions } = parseBody(hookInstructionFields, request);
+        response.json({
+          test: await service.updateHookInstructions(workspaceId(request), id, kind, instructions),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.get(
     '/e2e/test-management/providers',

@@ -5,9 +5,10 @@ import { Input } from '../../../components/ui/input.js';
 import type { ApiClient } from '../../../lib/api-client.js';
 import { useI18n } from '../../../lib/i18n/index.js';
 import { cn } from '../../../lib/utils.js';
-import type { ApiEnvironment } from '../api-test-types.js';
+import { secretRef, type ApiEnvironment } from '../api-test-types.js';
 import { VariablesEditor } from '../ApiTestShared.js';
 import { EmptyPane } from './integration-parts.js';
+import { errorText } from './file-read.js';
 
 type Draft = Pick<ApiEnvironment, 'name' | 'variables'>;
 const blank = (): Draft => ({ name: '', variables: [{ key: 'baseUrl', value: '' }] });
@@ -39,10 +40,12 @@ export function EnvironmentsPane({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [personal, setPersonal] = useState<readonly string[]>([]);
 
   const selected = environments.find((environment) => environment.id === selectedId) ?? null;
   useEffect(() => {
     setDraft(selected ? { name: selected.name, variables: selected.variables } : blank());
+    setPersonal(selected?.personalSecrets ?? []);
     setDirty(false);
     // Only when another environment is picked: a reload must not drop what is being typed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -62,25 +65,45 @@ export function EnvironmentsPane({
       await onChanged();
       setSelectedId(saved.id);
       setDraft({ name: saved.name, variables: saved.variables });
+      setPersonal(saved.personalSecrets ?? []);
       setDirty(false);
       setNotice(t('apiTests.saved'));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorText(err));
     } finally {
       setSaving(false);
     }
   };
 
-  // Only offered while an environment is selected.
-  const remove = async (id: string) => {
+  /** Forgets the current user's own value of a secret; the other members keep theirs. */
+  const clearPersonal = async (environmentId: string, ref: string) => {
+    setError(null);
+    try {
+      await apiClient.clearPersonalSecret({ scope: 'environment', scopeId: environmentId, ref });
+      setDraft((current) => ({
+        ...current,
+        variables: current.variables.map((variable) =>
+          secretRef.variable(variable.key) === ref ? { ...variable, hasValue: false } : variable,
+        ),
+      }));
+      setPersonal((current) => current.filter((item) => item !== ref));
+      setNotice(t('apiTests.workbench.personalCleared'));
+      await onChanged();
+    } catch (err) {
+      setError(errorText(err));
+    }
+  };
+
+  const remove = async () => {
+    if (!selectedId) return;
     setConfirmDelete(false);
     try {
-      await apiClient.deleteApiEnvironment(id);
-      if (activeId === id) onActivate('');
+      await apiClient.deleteApiEnvironment(selectedId);
+      if (activeId === selectedId) onActivate('');
       setSelectedId(null);
       await onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorText(err));
     }
   };
 
@@ -167,6 +190,10 @@ export function EnvironmentsPane({
                 <VariablesEditor
                   variables={draft.variables}
                   readOnly={readOnly}
+                  personalSecrets={personal}
+                  onClearPersonal={
+                    selectedId ? (ref) => void clearPersonal(selectedId, ref) : undefined
+                  }
                   onChange={(variables) => change({ ...draft, variables })}
                 />
               </div>
@@ -219,7 +246,7 @@ export function EnvironmentsPane({
         cancelLabel={t('common.cancel')}
         destructive
         onCancel={() => setConfirmDelete(false)}
-        onConfirm={() => void remove(selectedId!)}
+        onConfirm={() => void remove()}
       />
     </section>
   );

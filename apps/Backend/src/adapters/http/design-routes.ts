@@ -76,6 +76,15 @@ const designSystemSchema = z.object({
   name: z.string().trim().min(1).max(120),
   content: z.string().trim().min(1).max(100_000),
 });
+const settingsSchema = z.object({
+  provider: providerSchema,
+  repositoryId: z.string().trim().min(1).max(200),
+  branch: z.string().trim().max(200).default(''),
+});
+const branchQuerySchema = z.object({
+  provider: providerSchema,
+  repositoryId: z.string().trim().min(1).max(200),
+});
 const generateDesignSystemSchema = z.object({
   agentId: z.string().uuid(),
   prompt: z.string().trim().min(1).max(20_000),
@@ -98,6 +107,43 @@ export function createDesignRouter(
   router.get('/design/providers', requireAuth, async (req, res, next) => {
     try {
       res.json({ providers: await service.providers(resolveWorkspaceId(req)) });
+    } catch (error) {
+      next(error);
+    }
+  });
+  router.get('/design/settings', requireAuth, async (req, res, next) => {
+    try {
+      res.json({ settings: await service.getSettings(resolveWorkspaceId(req)) });
+    } catch (error) {
+      next(error);
+    }
+  });
+  router.put(
+    '/design/settings',
+    requireAuth,
+    requireModulePermission('design', 'edit'),
+    async (req, res, next) => {
+      try {
+        const body = parseBody(settingsSchema, req);
+        res.json({ settings: await service.saveSettings(resolveWorkspaceId(req), body) });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+  router.get('/design/repositories', requireAuth, async (req, res, next) => {
+    try {
+      res.json(await service.listRepositories(resolveWorkspaceId(req)));
+    } catch (error) {
+      next(error);
+    }
+  });
+  router.get('/design/repositories/branches', requireAuth, async (req, res, next) => {
+    try {
+      const { provider, repositoryId } = branchQuerySchema.parse(req.query);
+      res.json({
+        branches: await service.listBranches(resolveWorkspaceId(req), provider, repositoryId),
+      });
     } catch (error) {
       next(error);
     }

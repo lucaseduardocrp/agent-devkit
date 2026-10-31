@@ -144,14 +144,17 @@ describe('importInsomnia edge cases', () => {
       auth: { type: 'basic', username: 'u', password: '{{p}}' },
     });
     expect(r2.method).toBe('POST');
-    expect(r2.body).toEqual({ mode: 'form', fields: [{ key: 'f', value: 'v' }] });
+    expect(r2.body).toEqual({
+      mode: 'form',
+      fields: [{ key: 'f', value: 'v', type: 'text' }],
+    });
     expect(r2.auth).toEqual({ type: 'apikey', key: 'X-API-Key', value: 'k', in: 'query' });
     expect(r3.body).toEqual({ mode: 'none' });
     expect(r3.auth).toEqual({ type: 'apikey', key: 'X-Key', value: 'k', in: 'header' });
     expect(r4.body).toEqual({ mode: 'xml', content: '<a/>' });
     expect(r4.auth).toEqual({ type: 'none' });
     expect(r5.body).toEqual({ mode: 'text', content: 'hi' });
-    expect(r5.auth).toEqual({ type: 'inherit' });
+    expect(r5.auth).toEqual({ type: 'none' });
     expect(r6.body).toEqual({ mode: 'json', content: '{"t":"{{token}}"}' });
     expect(r6.auth).toEqual({ type: 'inherit' });
   });

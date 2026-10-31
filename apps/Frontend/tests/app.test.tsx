@@ -117,7 +117,7 @@ describe('App', () => {
     expect(await view.findByTestId('screen-brain')).toBeInTheDocument();
     expect(view.getByRole('heading', { level: 1, name: 'Aplicação' })).toBeInTheDocument();
 
-    fireEvent.click(view.getByRole('button', { name: /^Test$/i }));
+    fireEvent.click(view.getByRole('button', { name: /^Testes$/i }));
     fireEvent.click(view.getByRole('button', { name: 'Planos de Teste' }));
     expect(view.getByTestId('screen-testplans')).toBeInTheDocument();
 
@@ -127,14 +127,14 @@ describe('App', () => {
     fireEvent.click(view.getByRole('button', { name: 'Configurações' }));
     expect(view.getByTestId('screen-settings')).toBeInTheDocument();
 
-    fireEvent.click(view.getByRole('button', { name: 'Agents' }));
+    fireEvent.click(view.getByTestId('sidebar-agents-button'));
     expect(view.getByTestId('agents-view')).toBeInTheDocument();
 
-    fireEvent.click(view.getByRole('button', { name: 'Product' }));
+    fireEvent.click(view.getByRole('button', { name: 'Produto' }));
     fireEvent.click(view.getByRole('button', { name: 'Spec' }));
     expect(view.getByTestId('screen-spec')).toBeInTheDocument();
 
-    fireEvent.click(view.getByRole('button', { name: 'Brain' }));
+    fireEvent.click(view.getByRole('button', { name: 'Cérebro' }));
     expect(view.getByTestId('screen-brain')).toBeInTheDocument();
   });
 
@@ -181,7 +181,7 @@ describe('App', () => {
 
     // Coming back to E2E later shows the list instead of the form.
     fireEvent.click(view.getByRole('button', { name: 'Planos de Teste' }));
-    fireEvent.click(view.getByRole('button', { name: 'E2E Automation' }));
+    fireEvent.click(view.getByRole('button', { name: 'Automação E2E' }));
     await waitFor(() => expect(client.getE2eCreations).toHaveBeenCalled());
     expect(view.queryByRole('radio', { name: 'Test cases salvos no ADK' })).toBeNull();
 
@@ -343,7 +343,7 @@ describe('App', () => {
       'sidebar-e2e-button',
     ])
       expect(view.queryByTestId(id)).not.toBeInTheDocument();
-    expect(view.queryByRole('button', { name: 'Brain' })).not.toBeInTheDocument();
+    expect(view.queryByRole('button', { name: 'Cérebro' })).not.toBeInTheDocument();
     expect(view.getByTestId('sidebar-settings-footer-button')).toBeInTheDocument();
   });
 

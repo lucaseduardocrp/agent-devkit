@@ -3,6 +3,7 @@ import {
   PlaywrightE2eRunner,
   type PlaywrightModule,
 } from '../src/modules/e2e/adapters/playwright-runner.js';
+import { chromiumHostArgs } from '../src/shared/host-access.js';
 
 describe('Playwright runner with host access', () => {
   it('launches Chromium with the host rules and refuses Access headers it cannot scope', async () => {
@@ -10,7 +11,7 @@ describe('Playwright runner with host access', () => {
     const newPage = vi.fn().mockResolvedValue({});
     const launch = vi.fn().mockResolvedValue({ newPage, close });
     const runner = new PlaywrightE2eRunner({
-      hostAlias: 'host.docker.internal',
+      browserArgs: chromiumHostArgs('host.docker.internal'),
       loadPlaywright: () =>
         Promise.resolve({ chromium: { launch } } as unknown as PlaywrightModule),
     });

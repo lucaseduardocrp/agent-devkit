@@ -3,8 +3,38 @@ import { ApplicationError } from '../../../shared/errors.js';
 import type { RequestContext } from '../../../shared/context.js';
 import type { AgentService } from '../../agents/application/agent-service.js';
 import type { LlmImage } from '../../agents/application/agent-ports.js';
+import type { DesignSettings, DesignSettingsStore } from './design-settings-store.js';
 
 export type DesignRepositoryProvider = 'github' | 'azure';
+
+/**
+ * Repository listing of the connected Git providers. The E2E script repository already speaks
+ * to the same workspace integrations, so Design browses repositories through it.
+ */
+export interface DesignRepositoryBrowser {
+  listRepositories(workspaceId: string): Promise<{
+    repositories: readonly {
+      id: string;
+      provider: string;
+      name: string;
+      defaultBranch: string;
+      webUrl?: string;
+    }[];
+    warnings: readonly { provider: string; code: string }[];
+  }>;
+  listBranches(
+    workspaceId: string,
+    provider: string,
+    repositoryId: string,
+  ): Promise<readonly { name: string; isDefault: boolean }[]>;
+}
+
+/** The Git providers Design can use, named as the repository browser names them. */
+const designProvider = (provider: string): DesignRepositoryProvider | null =>
+  provider === 'github' ? 'github' : provider === 'azure_devops' ? 'azure' : null;
+const gitProvider = (provider: DesignRepositoryProvider): string =>
+  provider === 'github' ? 'github' : 'azure_devops';
+
 export interface DesignFile {
   readonly name: string;
   readonly language: string;
@@ -133,9 +163,85 @@ export class DesignService {
   public constructor(
     private readonly store: DesignRemoteStore,
     private readonly agents: AgentService,
+    private readonly settings?: DesignSettingsStore,
+    /** Lists the repositories and branches of every connected provider. */
+    private readonly repositories?: DesignRepositoryBrowser,
   ) {}
   public providers(workspaceId: string) {
     return this.store.configuredProviders(workspaceId);
+  }
+
+  public async getSettings(workspaceId: string): Promise<DesignSettings | null> {
+    return (await this.requireSettingsStore().get(workspaceId)) ?? null;
+  }
+
+  /** Repositories of every connected provider, so Design can be pointed at any of them. */
+  public async listRepositories(workspaceId: string) {
+    const browser = this.repositories;
+    if (!browser) return { repositories: [], warnings: [] };
+    const { repositories, warnings } = await browser.listRepositories(workspaceId);
+    return {
+      repositories: repositories.flatMap((repository) => {
+        const provider = designProvider(repository.provider);
+        return provider ? [{ ...repository, provider }] : [];
+      }),
+      warnings: warnings.flatMap((warning) => {
+        const provider = designProvider(warning.provider);
+        return provider ? [{ ...warning, provider }] : [];
+      }),
+    };
+  }
+
+  public async listBranches(
+    workspaceId: string,
+    provider: DesignRepositoryProvider,
+    repositoryId: string,
+  ) {
+    const browser = this.repositories;
+    if (!browser) return [];
+    return browser.listBranches(workspaceId, gitProvider(provider), repositoryId);
+  }
+
+  /** Saves the repository Design works in, rejecting one the workspace cannot reach. */
+  public async saveSettings(
+    workspaceId: string,
+    input: { provider: DesignRepositoryProvider; repositoryId: string; branch: string },
+  ): Promise<DesignSettings> {
+    const { repositories } = await this.listRepositories(workspaceId);
+    const repository = repositories.find(
+      (item) => item.provider === input.provider && item.id === input.repositoryId,
+    );
+    if (!repository)
+      throw new ApplicationError(
+        'DESIGN_REPOSITORY_NOT_FOUND',
+        'Repositório não encontrado nas integrações do workspace.',
+        404,
+      );
+    const branches = await this.listBranches(workspaceId, input.provider, input.repositoryId);
+    const branch = input.branch.trim() || repository.defaultBranch;
+    if (branches.length > 0 && !branches.some((item) => item.name === branch))
+      throw new ApplicationError(
+        'DESIGN_BRANCH_NOT_FOUND',
+        'Branch não encontrada no repositório escolhido.',
+        404,
+        [{ field: 'branch' }],
+      );
+    return this.requireSettingsStore().save(workspaceId, {
+      provider: input.provider,
+      repositoryId: repository.id,
+      repositoryName: repository.name,
+      branch,
+    });
+  }
+
+  private requireSettingsStore(): DesignSettingsStore {
+    if (!this.settings)
+      throw new ApplicationError(
+        'DESIGN_SETTINGS_UNAVAILABLE',
+        'Configuração do Design indisponível.',
+        503,
+      );
+    return this.settings;
   }
   public list(workspaceId: string, provider: DesignRepositoryProvider) {
     return this.store.list(workspaceId, provider);

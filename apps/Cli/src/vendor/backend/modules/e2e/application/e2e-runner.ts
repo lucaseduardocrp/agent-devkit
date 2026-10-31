@@ -30,8 +30,18 @@ export interface E2eCredentials {
   readonly password: string | null;
 }
 
+/**
+ * Before Run prepares the preconditions of the test and After Run removes what it left
+ * behind. Each is a module exporting one default async function; null when the test has none.
+ */
+export interface E2eRunHooks {
+  readonly beforeRun: string | null;
+  readonly afterRun: string | null;
+}
+
 export interface E2eRunInput {
   readonly script: string;
+  readonly hooks?: E2eRunHooks | null;
   readonly mode: E2eMode;
   readonly baseUrl: string;
   readonly localOrigin?: string | null;

@@ -220,6 +220,9 @@ describe('IntegrationTestsView', () => {
         itemIds: [],
         target: 'local',
         bail: false,
+        iterations: 1,
+        delayMs: 0,
+        useRuntime: true,
       }),
     );
     expect(await view.findByText(/Aguardando o devkit runner/)).toBeTruthy();

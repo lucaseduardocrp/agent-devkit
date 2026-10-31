@@ -73,6 +73,17 @@ const contract: PbiPushContract = {
       status: 'empty',
       allowCustom: true,
     },
+    {
+      key: 'descriptionFormat',
+      label: 'Description format',
+      required: true,
+      options: [
+        { value: 'html', label: 'HTML', detail: 'default editor' },
+        { value: 'markdown', label: 'Markdown' },
+      ],
+      value: 'html',
+      status: 'resolved',
+    },
     // A field the backend sent without a value is treated as empty.
     {
       key: 'extra',
@@ -146,6 +157,12 @@ describe('PbiPushDialog field templates', () => {
     ).toBe('');
     fireEvent.change(area, { target: { value: 'proj\\Web' } });
     expect(area).toHaveAttribute('aria-invalid', 'false');
+    const format = within(dialog).getByRole('combobox', { name: /Formato da descrição/ });
+    expect(
+      within(format).getByRole('option', { name: 'Padrão (editor HTML)' }),
+    ).toBeInTheDocument();
+    expect(within(format).getByRole('option', { name: 'Markdown' })).toBeInTheDocument();
+    fireEvent.change(format, { target: { value: 'markdown' } });
 
     const editor = await within(dialog).findByRole('region', { name: 'Mapeamento de campos' });
     await waitFor(() =>
@@ -177,7 +194,12 @@ describe('PbiPushDialog field templates', () => {
     expect(onSubmit).toHaveBeenCalledWith(
       item,
       'azure_devops',
-      { workItemType: 'Bug', areaPath: 'proj\\Web', extra: undefined },
+      {
+        workItemType: 'Bug',
+        areaPath: 'proj\\Web',
+        descriptionFormat: 'markdown',
+        extra: undefined,
+      },
       'tpl-1',
     );
   });

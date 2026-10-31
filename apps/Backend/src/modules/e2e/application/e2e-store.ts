@@ -79,6 +79,8 @@ export type E2eTestChanges = Partial<
     E2eTestCase,
     | 'steps'
     | 'scriptPath'
+    | 'beforeRunInstructions'
+    | 'afterRunInstructions'
     | 'externalCase'
     | 'stepResults'
     | 'status'
@@ -130,6 +132,8 @@ export function buildTestCases(
     steps: [...item.steps],
     priority: item.priority,
     scriptPath: item.scriptPath ?? null,
+    beforeRunInstructions: null,
+    afterRunInstructions: null,
     externalCase: item.externalCase ?? null,
     stepResults: [],
     status: 'pending',

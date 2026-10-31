@@ -13,6 +13,8 @@ const test: E2eTestSummary = {
   description: 'Validar permissões.',
   steps: ['Abrir grupos'],
   priority: 'high',
+  beforeRunInstructions: null,
+  afterRunInstructions: null,
   scriptPath: 'tests/e2e/tc001.spec.ts',
   status: 'passed',
   error: null,

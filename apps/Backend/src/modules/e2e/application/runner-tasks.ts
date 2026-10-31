@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { E2eMode } from '../domain/e2e-mode.js';
 import type { AccessServiceToken } from './access-routing.js';
-import type { E2eCredentials, E2eRunnerErrorCode } from './e2e-runner.js';
+import type { E2eCredentials, E2eRunHooks, E2eRunnerErrorCode } from './e2e-runner.js';
 
 /**
  * Browser work a worker delegates to a user's local runner (`devkit runner`).
@@ -42,6 +42,8 @@ export type E2eRunnerTaskInput =
   | {
       readonly kind: 'run';
       readonly script: string;
+      /** Before Run and After Run of the test; runners older than them ignore the field. */
+      readonly hooks: E2eRunHooks | null;
       readonly mode: E2eMode;
       readonly baseUrl: string;
       readonly locale: string;

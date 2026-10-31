@@ -14,6 +14,8 @@ import type {
   SourceType,
   Variable,
 } from './api-test-types.js';
+import { secretRef } from './api-test-types.js';
+import { PersonalBadge, PersonalHint } from './integration/PersonalSecretField.js';
 import { VariableInput } from './VariableInput.js';
 
 const STATUS_VARIANT: Record<
@@ -116,62 +118,97 @@ export function KeyValueEditor({
   );
 }
 
-/** Variables with a "secret" switch; secret values are write-only (the API never returns them). */
+/**
+ * Variables with a "secret" switch. Secrets are personal: each member keeps their own value, the
+ * API never returns it (`hasValue` says whether the current user has set one).
+ */
 export function VariablesEditor({
   variables,
   onChange,
   readOnly,
+  personalSecrets,
+  onClearPersonal,
 }: {
   readonly variables: readonly Variable[];
   readonly onChange: (variables: Variable[]) => void;
   readonly readOnly?: boolean;
+  /** Refs (`var:<key>`) of the secrets the current user has set. */
+  readonly personalSecrets?: readonly string[];
+  /** Forgets the current user's value of a secret (`ref` is `secretRef.variable(key)`). */
+  readonly onClearPersonal?: (ref: string) => void;
 }): React.JSX.Element {
   const { t } = useI18n();
   const update = (index: number, patch: Partial<Variable>) =>
     onChange(variables.map((row, position) => (position === index ? { ...row, ...patch } : row)));
+  const hasSecrets = variables.some((variable) => variable.secret);
   return (
     <div className="flex flex-col gap-2">
-      {variables.map((variable, index) => (
-        <div key={index} className="flex items-center gap-2">
-          <Input
-            className="font-mono"
-            aria-label={t('apiTests.key')}
-            value={variable.key}
-            placeholder={t('apiTests.key')}
-            disabled={readOnly}
-            onChange={(event) => update(index, { key: event.target.value })}
-          />
-          <Input
-            aria-label={variable.key || t('apiTests.value')}
-            type={variable.secret ? 'password' : 'text'}
-            value={variable.value}
-            placeholder={
-              variable.secret && variable.hasValue ? t('apiTests.secretKept') : t('apiTests.value')
-            }
-            disabled={readOnly}
-            onChange={(event) => update(index, { value: event.target.value })}
-          />
-          <label className="flex shrink-0 items-center gap-1 text-xs text-[var(--text-secondary)]">
-            <input
-              type="checkbox"
-              checked={Boolean(variable.secret)}
+      {hasSecrets && <PersonalHint />}
+      {variables.map((variable, index) => {
+        const ref = secretRef.variable(variable.key);
+        const personal = Boolean(
+          variable.secret && (variable.hasValue || personalSecrets?.includes(ref)),
+        );
+        return (
+          <div key={index} className="flex items-center gap-2" data-testid="variable-row">
+            <Input
+              className="font-mono"
+              aria-label={t('apiTests.key')}
+              value={variable.key}
+              placeholder={t('apiTests.key')}
               disabled={readOnly}
-              onChange={(event) => update(index, { secret: event.target.checked })}
+              onChange={(event) => update(index, { key: event.target.value })}
             />
-            {t('apiTests.secret')}
-          </label>
-          {!readOnly && (
-            <IconButton
-              variant="ghost"
-              icon={
-                <i className="ti ti-trash text-sm text-[var(--text-danger)]" aria-hidden="true" />
+            <Input
+              aria-label={variable.key || t('apiTests.value')}
+              type={variable.secret ? 'password' : 'text'}
+              value={variable.value}
+              placeholder={
+                personal && !variable.value
+                  ? t('apiTests.workbench.personalPlaceholder')
+                  : variable.secret
+                    ? t('apiTests.workbench.secretValuePlaceholder')
+                    : t('apiTests.value')
               }
-              label={t('apiTests.remove')}
-              onClick={() => onChange(variables.filter((_, position) => position !== index))}
+              disabled={readOnly}
+              onChange={(event) => update(index, { value: event.target.value })}
             />
-          )}
-        </div>
-      ))}
+            {personal && <PersonalBadge />}
+            {personal && onClearPersonal && !readOnly && (
+              <IconButton
+                variant="ghost"
+                icon={<i className="ti ti-eraser text-sm" aria-hidden="true" />}
+                label={t('apiTests.workbench.clearMyValueOf', { name: variable.key })}
+                title={t('apiTests.workbench.clearMyValue')}
+                onClick={() => onClearPersonal(ref)}
+                data-testid="clear-personal"
+              />
+            )}
+            <label
+              className="flex shrink-0 items-center gap-1 text-xs text-[var(--text-secondary)]"
+              title={t('apiTests.workbench.secretToggleHint')}
+            >
+              <input
+                type="checkbox"
+                checked={Boolean(variable.secret)}
+                disabled={readOnly}
+                onChange={(event) => update(index, { secret: event.target.checked })}
+              />
+              {t('apiTests.secret')}
+            </label>
+            {!readOnly && (
+              <IconButton
+                variant="ghost"
+                icon={
+                  <i className="ti ti-trash text-sm text-[var(--text-danger)]" aria-hidden="true" />
+                }
+                label={t('apiTests.remove')}
+                onClick={() => onChange(variables.filter((_, position) => position !== index))}
+              />
+            )}
+          </div>
+        );
+      })}
       {!readOnly && (
         <Button
           variant="ghost"
@@ -182,6 +219,11 @@ export function VariablesEditor({
           <i className="ti ti-plus mr-1" aria-hidden="true" />
           {t('apiTests.addVariable')}
         </Button>
+      )}
+      {!readOnly && !hasSecrets && (
+        <p className="text-[11px] text-[var(--text-muted)]">
+          {t('apiTests.workbench.secretToggleHint')}
+        </p>
       )}
     </div>
   );

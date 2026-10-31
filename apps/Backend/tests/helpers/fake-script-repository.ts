@@ -58,6 +58,20 @@ export class FakeScriptRepository implements E2eScriptRepository {
     return Promise.resolve();
   }
 
+  commitFiles(
+    _workspaceId: string,
+    ref: E2eRepositoryRef,
+    changes: readonly { path: string; content: string | null }[],
+    message: string,
+  ) {
+    for (const change of changes) {
+      if (change.content === null) this.files.delete(this.key(ref, change.path));
+      else this.files.set(this.key(ref, change.path), change.content);
+      this.commits.push({ path: change.path, message, branch: ref.branch });
+    }
+    return Promise.resolve(`https://example.test/${ref.name}/commit/${this.commits.length}`);
+  }
+
   fileUrl(_workspaceId: string, ref: E2eRepositoryRef, path: string) {
     return Promise.resolve(`https://example.test/${ref.name}/blob/${ref.branch}/${path}`);
   }

@@ -31,7 +31,7 @@ import { createE2eWorkerApp } from '../adapters/http/e2e-worker-app.js';
 import { PrismaApiTestStore } from '../modules/apitests/adapters/prisma-api-test-store.js';
 import { ApiTestService } from '../modules/apitests/application/api-test-service.js';
 import { ApiTestWorker } from '../modules/apitests/application/api-test-worker.js';
-import { hostAliasFromEnv } from '../shared/host-access.js';
+import { chromiumHostArgs, hostAccessFetch, hostAliasFromEnv } from '../shared/host-access.js';
 
 /**
  * On-demand E2E worker. Shares the API's database (queue, runs, videos) and integrations,
@@ -77,7 +77,10 @@ const worker = new E2eWorker({
     store,
     artifacts,
     scripts: new GitScriptRepository(integrations),
-    runner: new PlaywrightE2eRunner({ hostAlias }),
+    runner: new PlaywrightE2eRunner({
+      browserArgs: chromiumHostArgs(hostAlias),
+      ...(hostAlias ? { fetcher: hostAccessFetch(hostAlias) } : {}),
+    }),
     // Runs set to execute locally wait here while the user's `devkit runner` drives the browser.
     localRunner: new LocalE2eRunner({
       tasks: new PrismaE2eRunnerTaskStore(database.client),

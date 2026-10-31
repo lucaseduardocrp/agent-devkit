@@ -27,6 +27,8 @@ function deferred<T>() {
 
 const test: Dto = {
   id: 't1',
+  beforeRunInstructions: '',
+  afterRunInstructions: '',
   creationId: 'c1',
   position: 1,
   code: 'TC001',

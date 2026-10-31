@@ -92,7 +92,7 @@ describe('Permission groups in settings', () => {
     fireEvent.click(view.getByTestId('settings-section-groups'));
     const panel = await view.findByTestId('permission-groups-panel');
     expect(await within(panel).findByText('Editores')).toBeInTheDocument();
-    expect(within(panel).getByText(/PBIs: Excluir · Brain: Criar\/Editar/)).toBeInTheDocument();
+    expect(within(panel).getByText(/PBIs: Excluir · Cérebro: Criar\/Editar/)).toBeInTheDocument();
 
     fireEvent.click(within(panel).getByRole('button', { name: 'Novo grupo' }));
     const form = within(panel).getByRole('form', { name: 'Novo grupo' });

@@ -549,7 +549,7 @@ describe('Azure DevOps provider', () => {
       expect(calls[0]!.method).toBe('POST');
       expect(calls[0]!.body).toEqual([
         { op: 'add', path: '/fields/System.Title', value: 'T' },
-        { op: 'add', path: '/fields/System.Description', value: 'D' },
+        { op: 'add', path: '/fields/System.Description', value: '<p>D</p>' },
         { op: 'add', path: '/fields/System.IterationPath', value: 'P\\Sprint 1' },
         { op: 'add', path: '/fields/System.AreaPath', value: 'P' },
         { op: 'add', path: '/fields/System.AssignedTo', value: 'ann@example.test' },

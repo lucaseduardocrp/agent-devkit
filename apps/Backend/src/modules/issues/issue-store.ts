@@ -167,7 +167,7 @@ export class PrismaIssueStore implements IssueStore {
   constructor(private readonly db: PrismaClient) {}
   async list(workspaceId: string): Promise<Issue[]> {
     const rows = await this.db.issueRecord.findMany({
-      where: { workspaceId },
+      where: { workspaceId, deletedAt: null },
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map((row) => {
@@ -177,7 +177,7 @@ export class PrismaIssueStore implements IssueStore {
   }
   async get(workspaceId: string, issueId: string): Promise<Issue | null> {
     const row = await this.db.issueRecord.findFirst({
-      where: { id: issueId, workspaceId },
+      where: { id: issueId, workspaceId, deletedAt: null },
     });
     if (!row) return null;
     const issue = row as unknown as Issue;
@@ -215,7 +215,7 @@ export class PrismaIssueStore implements IssueStore {
   }
   async update(workspaceId: string, issueId: string, changes: IssueChanges): Promise<Issue | null> {
     const result = await this.db.issueRecord.updateMany({
-      where: { id: issueId, workspaceId },
+      where: { id: issueId, workspaceId, deletedAt: null },
       data: {
         ...changes,
         attachments: changes.attachments as unknown as Prisma.InputJsonValue | undefined,
@@ -224,7 +224,12 @@ export class PrismaIssueStore implements IssueStore {
     return result.count ? this.get(workspaceId, issueId) : null;
   }
   async remove(workspaceId: string, issueId: string): Promise<boolean> {
-    const result = await this.db.issueRecord.deleteMany({ where: { id: issueId, workspaceId } });
+    const where = { id: issueId, workspaceId, deletedAt: null };
+    // Runs cascade with their issue, so an issue with runs is hidden instead of deleted to keep
+    // its execution and cost history.
+    const result = (await this.db.agentRunRecord.count({ where: { issueId } }))
+      ? await this.db.issueRecord.updateMany({ where, data: { deletedAt: new Date() } })
+      : await this.db.issueRecord.deleteMany({ where });
     return result.count > 0;
   }
   async comments(issueId: string): Promise<IssueComment[]> {
@@ -243,7 +248,9 @@ export class PrismaIssueStore implements IssueStore {
     });
   }
   async inboxStates(workspaceId: string, userId: string): Promise<InboxState[]> {
-    return this.db.issueInboxRecord.findMany({ where: { userId, issue: { workspaceId } } });
+    return this.db.issueInboxRecord.findMany({
+      where: { userId, issue: { workspaceId, deletedAt: null } },
+    });
   }
   async setInboxState(
     issueId: string,

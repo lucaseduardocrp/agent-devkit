@@ -527,6 +527,119 @@ test('TC001 - Health', async ({ request }) => {
     ]);
   }, 120_000);
 
+  it('runs Before Run and After Run around the test, without step evidence and even on failure', async () => {
+    const records = new Set<string>();
+    const log: string[] = [];
+    const store = http.createServer((request, response) => {
+      const name = decodeURIComponent((request.url ?? '').replace(/^\/records\/?/, ''));
+      log.push(`${request.method} ${name}`);
+      if (request.method === 'PUT') records.add(name);
+      if (request.method === 'DELETE') records.delete(name);
+      const found = request.method !== 'GET' || records.has(name);
+      response.writeHead(found ? 200 : 404).end();
+    });
+    await new Promise<void>((resolve) => store.listen(0, '127.0.0.1', resolve));
+    const storeUrl = `http://127.0.0.1:${(store.address() as AddressInfo).port}`;
+    const hooks = {
+      beforeRun: `import { expect, type APIRequestContext } from '@playwright/test';
+export default async function beforeRun({ request }: { request: APIRequestContext }) {
+  await test.step('Create the record', async () => {
+    expect((await request.put('/records/E2E TC001')).ok()).toBeTruthy();
+  });
+}
+import { test } from '@playwright/test';`,
+      afterRun: `import type { APIRequestContext } from '@playwright/test';
+export default async function afterRun({ request }: { request: APIRequestContext }) {
+  await request.delete('/records/E2E TC001');
+}`,
+    };
+    const spec = (expected: number) => `import { test, expect } from '@playwright/test';
+test('TC001 - Uses the record', async ({ request }) => {
+  await test.step('Step 1 - Read the record', async () => {
+    expect((await request.get('/records/E2E TC001')).status()).toBe(${expected});
+  });
+});`;
+    try {
+      const passing = await runner.run({
+        mode: 'backend',
+        baseUrl: storeUrl,
+        locale: 'en-US',
+        credentials: { username: null, password: null },
+        script: spec(200),
+        hooks,
+      });
+      expect(passing.status, passing.error ?? undefined).toBe('passed');
+      // Only the test's own step is evidence; the record was created first and removed after.
+      expect(passing.steps.map((step) => step.title)).toEqual(['Step 1 - Read the record']);
+      expect(log).toEqual(['PUT E2E TC001', 'GET E2E TC001', 'DELETE E2E TC001']);
+      expect(records.size).toBe(0);
+
+      log.length = 0;
+      const failing = await runner.run({
+        mode: 'backend',
+        baseUrl: storeUrl,
+        locale: 'en-US',
+        credentials: { username: null, password: null },
+        script: spec(201),
+        hooks,
+      });
+      expect(failing.status).toBe('failed');
+      expect(log.at(-1)).toBe('DELETE E2E TC001');
+      expect(records.size).toBe(0);
+
+      log.length = 0;
+      const brokenSetup = await runner.run({
+        mode: 'backend',
+        baseUrl: storeUrl,
+        locale: 'en-US',
+        credentials: { username: null, password: null },
+        script: spec(200),
+        hooks: {
+          ...hooks,
+          beforeRun: `export default async function beforeRun() {
+  throw new Error('no employee');
+}`,
+        },
+      });
+      expect(brokenSetup.status).toBe('failed');
+      expect(brokenSetup.error).toContain('Before Run: no employee');
+      // The test itself never ran, but the cleanup still did.
+      expect(log).toEqual(['DELETE E2E TC001']);
+    } finally {
+      await new Promise((resolve) => store.close(resolve));
+    }
+  }, 180_000);
+
+  it('gives UI hooks the page and keeps the step screenshots to the test', async () => {
+    const result = await runner.run({
+      mode: 'frontend',
+      baseUrl,
+      locale: 'pt-BR',
+      credentials: { username: null, password: null },
+      script: `import { test, expect } from '@playwright/test';
+test('TC001 - Pergunta preparada', async ({ page }) => {
+  await test.step('Passo 1 - Ver a pergunta', async () => {
+    await expect(page.getByRole('listitem')).toHaveText('E2E TC001');
+  });
+});`,
+      hooks: {
+        beforeRun: `import { type Page } from '@playwright/test';
+export default async function beforeRun({ page }: { page: Page }) {
+  await page.goto('/');
+  await page.getByPlaceholder('Qual a sua pergunta?').fill('E2E TC001');
+  await page.getByTestId('send').click();
+}`,
+        afterRun: null,
+      },
+    });
+    expect(result.status, result.error ?? undefined).toBe('passed');
+    expect(result.steps).toEqual([
+      expect.objectContaining({ position: 1, title: 'Passo 1 - Ver a pergunta' }),
+    ]);
+    expect(result.steps[0]?.screenshot).toBeInstanceOf(Uint8Array);
+    expect(result.video?.length).toBeGreaterThan(0);
+  }, 120_000);
+
   it('reports syntax errors as failures', async () => {
     const result = await runner.run({
       mode: 'backend',

@@ -51,10 +51,10 @@ export interface KnowledgeRelation {
 
 export interface KnowledgeSynchronizationResult {
   readonly chunksCount: number;
-  readonly archived: readonly {
+  /** Provider pages that no longer exist remotely; they are dropped, never moved to the app. */
+  readonly removed: readonly {
     readonly pageId: string;
-    readonly oldSource: string;
-    readonly newSource: string;
+    readonly source: string;
   }[];
 }
 
@@ -226,21 +226,6 @@ export function chunkPage(page: KnowledgePage, chunkSize = 500): KnowledgeChunk[
   return chunks;
 }
 
-function archivedPageSource(page: Pick<KnowledgePage, 'id' | 'source'>, content: string): string {
-  const headingTitle = content.match(/^#\s+([^\r\n]+)/)?.[1]?.trim();
-  let sourceTitle: string | undefined;
-  try {
-    const source = new URL(page.source);
-    const pagePath = source.searchParams.get('pagePath');
-    sourceTitle = pagePath?.split('/').filter(Boolean).at(-1);
-    sourceTitle = sourceTitle ? decodeURIComponent(sourceTitle) : undefined;
-  } catch {
-    // Non-URL providers fall back to the stable page ID.
-  }
-  const title = headingTitle || sourceTitle || page.id;
-  return `app://local?title=${encodeURIComponent(title)}`;
-}
-
 function isCanonicalPageSource(source: string): boolean {
   try {
     const url = new URL(source);
@@ -257,7 +242,7 @@ export async function synchronizeKnowledge(
 ): Promise<KnowledgeSynchronizationResult> {
   const pages = await provider.listPages(context);
   const stored = await repository.all(context);
-  const archived: KnowledgeSynchronizationResult['archived'][number][] = [];
+  const removed: KnowledgeSynchronizationResult['removed'][number][] = [];
   if (provider.ownsSource) {
     const remoteKeys = new Set(pages.map((page) => `${page.source}:${page.id}`));
     const remoteIds = new Set(pages.map((page) => page.id));
@@ -281,32 +266,8 @@ export async function synchronizeKnowledge(
         (isCanonicalPageSource(storedPage.source) && canonicalRemoteSources.has(storedPage.source))
       )
         continue;
-      const orderedChunks = [...storedChunks].sort(
-        (left, right) => left.chunkIndex - right.chunkIndex,
-      );
-      const content = orderedChunks.map((chunk) => chunk.content).join('');
-      const previous = orderedChunks[0]!;
-      const archivedPage: KnowledgePage = {
-        id: previous.pageId,
-        source: archivedPageSource({ id: previous.pageId, source: previous.source }, content),
-        content,
-        updatedAt: previous.createdAt,
-      };
-      await repository.movePages(
-        [
-          {
-            previous: { id: previous.pageId, source: previous.source },
-            page: archivedPage,
-            chunks: chunkPage(archivedPage),
-          },
-        ],
-        context,
-      );
-      archived.push({
-        pageId: previous.pageId,
-        oldSource: previous.source,
-        newSource: archivedPage.source,
-      });
+      await repository.deletePage({ id: storedPage.pageId, source: storedPage.source }, context);
+      removed.push({ pageId: storedPage.pageId, source: storedPage.source });
     }
   }
   let chunkCount = 0;
@@ -329,5 +290,5 @@ export async function synchronizeKnowledge(
     }
     chunkCount += chunks.length;
   }
-  return { chunksCount: chunkCount, archived };
+  return { chunksCount: chunkCount, removed };
 }

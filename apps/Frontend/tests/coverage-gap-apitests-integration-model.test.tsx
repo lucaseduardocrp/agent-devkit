@@ -12,8 +12,8 @@ import {
   prettyBody,
   sameUrl,
   statusLine,
-  toCurl,
 } from '../src/features/apitests/integration/integration-model.js';
+import { generateCode } from '../src/features/apitests/integration/code-generation.js';
 import { VariableInput } from '../src/features/apitests/VariableInput.js';
 import { VariablesContext } from '../src/features/apitests/variables-context.js';
 import type { ApiClient } from '../src/lib/api-client.js';
@@ -34,6 +34,11 @@ const request = {
   captures: [],
   pathParams: [{ key: 'id', value: '7' }],
 } as unknown as Extract<ApiItem, { type: 'request' }>;
+
+const toCurl = (
+  request: Parameters<typeof generateCode>[1],
+  collection: Parameters<typeof generateCode>[2],
+) => generateCode('curl', request, collection);
 
 describe('integration-model formatting and tree helpers', () => {
   it('describes statuses, durations and bodies', () => {
