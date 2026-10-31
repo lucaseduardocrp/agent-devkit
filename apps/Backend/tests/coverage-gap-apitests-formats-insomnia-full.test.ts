@@ -109,6 +109,7 @@ describe('importInsomnia reads the fields Insomnia leaves out', () => {
       ).graphql;
 
     expect(graphql('{ a }')).toEqual({ query: '{ a }' });
+    expect(graphql('')).toEqual({ query: '' });
     expect(graphql(JSON.stringify({ query: '{ a }', variables: {}, operationName: 'Q' }))).toEqual({
       query: '{ a }',
       operationName: 'Q',
@@ -210,7 +211,7 @@ describe('exportInsomnia writes the fields an auth may leave out', () => {
             ],
           },
         }),
-        request({ id: 'bin', name: 'Bin', method: 'POST', body: { mode: 'binary' } }),
+        request({ id: 'bin', name: 'Bin', method: 'POST', body: { mode: 'binary', file: null } }),
       ]),
     );
     const form = resources.find((resource) => resource['name'] === 'Form');

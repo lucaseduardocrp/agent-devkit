@@ -1,3 +1,5 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { executeRun } from '../src/modules/apitests/engine/run-executor.js';
 import type {
@@ -83,6 +85,30 @@ describe('describing a gRPC request through a run', () => {
     );
   });
 
+  it('reports a guard rejection as the error text', async () => {
+    // No protoFile: the request asks the server itself (reflection), so describing it connects
+    // and the guard runs before anything is sent.
+    const outcome = await executeRun(
+      {
+        kind: 'integration',
+        collection: grpcCollection({ method: 'demo.v1.Greeter/Say', message: '{}' }),
+        environment: [],
+        itemIds: ['r'],
+        bail: false,
+        mode: 'grpc-reflect',
+      },
+      {
+        report: async () => 'running' as const,
+        heartbeatMs: 60_000,
+        guard: () => Promise.reject('blocked by policy'),
+      },
+    );
+    expect(outcome.status).toBe('failed');
+    expect(
+      outcome.result && 'results' in outcome.result ? outcome.result.results[0]?.error : undefined,
+    ).toBe('blocked by policy');
+  });
+
   it('reports a selection with no request at all as an error', async () => {
     const outcome = await executeRun(
       {
@@ -149,5 +175,57 @@ describe('the options a run carries through', () => {
       heartbeatMs: 1,
     });
     expect(['passed', 'failed', 'error']).toContain(outcome.status);
+  });
+
+  it('counts a skipped request in the heartbeat progress', async () => {
+    let slow: http.Server | undefined;
+    const slowPort = await new Promise<number>((resolve) => {
+      slow = http.createServer((_request, response) => {
+        setTimeout(() => {
+          response.writeHead(200);
+          response.end();
+        }, 100);
+      });
+      slow.listen(0, '127.0.0.1', () => resolve((slow!.address() as AddressInfo).port));
+    });
+    try {
+      const reports: unknown[] = [];
+      const outcome = await executeRun(
+        {
+          kind: 'integration',
+          collection: {
+            name: 'Skip',
+            variables: [],
+            auth: { type: 'none' },
+            items: [
+              request({
+                id: 'skipped',
+                url: server.url,
+                scripts: { preRequest: 'adk.runner.skipRequest();' },
+              }),
+              request({ id: 'slow', url: `http://127.0.0.1:${slowPort}/` }),
+            ],
+          },
+          environment: [],
+          itemIds: ['skipped', 'slow'],
+          bail: false,
+        },
+        {
+          report: async (partial) => {
+            reports.push(partial);
+            return 'running' as const;
+          },
+          heartbeatMs: 10,
+        },
+      );
+      expect(outcome.status).toBe('passed');
+      const withSkip = reports.find(
+        (partial): partial is { skipped?: number } =>
+          Boolean(partial) && typeof partial === 'object' && 'skipped' in (partial as object),
+      );
+      expect(withSkip).toMatchObject({ skipped: 1 });
+    } finally {
+      await new Promise<void>((resolve) => slow?.close(() => resolve()));
+    }
   });
 });

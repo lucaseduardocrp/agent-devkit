@@ -116,7 +116,7 @@ describe('bodies sent for each editor mode', () => {
     await send({ body: { mode: 'binary', file: { fileName: 'b.png', contentType: 'image/png', data: 'aGk=' } } });
     expect(server.seen.at(-1)?.headers['content-type']).toBe('image/png');
 
-    await send({ body: { mode: 'binary' } });
+    await send({ body: { mode: 'binary', file: null } });
     expect(server.seen.at(-1)?.body).toBe('');
   });
 
@@ -249,7 +249,7 @@ describe('repeated response headers and masked timelines', () => {
             { id: 'a2', source: 'header', path: 'x-many', operator: 'eq', expected: 'one, two' },
             { id: 'a3', source: 'header', path: '', operator: 'notExists' },
           ],
-          captures: [{ id: 'c1', source: 'header', path: 'set-cookie', variable: 'cookies' }],
+          captures: [{ source: 'header', path: 'set-cookie', variable: 'cookies' }],
         }),
         vars({}),
         { auth: { type: 'none' }, timeoutMs: 5_000, keepResponse: true },
@@ -412,7 +412,15 @@ describe('the last branches of a request run', () => {
           auth: { type: 'none' },
           timeoutMs: 5_000,
           keepResponse: true,
-          settings: { proxy: { enabled: false, url: 'http://proxy.test', password: '{{secret}}' } },
+          settings: {
+            proxy: {
+              enabled: false,
+              protocol: 'http',
+              hostname: 'proxy.test',
+              port: 8080,
+              password: '{{secret}}',
+            },
+          },
         },
       );
       expect(result.timeline?.request.bodyPreview).not.toContain('proxy-password');

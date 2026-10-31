@@ -2,10 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   describeGrpc,
   runCollectionWithState,
-  type ScriptHost,
   type ScriptRunner,
 } from '../src/modules/apitests/engine/collection-runner.js';
-import type { ScriptInput, ScriptOutput } from '../src/modules/apitests/engine/script-sandbox.js';
+import type {
+  ScriptHost,
+  ScriptInput,
+  ScriptOutput,
+} from '../src/modules/apitests/engine/script-sandbox.js';
 import type { ApiRequestSpec, CollectionSpec } from '../src/modules/apitests/engine/types.js';
 import {
   GREETER_PROTO,
@@ -87,20 +90,27 @@ describe('describeGrpc', () => {
   it('carries the request auth and the merged metadata into a reflection call', async () => {
     const server = await grpcServer();
     try {
-      const target = collection({ method: 'demo.v1.Greeter/Say', message: '{}' });
       const spec: CollectionSpec = {
-        ...target,
+        name: 'Grpc',
+        variables: [{ key: 'tenant', value: 'acme' }],
+        auth: { type: 'none' },
+        protoFiles: [{ name: 'demo.proto', content: GREETER_PROTO }],
         items: [
           {
-            ...target.items[0],
+            id: 'f',
+            type: 'folder',
+            name: 'Folder',
+            headers: [{ key: 'x-folder', value: 'yes' }],
             items: [
               {
-                ...(target.items[0] as { items: ApiRequestSpec[] }).items[0],
-                url: server.url,
+                ...request({ id: 'r', url: server.url }),
+                kind: 'grpc',
+                headers: [{ key: 'x-tenant', value: '{{tenant}}' }],
+                grpc: { method: 'demo.v1.Greeter/Say', message: '{}' },
                 auth: { type: 'bearer', token: 'tok-{{tenant}}' },
               },
             ],
-          } as CollectionSpec['items'][number],
+          },
         ],
       };
       // The test server answers no reflection service, so the listing comes back empty.

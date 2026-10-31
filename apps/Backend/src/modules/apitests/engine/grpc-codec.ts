@@ -202,6 +202,10 @@ function writeValue(writer: Writer, registry: Registry, field: FieldInfo, value:
 
 function enumNumber(registry: Registry, field: FieldInfo, value: Json): number {
   const info = registry.enum(field.type);
+  // The caller's field loop already skips a field whose value is null, unless the field is
+  // itself typed google.protobuf.Value — never NullValue (the type of Value's own null_value
+  // member) — so this field is never reached with a null value to encode.
+  /* v8 ignore next */
   if (value === null && field.type === `${WKT}NullValue`) return 0;
   if (typeof value === 'number' && Number.isInteger(value)) return value;
   if (typeof value === 'string') {
@@ -396,6 +400,8 @@ function defaultValue(registry: Registry, field: FieldInfo): Json {
     const info = registry.enum(field.type);
     return info.byNumber.get(0) ?? info.values[0]?.name ?? 0;
   }
+  /* v8 ignore next -- a message-kind field always has presence, so this is never the field
+   * `defaultValue` is called for (see the `!field.presence` guard at its call site). */
   if (field.kind === 'message') return null;
   switch (field.type as ScalarType) {
     case 'string':
@@ -435,6 +441,9 @@ function wktToPlain(registry: Registry, typeName: string, value: Json): Json {
       return valueToPlain(value);
     case `${WKT}Any`:
       return anyToPlain(registry, value);
+    // Every caller checks SPECIAL_JSON before calling wktToPlain, and the cases above list
+    // every member of it besides the wrappers, which the `if` above already handles.
+    /* v8 ignore next 2 */
     default:
       return value;
   }
@@ -485,6 +494,9 @@ function wktFromPlain(registry: Registry, typeName: string, plain: JsonObject): 
     }
     case `${WKT}Any`:
       return anyFromPlain(registry, String(plain.typeUrl), String(plain.value));
+    // Every caller checks SPECIAL_JSON before calling wktFromPlain, and the cases above list
+    // every member of it besides the wrappers, which the `if` above already handles.
+    /* v8 ignore next 2 */
     default:
       return plain;
   }

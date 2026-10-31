@@ -131,6 +131,19 @@ export function createDesignRouter(
       }
     },
   );
+  router.delete(
+    '/design/settings',
+    requireAuth,
+    requireModulePermission('design', 'edit'),
+    async (req, res, next) => {
+      try {
+        await service.clearSettings(resolveWorkspaceId(req));
+        res.status(204).send();
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
   router.get('/design/repositories', requireAuth, async (req, res, next) => {
     try {
       res.json(await service.listRepositories(resolveWorkspaceId(req)));

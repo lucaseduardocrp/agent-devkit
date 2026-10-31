@@ -34,6 +34,8 @@ export const isReference = (value: string) => REFERENCE.test(value);
 type Visit = (ref: string, value: string, kind: 'variable' | 'field') => string;
 
 function visitAuth(auth: RequestAuth, owner: string, visit: Visit): RequestAuth {
+  // AUTH_SECRET_FIELDS covers every AuthType, so this is never the fallback.
+  /* v8 ignore next */
   const fields = AUTH_SECRET_FIELDS[auth.type] ?? [];
   if (!fields.length) return auth;
   const next: Record<string, unknown> = { ...auth };

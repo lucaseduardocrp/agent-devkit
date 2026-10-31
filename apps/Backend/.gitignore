@@ -1,5 +1,8 @@
 coverage/
 cov-tmp/
+cov-tmp*/
+cov-final/
+cov-full/
 dist/
 src/generated/prisma/
 

@@ -175,6 +175,11 @@ export class DesignService {
     return (await this.requireSettingsStore().get(workspaceId)) ?? null;
   }
 
+  /** Disconnects the repository Design works in; the workspace chooses another one to resume. */
+  public async clearSettings(workspaceId: string): Promise<void> {
+    await this.requireSettingsStore().clear(workspaceId);
+  }
+
   /** Repositories of every connected provider, so Design can be pointed at any of them. */
   public async listRepositories(workspaceId: string) {
     const browser = this.repositories;

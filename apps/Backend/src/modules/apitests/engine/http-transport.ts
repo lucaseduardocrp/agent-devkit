@@ -441,6 +441,8 @@ async function socks4Handshake(
   );
   const reply = await readHandshake(socket, signal, (data) => (data.length >= 8 ? 8 : undefined));
   if (reply[1] !== 0x5a) {
+    // readHandshake only resolves once the reply is 8 bytes, so index 1 is always defined.
+    /* v8 ignore next */
     throw new Error(`The SOCKS4 proxy refused the connection (code ${reply[1] ?? 'unknown'})`);
   }
 }
@@ -498,9 +500,13 @@ async function socks5Handshake(
   const reply = await readHandshake(socket, signal, (data) => {
     if (data.length < 5) return undefined;
     const type = data[3];
+    // data.length >= 5 is checked just above, so index 4 is always defined here.
+    /* v8 ignore next */
     const length = type === 1 ? 4 : type === 4 ? 16 : 1 + (data[4] ?? 0);
     return data.length >= 4 + length + 2 ? 4 + length + 2 : undefined;
   });
+  // The predicate above only resolves once the reply is at least 7 bytes, so index 1 is defined.
+  /* v8 ignore next */
   const code = reply[1] ?? 1;
   if (code !== 0) {
     throw new Error(`The SOCKS5 proxy could not connect: ${SOCKS5_ERRORS[code] ?? `code ${code}`}`);
@@ -517,7 +523,10 @@ function ipv6Bytes(address: string): Buffer {
         })
       : [];
   const halves = address.replace(/%.*$/, '').split('::');
+  // String.split never produces undefined elements, so both of these fallbacks are defensive.
+  /* v8 ignore next */
   const head = groupsOf(halves[0] ?? '');
+  /* v8 ignore next */
   const tail = halves.length > 1 ? groupsOf(halves[1] ?? '') : [];
   const groups =
     halves.length > 1

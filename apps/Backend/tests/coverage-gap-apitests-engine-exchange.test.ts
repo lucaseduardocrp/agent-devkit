@@ -14,6 +14,7 @@ import { scopeOf } from '../src/modules/apitests/engine/variables.js';
 import {
   GREETER_PROTO,
   grpcServer,
+  resettingWebsocketServer,
   socketServer,
   sseServer,
   websocketServer,
@@ -52,20 +53,22 @@ describe('networkOf, senderOf and resolveAuth', () => {
 
   it('resolves the variables of the proxy and of every client certificate', () => {
     const settings: CollectionSettings = {
-      proxy: { enabled: true, url: 'http://{{host}}:8080', password: '{{pass}}' },
+      proxy: { enabled: true, protocol: 'http', hostname: '{{host}}', port: 8080, password: '{{pass}}' },
       tls: { verify: false },
-      clientCertificates: [{ host: 'api.test', certificate: '{{cert}}', key: 'KEY' }],
+      clientCertificates: [{ domain: 'api.test', type: 'pem', cert: '{{cert}}', key: 'KEY' }],
     };
     const network = networkOf(settings, scope, {}, new AbortController().signal);
-    expect(network.proxy).toMatchObject({ url: 'http://proxy.test:8080', password: 'proxy-pass' });
+    expect(network.proxy).toMatchObject({ hostname: 'proxy.test', password: 'proxy-pass' });
     expect(network.tls).toEqual({ verify: false });
-    expect(network.clientCertificates?.[0]).toMatchObject({ certificate: 'CERT-BODY', key: 'KEY' });
+    expect(network.clientCertificates?.[0]).toMatchObject({ cert: 'CERT-BODY', key: 'KEY' });
     expect(network.connectHost).toBeUndefined();
     expect(network.guard).toBeUndefined();
   });
 
   it('keeps a disabled proxy and an empty certificate list out of the options', () => {
-    const settings: CollectionSettings = { proxy: { enabled: false, url: 'http://{{host}}' } };
+    const settings: CollectionSettings = {
+      proxy: { enabled: false, protocol: 'http', hostname: '{{host}}', port: 8080 },
+    };
     const connectHost = (hostname: string) => hostname;
     const guard = async () => {};
     const network = networkOf(
@@ -85,10 +88,10 @@ describe('networkOf, senderOf and resolveAuth', () => {
     const node = senderOf({});
     expect(senderOf({ preferFetch: true })).not.toBe(node);
     for (const settings of [
-      { proxy: { enabled: true, url: 'http://proxy.test' } },
+      { proxy: { enabled: true, protocol: 'http', hostname: 'proxy.test', port: 8080 } },
       { tls: { verify: false } },
       { tls: { caCertificate: 'CA' } },
-      { clientCertificates: [{ host: 'api.test', certificate: 'C', key: 'K' }] },
+      { clientCertificates: [{ domain: 'api.test', type: 'pem', cert: 'C', key: 'K' }] },
     ] satisfies CollectionSettings[]) {
       expect(senderOf({ preferFetch: true, settings })).toBe(node);
     }
@@ -132,8 +135,8 @@ describe('websocket requests', () => {
           { id: 'a3', source: 'json', path: '0.hello', operator: 'eq', expected: 'ana' },
         ],
         captures: [
-          { id: 'c1', source: 'json', path: '0.hello', variable: 'greeted' },
-          { id: 'c2', source: 'status', variable: '' },
+          { source: 'json', path: '0.hello', variable: 'greeted' },
+          { source: 'status', variable: '' },
         ],
       }),
       scope,
@@ -174,6 +177,24 @@ describe('websocket requests', () => {
     );
     expect(result.passed).toBe(false);
     expect(result.error).toBeTruthy();
+  });
+
+  it('cleans up when the connection resets after a successful handshake', async () => {
+    const resetting = await resettingWebsocketServer();
+    try {
+      const result = await run(
+        request({
+          id: 'ws-reset',
+          kind: 'websocket',
+          url: resetting.url,
+          websocket: { messages: [], listenMs: 300 },
+        }),
+      );
+      // The handshake completed (101) before the reset arrived; the session still settles.
+      expect(result.status).toBe(101);
+    } finally {
+      await resetting.close();
+    }
   });
 });
 

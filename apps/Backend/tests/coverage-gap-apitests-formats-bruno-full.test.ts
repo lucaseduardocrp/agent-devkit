@@ -70,7 +70,7 @@ const FILLED: RequestAuth[] = [
     clientToken: 'ct',
     clientSecret: 'cs',
     headersToSign: 'x-a',
-    maxBodySize: '2048',
+    maxBodySize: 2048,
   },
 ];
 
@@ -232,7 +232,7 @@ describe('exportBruno writes every auth, kind and setting', () => {
           method: 'POST',
           body: { mode: 'binary', file: { fileName: 'b.bin', contentType: '', data: '' } },
         }),
-        request({ name: 'Binary none', method: 'POST', body: { mode: 'binary' } }),
+        request({ name: 'Binary none', method: 'POST', body: { mode: 'binary', file: null } }),
       ]),
     );
     const bodies = fileOf(files, 'All/Bodies.bru');
@@ -272,7 +272,7 @@ describe('exportBruno writes every auth, kind and setting', () => {
           },
           clientCertificates: [
             { domain: 'a.test', type: 'pfx', pfx: '', passphrase: '' },
-            { domain: 'b.test', type: 'cert', certificate: '', key: '' },
+            { domain: 'b.test', type: 'pem', cert: '', key: '' },
           ],
           presets: { kind: 'graphql', baseUrl: 'https://api.test' },
         },

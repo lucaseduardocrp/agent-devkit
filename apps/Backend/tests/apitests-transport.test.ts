@@ -837,10 +837,18 @@ describe('proxies', () => {
     await expect(
       openSocket({ host: '::ffff:10.0.0.1', port: 80, tls: false }, via('socks5', socks5)),
     ).rejects.toThrow('host unreachable');
-    expect(log.slice(-3)).toEqual([
+    // Fully expanded, with no "::" compression at all.
+    await expect(
+      openSocket(
+        { host: '2001:0db8:0000:0000:0000:0000:0000:0001', port: 80, tls: false },
+        via('socks5', socks5),
+      ),
+    ).rejects.toThrow('host unreachable');
+    expect(log.slice(-4)).toEqual([
       `socks5 ${'0'.repeat(31)}1:80`,
       'socks5 20010db8000000000000000000010002:80',
       'socks5 00000000000000000000ffff0a000001:80',
+      'socks5 20010db8000000000000000000000001:80',
     ]);
     await expect(
       openSocket({ host: 'odd.test', port: 80, tls: false }, via('socks5', socks5)),

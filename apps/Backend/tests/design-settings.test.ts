@@ -105,6 +105,31 @@ describe('design settings', () => {
     expect(saved.body.settings.branch).toBe('main');
   });
 
+  it('clears the settings so the workspace can connect another repository', async () => {
+    const { app, settings } = setup();
+    await request(app)
+      .put('/design/settings')
+      .send({ provider: 'github', repositoryId: '42', branch: 'main' })
+      .expect(200);
+    expect(await settings.get('ws-1')).not.toBeNull();
+    await request(app).delete('/design/settings').expect(204);
+    expect(await settings.get('ws-1')).toBeNull();
+    expect((await request(app).get('/design/settings')).body.settings).toBeNull();
+  });
+
+  it('refuses to clear settings when the ADK has no settings store configured', async () => {
+    const store = { configuredProviders: vi.fn().mockResolvedValue([]) } as unknown as DesignRemoteStore;
+    const app = express();
+    app.use(express.json());
+    app.use(
+      createDesignRouter(new DesignService(store, {} as AgentService, undefined, browser()), context),
+    );
+    app.use(errorMiddleware);
+    const response = await request(app).delete('/design/settings');
+    expect(response.status).toBe(503);
+    expect(JSON.stringify(response.body)).toContain('DESIGN_SETTINGS_UNAVAILABLE');
+  });
+
   it('rejects a repository or branch the workspace cannot reach', async () => {
     const { app } = setup();
     const missingRepository = await request(app)
@@ -128,5 +153,47 @@ describe('design settings', () => {
       (await request(app).get('/design/repositories/branches?provider=github&repositoryId=42')).body
         .branches,
     ).toEqual([]);
+  });
+
+  it('refuses to read or write settings when the ADK has no settings store configured', async () => {
+    const store = { configuredProviders: vi.fn().mockResolvedValue([]) } as unknown as DesignRemoteStore;
+    const app = express();
+    app.use(express.json());
+    app.use(
+      createDesignRouter(new DesignService(store, {} as AgentService, undefined, browser()), context),
+    );
+    app.use(errorMiddleware);
+
+    const read = await request(app).get('/design/settings');
+    expect(read.status).toBe(503);
+    expect(JSON.stringify(read.body)).toContain('DESIGN_SETTINGS_UNAVAILABLE');
+
+    const write = await request(app)
+      .put('/design/settings')
+      .send({ provider: 'github', repositoryId: '42', branch: 'main' });
+    expect(write.status).toBe(503);
+    expect(JSON.stringify(write.body)).toContain('DESIGN_SETTINGS_UNAVAILABLE');
+  });
+
+  it('forwards a repository listing failure as an error response', async () => {
+    const failing: DesignRepositoryBrowser = {
+      listRepositories: vi.fn().mockRejectedValue(new Error('provider unreachable')),
+      listBranches: vi.fn(),
+    };
+    const { app } = setup(failing);
+    const response = await request(app).get('/design/repositories');
+    expect(response.status).toBe(500);
+  });
+
+  it('forwards a branch listing failure as an error response', async () => {
+    const failing: DesignRepositoryBrowser = {
+      listRepositories: vi.fn(),
+      listBranches: vi.fn().mockRejectedValue(new Error('provider unreachable')),
+    };
+    const { app } = setup(failing);
+    const response = await request(app).get(
+      '/design/repositories/branches?provider=github&repositoryId=42',
+    );
+    expect(response.status).toBe(500);
   });
 });

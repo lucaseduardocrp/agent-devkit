@@ -488,6 +488,14 @@ describe('sseExchange', () => {
         setTimeout(() => res.socket?.destroy(), 30);
         return;
       }
+      if (req.url === '/huge') {
+        res.writeHead(200, { 'content-type': 'application/octet-stream' });
+        const chunk = 'x'.repeat(1024 * 1024);
+        res.write(chunk);
+        res.write(chunk);
+        res.end(chunk);
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
       res.write(': hello\n\nevent: tick\ndata: 1\n\n');
       res.write('data: line 1\ndata: line 2\n\n');
@@ -534,8 +542,15 @@ describe('sseExchange', () => {
       'last',
       'Stream ended by the server',
     ]);
+    // Already stopped by maxEvents before the stream ends: no "ended" message is added.
+    const stoppedBeforeEnd = await sseExchange(sse('/end', { listenMs: 2000, maxEvents: 1 }), local);
+    expect(stoppedBeforeEnd.messages.map((message) => message.data)).toEqual(['1']);
     const down = await sseExchange(sse('/down', { listenMs: 2000 }), local);
     expect(down.error).toBe('The connection closed before the response ended');
+    // Already stopped by maxEvents when the connection drops: the drop is not reported.
+    const stoppedFirst = await sseExchange(sse('/down', { listenMs: 2000, maxEvents: 1 }), local);
+    expect(stoppedFirst.error).toBeUndefined();
+    expect(stoppedFirst.messages.map((message) => message.data)).toEqual(['one']);
   });
 
   it('records a response that is not an event stream as one message', async () => {
@@ -554,6 +569,9 @@ describe('sseExchange', () => {
       { direction: 'received', type: 'text', data: '{"accept":"application/json","body":"POST"}' },
     ]);
     expect(result.sizeBytes).toBe(result.messages[0]!.data.length);
+    const huge = await sseExchange(sse('/huge', { listenMs: 5000 }), local);
+    expect(huge.sizeBytes).toBe(3 * 1024 * 1024);
+    expect(huge.messages[0]?.data.length).toBe(2 * 1024 * 1024);
     const untyped = await sseExchange(sse('/untyped'), local);
     expect(untyped.messages).toMatchObject([{ type: 'text', data: 'data: not announced\n\n' }]);
   });

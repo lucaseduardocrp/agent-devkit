@@ -89,7 +89,7 @@ export async function websocketServer(): Promise<TestServer> {
         '',
       ].join('\r\n'),
     );
-    let pending = Buffer.alloc(0);
+    let pending: Buffer = Buffer.alloc(0);
     socket.on('data', (chunk: Buffer) => {
       const { frames, rest } = clientFrames(Buffer.concat([pending, chunk]));
       pending = rest;
@@ -159,6 +159,35 @@ export async function echoServer(
   });
   const port = await listening(server);
   return { url: `http://127.0.0.1:${port}/`, port, seen, close: () => close(server) };
+}
+
+/**
+ * A WebSocket server that completes the handshake and then resets the connection (a TCP RST),
+ * so the client's socket reports an 'error' instead of a clean close.
+ */
+export async function resettingWebsocketServer(): Promise<TestServer> {
+  const server = http.createServer();
+  server.on('upgrade', (request, socket: Duplex) => {
+    socket.on('error', () => {});
+    const key = String(request.headers['sec-websocket-key']);
+    const accept = createHash('sha1')
+      .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest('base64');
+    socket.write(
+      [
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${accept}`,
+        '',
+        '',
+      ].join('\r\n'),
+    );
+    // Give the client a moment to parse the 101 reply and start listening before the reset.
+    setTimeout(() => (socket as net.Socket & { resetAndDestroy(): void }).resetAndDestroy(), 50);
+  });
+  const port = await listening(server);
+  return { url: `ws://127.0.0.1:${port}/`, port, close: () => close(server) };
 }
 
 /** An OAuth2 token endpoint answering every request with the same access token. */

@@ -412,6 +412,74 @@ export default async function afterRun({ request }: { request: APIRequestContext
     );
   });
 
+  it('asks the author to fix a hook its own security checks reject, once', async () => {
+    const fixed = `export default async function beforeRun() {}`;
+    const writeHook = vi
+      .fn()
+      .mockImplementation(({ kind, previous }: { kind: string; previous?: unknown }) => {
+        if (kind !== 'beforeRun') return Promise.resolve(null);
+        return Promise.resolve(previous ? fixed : 'not a hook at all');
+      });
+    const { service, scripts } = setup({ writeHook });
+    const created = await service.create(context, input);
+    await service.idle();
+    const forTc001 = (call: unknown[]) => {
+      const [request] = call as [{ kind: string; test: { code: string } }];
+      return request.kind === 'beforeRun' && request.test.code === 'TC001';
+    };
+    expect(writeHook.mock.calls.filter(forTc001).length).toBe(2);
+    const retry = writeHook.mock.calls.find((call) => call[0].previous)?.[0] as {
+      previous: { script: string; problem: string };
+    };
+    expect(retry.previous).toMatchObject({ script: 'not a hook at all' });
+    expect(retry.previous.problem).toContain('hook must export default async function');
+    expect(scripts.commits[0]).toMatchObject({ path: 'tests/e2e/tc001-submit-question.before.ts' });
+    const [first] = (await service.get('ws', created.id)).tests;
+    expect(first?.status).not.toBe('error');
+    expect(await service.getScript('ws', first!.id, 'beforeRun')).toMatchObject({ content: fixed });
+  });
+
+  it('rejects the test when the retried hook is still unsafe', async () => {
+    const writeHook = vi
+      .fn()
+      .mockImplementation(({ kind }: { kind: string }) =>
+        Promise.resolve(kind === 'beforeRun' ? 'still not a hook' : null),
+      );
+    const { service, scripts } = setup({ writeHook });
+    const created = await service.create(context, input);
+    await service.idle();
+    const forTc001 = (call: unknown[]) => {
+      const [request] = call as [{ kind: string; test: { code: string } }];
+      return request.kind === 'beforeRun' && request.test.code === 'TC001';
+    };
+    expect(writeHook.mock.calls.filter(forTc001).length).toBe(2);
+    expect(scripts.commits.some((commit) => commit.path.endsWith('.before.ts'))).toBe(false);
+    const [first] = (await service.get('ws', created.id)).tests;
+    expect(first?.status).toBe('error');
+    expect(first?.error).toContain('Before Run: hook must export default async function');
+  });
+
+  it('keeps no hook when the author gives up and answers nothing on the retry', async () => {
+    const writeHook = vi
+      .fn()
+      .mockImplementation(({ kind, previous }: { kind: string; previous?: unknown }) => {
+        if (kind !== 'beforeRun') return Promise.resolve(null);
+        return Promise.resolve(previous ? null : 'not a hook at all');
+      });
+    const { service, scripts, runner } = setup({ writeHook });
+    const created = await service.create(context, input);
+    await service.idle();
+    const forTc001 = (call: unknown[]) => {
+      const [request] = call as [{ kind: string; test: { code: string } }];
+      return request.kind === 'beforeRun' && request.test.code === 'TC001';
+    };
+    expect(writeHook.mock.calls.filter(forTc001).length).toBe(2);
+    expect(scripts.commits.some((commit) => commit.path.endsWith('.before.ts'))).toBe(false);
+    const [first] = (await service.get('ws', created.id)).tests;
+    expect(first?.status).not.toBe('error');
+    expect(runner.run.mock.calls[0]?.[0].hooks).toEqual({ beforeRun: null, afterRun: null });
+  });
+
   it('blocks unsafe hooks committed to the repository', async () => {
     const { service, scripts, runner } = setup();
     const created = await service.create(context, input);
@@ -764,6 +832,34 @@ export default async function afterRun({ request }: { request: APIRequestContext
     await service.idle();
     expect((await service.get('ws', created.id)).tests).toHaveLength(1);
     errorLog.mockRestore();
+  });
+
+  it('saves a host plan with Before Run and After Run, and rejects an unsafe one', async () => {
+    const { service, scripts } = setup();
+    const created = await service.create(context, { ...input, planning: 'host' });
+    await service.idle();
+    const login = { title: 'Valid login', description: 'd', priority: 'high', steps: ['a'] } as const;
+    await expect(
+      service.savePlan('ws', created.id, {
+        tests: [{ ...login, script: VALID, beforeRun: 'not a hook at all' }],
+      }),
+    ).rejects.toMatchObject({ code: 'E2E_SCRIPT_REJECTED', technicalMessage: /Before Run: / });
+
+    await service.savePlan('ws', created.id, {
+      tests: [
+        {
+          ...login,
+          script: VALID,
+          beforeRun: 'export default async function beforeRun() {}',
+          afterRun: 'export default async function afterRun() {}',
+        },
+      ],
+    });
+    expect(scripts.commits.map((commit) => commit.path)).toEqual([
+      'tests/e2e/tc001-valid-login.spec.ts',
+      'tests/e2e/tc001-valid-login.before.ts',
+      'tests/e2e/tc001-valid-login.after.ts',
+    ]);
   });
 
   it('recaptures the application for the host brief when asked or when it changes', async () => {

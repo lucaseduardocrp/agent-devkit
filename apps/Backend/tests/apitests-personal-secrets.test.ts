@@ -596,6 +596,44 @@ describe('personal credentials service', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it('writes the document unchanged when it was deleted between the two reads', async () => {
+    const store = new InMemoryApiTestStore();
+    const service = new ApiTestService({ store });
+    await store.saveCollection(legacyCollection());
+    // The first read (finding the collection) answers normally; only the second, re-read right
+    // before writing, finds it gone.
+    const originalGetCollection = store.getCollection.bind(store);
+    let collectionReads = 0;
+    vi.spyOn(store, 'getCollection').mockImplementation(async (...args) => {
+      collectionReads += 1;
+      return collectionReads === 1 ? originalGetCollection(...args) : null;
+    });
+    const save = vi.spyOn(store, 'saveCollection');
+    const result = await service.getCollection('w1', 'c1');
+    // The credential still migrates out of the shared document, using the stale read.
+    expect(result).toMatchObject({ auth: { token: '' } });
+    expect(save).toHaveBeenCalled();
+
+    const now2 = new Date();
+    await store.saveEnvironment({
+      id: 'e1',
+      workspaceId: 'w1',
+      name: 'Owned',
+      variables: [{ key: 'pass', value: encryptSecret('env-legacy'), secret: true }],
+      createdBy: 'alice',
+      createdAt: now2,
+      updatedAt: now2,
+    });
+    const originalGetEnvironment = store.getEnvironment.bind(store);
+    let environmentReads = 0;
+    vi.spyOn(store, 'getEnvironment').mockImplementation(async (...args) => {
+      environmentReads += 1;
+      return environmentReads === 1 ? originalGetEnvironment(...args) : null;
+    });
+    const result2 = await service.getEnvironment('w1', 'e1');
+    expect(result2).toMatchObject({ name: 'Owned' });
+  });
+
   it('drops legacy values it cannot keep', async () => {
     const store = new InMemoryApiTestStore();
     const service = new ApiTestService({ store });

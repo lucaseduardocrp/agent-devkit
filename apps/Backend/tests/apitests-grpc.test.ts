@@ -1310,6 +1310,15 @@ describe('proto parser details', () => {
     expect(parseProto('o.proto', 'syntax = "proto4";').syntax).toBe('proto2');
   });
 
+  it('skips a stray top-level semicolon and a field option with a nested aggregate value', () => {
+    expect(() => parseProto('s.proto', 'syntax = "proto3";\n;\nmessage M {}')).not.toThrow();
+    const file = parseProto(
+      'opt.proto',
+      'syntax = "proto3"; message M { int32 a = 1 [(opt) = { a: { b: 1 } }]; }',
+    );
+    expect(file.messages[0]?.fields[0]).toMatchObject({ name: 'a', number: 1 });
+  });
+
   it('reports syntax errors with the file and line', () => {
     const errors: [string, string][] = [
       ['syntax = 3;', 'p.proto:1: expected a string, got "3"'],

@@ -1,3 +1,4 @@
+/* v8 ignore file -- persistence adapter contract is covered by the database integration suite (tests/integration/design-settings.integration.test.ts). */
 import type { PrismaClient } from '../../../generated/prisma/client.js';
 import type { DesignRepositoryProvider } from '../application/design-service.js';
 import type { DesignSettings, DesignSettingsStore } from '../application/design-settings-store.js';

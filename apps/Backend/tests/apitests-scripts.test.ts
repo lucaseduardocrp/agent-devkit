@@ -882,6 +882,19 @@ describe('ScriptSandbox errors, limits and globals', () => {
     expect(next.logs[0]!.message).toBe('respawned');
   });
 
+  it('queues concurrent runs and still times each one out on its own child', async () => {
+    const box = sandbox({ timeoutMs: 300 });
+    // Runs are queued one after the other, so each timed-out script gets its own fresh child.
+    const [first, second] = await Promise.all([
+      box.run(script('while (true) {}')),
+      box.run(script('while (true) {}')),
+    ]);
+    expect(first.error).toBe('request tests: Script timed out after 300 ms');
+    expect(second.error).toBe('request tests: Script timed out after 300 ms');
+    const next = await box.run(script("console.log('respawned')"));
+    expect(next.logs[0]!.message).toBe('respawned');
+  });
+
   it('stops a script that exhausts its memory', async () => {
     const box = sandbox({ memoryMb: 32, timeoutMs: 30_000 });
     const output = await box.run(
@@ -1159,6 +1172,31 @@ describe('ScriptSandbox against a broken or hostile child', () => {
     expect((await sandbox().run(script(''))).error).toBe(
       'request tests: Script process exited unexpectedly',
     );
+  });
+
+  it('drops a sendRequest reply for a child that already exited', async () => {
+    override.args = fakeChild(`process.on('message', (m) => {
+      if (m.source) { process.send({ type: 'ready', isolated: true }); return; }
+      if (m.type !== 'run') return;
+      process.send({ type: 'send', id: m.id, requestId: 1, request: { method: 'GET', url: 'https://a.test' } });
+      process.exit(1);
+    });`);
+    let settled = false;
+    const slowHost: ScriptHost = {
+      sendRequest: () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            settled = true;
+            resolve({ status: 200, statusText: 'OK', headers: {}, body: '', durationMs: 1 });
+          }, 100);
+        }),
+    };
+    const box = sandbox({ host: slowHost });
+    const output = await box.run(script(''));
+    expect(output.error).toBe('request tests: Script process exited unexpectedly');
+    // The run already settled via the child's exit; the detached relay finishes afterward.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(settled).toBe(true);
   });
 
   it('gives up on a child that never becomes ready', async () => {

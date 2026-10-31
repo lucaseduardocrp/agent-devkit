@@ -129,6 +129,7 @@ function oauth2From(value: Json, field: (name: string) => string): RequestAuth {
   };
 }
 
+/* v8 ignore next -- splitting a string always yields at least one part */
 const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 function bodyFrom(value: unknown): RequestBody {
@@ -277,6 +278,9 @@ export function importInsomnia(document: Json): CollectionInput {
 
 function authTo(auth: RequestAuth | undefined): Json {
   switch (auth?.type) {
+    // Every caller passes a folder's own auth only when it is set, or the ancestor auth
+    // otherwise (ultimately the collection's, which is required) — never `undefined` itself.
+    /* v8 ignore next */
     case undefined:
     case 'inherit':
       return {};

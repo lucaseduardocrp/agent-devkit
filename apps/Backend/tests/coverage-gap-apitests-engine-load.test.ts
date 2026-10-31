@@ -166,6 +166,34 @@ describe('runLoad edges', () => {
   });
 });
 
+describe('runLoad plumbing options', () => {
+  it('passes connectHost, the collection settings and inherited headers to every request', async () => {
+    const seen: (readonly [string, string])[][] = [];
+    const fetch = vi.fn(async (input: Request) => {
+      seen.push([...input.headers].map(([key, value]) => [key, value] as const));
+      return new Response('ok', { status: 200 });
+    });
+    const connectHost = vi.fn((host: string) => host);
+    const summary = await runLoad(
+      plan({
+        settings: { timeoutMs: 5_000 },
+        requests: [
+          {
+            request: request('a'),
+            auth: { type: 'none' },
+            weight: 1,
+            inheritedHeaders: [{ key: 'x-inherited', value: 'yes' }],
+          },
+        ],
+        stages: [{ durationSec: 0.05, targetVus: 1 }],
+      }),
+      { fetch: fetch as unknown as typeof globalThis.fetch, connectHost, tickMs: 10, controlMs: 5 },
+    );
+    expect(summary.totalRequests).toBeGreaterThan(0);
+    expect(seen[0]?.some(([key, value]) => key === 'x-inherited' && value === 'yes')).toBe(true);
+  });
+});
+
 describe('runLoad without think time', () => {
   it('loops straight into the next request and survives a failing tick listener', async () => {
     const fetch = vi.fn(async () => {

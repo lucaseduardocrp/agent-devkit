@@ -77,6 +77,7 @@ describe('importPostman reads the shapes a collection may carry', () => {
       scope: 'read',
     });
     expect(auth([{ key: 'grant_type', value: 'authorization_code' }])).toEqual({ type: 'none' });
+    expect(auth([])).not.toHaveProperty('scope');
   });
 
   it('reads a disabled form field and a body mode it does not know', () => {
@@ -158,7 +159,7 @@ describe('exportPostman writes the files and bodies a request may carry', () => 
             ],
           },
         }),
-        request({ id: 'bin', name: 'Bin', method: 'POST', body: { mode: 'binary' } }),
+        request({ id: 'bin', name: 'Bin', method: 'POST', body: { mode: 'binary', file: null } }),
       ]),
     );
     const body = (name: string) =>

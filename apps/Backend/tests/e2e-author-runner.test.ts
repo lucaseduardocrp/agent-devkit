@@ -204,6 +204,22 @@ describe('AgentE2eAuthor', () => {
     ).toBeNull();
   });
 
+  it('passes the user instructions and a previous attempt to retry', async () => {
+    const hook = 'export default async function afterRun({ page }) {}';
+    const { author: subject, complete } = author(`\`\`\`ts\n${hook}\n\`\`\``);
+    await subject.writeHook({
+      creation,
+      test: { ...testCase, afterRunInstructions: 'Clean up the created event.' } as E2eTestCase,
+      kind: 'afterRun',
+      snapshot: null,
+      previous: { script: 'broken', problem: 'must export default async function' },
+    });
+    const request = complete.mock.calls[0]![0] as { prompt: string; instruction: string };
+    expect(request.prompt).toContain('"userInstructions": "Clean up the created event."');
+    expect(request.prompt).toContain('"previousAttempt": "broken"');
+    expect(request.prompt).toContain('"problemToFix": "must export default async function"');
+  });
+
   it('tells the spec what Before Run and After Run already do', async () => {
     const { author: subject, complete } = author("import { test } from '@playwright/test';");
     await subject.writeScript({
@@ -216,6 +232,16 @@ describe('AgentE2eAuthor', () => {
     expect(request.prompt).toContain('"beforeRunPreparesPreconditions": "prepare()"');
     expect(request.prompt).not.toContain('afterRunCleansUp');
     expect(request.instruction).toContain('do not create them again');
+
+    await subject.writeScript({
+      creation,
+      test: testCase,
+      snapshot: null,
+      hooks: { beforeRun: null, afterRun: 'cleanUp()' },
+    });
+    const second = complete.mock.calls[1]![0] as { prompt: string; instruction: string };
+    expect(second.prompt).toContain('"afterRunCleansUp": "cleanUp()"');
+    expect(second.prompt).not.toContain('beforeRunPreparesPreconditions');
   });
 
   it('analyzes failures and falls back to raw text', async () => {
@@ -235,6 +261,21 @@ describe('AgentE2eAuthor', () => {
       logs: 'l',
     });
     expect(raw).toEqual({ verdict: 'app_bug', summary: 'The app crashed.' });
+  });
+
+  it('tells the analysis what Before Run and After Run already did', async () => {
+    const { author: subject, complete } = author('{"verdict":"app_bug","summary":"x"}');
+    await subject.analyze({
+      creation,
+      test: testCase,
+      script: 's',
+      error: 'e',
+      logs: 'l',
+      hooks: { beforeRun: 'prepare()', afterRun: 'cleanUp()' },
+    });
+    const request = complete.mock.calls[0]![0] as { prompt: string; instruction: string };
+    expect(request.prompt).toContain('"beforeRun": "prepare()"');
+    expect(request.prompt).toContain('"afterRun": "cleanUp()"');
   });
 
   it('uses the default LLM or reports missing providers and LLM errors', async () => {

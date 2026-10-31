@@ -60,6 +60,8 @@ describe('CookieJar', () => {
       'bad=1; Expires=not-a-date',
       'relative=1; Path=nonsense',
       'blank=1; SameSite=',
+      'badage=1; Max-Age=notanumber',
+      'nodomain=1; Domain=',
     ]);
     const byName = new Map(jar.all().map((cookie) => [cookie.name, cookie]));
     expect(byName.get('keep')?.sameSite).toBe('Lax');
@@ -68,6 +70,10 @@ describe('CookieJar', () => {
     // A Path that is not absolute is dropped, so the cookie keeps the request's directory.
     expect(byName.get('relative')?.path).toBe('/deep');
     expect(byName.get('blank')?.sameSite).toBeUndefined();
+    // An invalid Max-Age is ignored, so the cookie keeps no expiry at all (a session cookie).
+    expect(byName.get('badage')?.expires).toBeUndefined();
+    // An empty Domain attribute is dropped: the cookie stays host-only for the request's host.
+    expect(byName.get('nodomain')).toMatchObject({ domain: 'a.test', hostOnly: true });
   });
 
   it('falls back to the root for a URL with no path at all', () => {
