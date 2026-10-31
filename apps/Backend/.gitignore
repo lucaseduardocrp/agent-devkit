@@ -1,4 +1,5 @@
 coverage/
+cov-tmp/
 dist/
 src/generated/prisma/
 
