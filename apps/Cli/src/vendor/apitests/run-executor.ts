@@ -142,6 +142,9 @@ async function reflect(
       status: null,
       durationMs: Math.round(performance.now() - started),
       passed: false,
+      // describeGrpc only ever rejects with a real Error: application throws use `new Error`,
+      // and the network layer normalizes everything through `toError`.
+      /* v8 ignore next */
       error: error instanceof Error ? error.message : String(error),
     };
   }

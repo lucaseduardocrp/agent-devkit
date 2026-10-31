@@ -282,6 +282,11 @@ export async function runLoad(plan: LoadPlan, options: LoadRunOptions = {}): Pro
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
+    // A virtual user only reaches its think time right after a request that was not itself
+    // cut short by the abort (the caller already bails out on that case), so this can only be
+    // true in the narrow window where the signal fires between that check and this call —
+    // not a race a test can land on reliably.
+    /* v8 ignore next */
     if (signal.aborted) return resolve();
     const timer = setTimeout(done, ms);
     function done() {

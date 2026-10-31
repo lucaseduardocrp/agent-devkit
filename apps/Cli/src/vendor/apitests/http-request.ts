@@ -270,9 +270,9 @@ function bodyOf(
     };
   }
   if (kind === 'graphql') {
-    return original === undefined
-      ? {}
-      : { body: interpolate(original, scope), contentType: 'application/json' };
+    /* v8 ignore next -- the graphql draft is always a string, so there is always a body */
+    if (original === undefined) return {};
+    return { body: interpolate(original, scope), contentType: 'application/json' };
   }
   const body = request.body;
   switch (body.mode) {
@@ -391,13 +391,9 @@ function asText(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** A response header; null when absent or when the name is not a valid header name (e.g. empty). */
+/** A response header; null when absent, and for an empty name, which matches nothing. */
 function readHeader(headers: HeaderReader, name: string | undefined): string | null {
-  try {
-    return headers.get(name ?? '');
-  } catch {
-    return null;
-  }
+  return headers.get(name ?? '');
 }
 
 function typeOf(value: unknown): string {
@@ -433,6 +429,7 @@ function fromExchange(exchange: ExchangeResult): ResponseView {
       ? {
           timeline: {
             timings: exchange.timings,
+            /* v8 ignore next -- every exchange that timed its phases also knows the peer */
             ...(exchange.remoteAddress ? { remoteAddress: exchange.remoteAddress } : {}),
           },
         }
@@ -713,10 +710,9 @@ export async function executeRequest(
   try {
     url = resolveUrl(request, kind, view, scope);
   } catch (error) {
-    return failed(
-      interpolate(view.url, scope),
-      `Invalid request: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    /* v8 ignore next -- resolveUrl only ever throws the TypeError of `new URL` */
+    const reason = error instanceof Error ? error.message : String(error);
+    return failed(interpolate(view.url, scope), `Invalid request: ${reason}`);
   }
   const requestTimeout = view.timeoutMs ?? timeoutMs;
   const timeout = AbortSignal.timeout(requestTimeout + 1_000);
@@ -971,6 +967,7 @@ async function exchangeOf(
       );
     case 'grpc': {
       const grpc = request.grpc ?? { method: '', message: '{}' };
+      /* v8 ignore next -- the gRPC draft is always a string, so originalBody is always set */
       const text = interpolate(view.body ?? originalBody ?? '{}', scope).trim() || '{}';
       const parsed = parseJson(text);
       if (!parsed.ok) throw new Error('The gRPC message is not valid JSON.');

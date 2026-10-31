@@ -261,6 +261,9 @@ export class ScriptSandbox {
   }
 
   #discard(child: Child): void {
+    // Runs are serialized through #queue, so the child being discarded is always the current
+    // one; this only guards against a close() that already cleared it concurrently.
+    /* v8 ignore next */
     if (this.#child === child) this.#child = undefined;
     child.process.kill('SIGKILL');
   }

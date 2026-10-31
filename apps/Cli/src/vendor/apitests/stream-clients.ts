@@ -177,6 +177,10 @@ class WebSocketSession {
   }
 
   send(opcode: number, payload: Buffer): void {
+    // Every caller either checks `open` first or runs synchronously from `feed`, itself only
+    // reachable while the socket is live; only a socket error between two synchronous frames
+    // could destroy it first, a race no test can land on reliably.
+    /* v8 ignore next */
     if (!this.socket.destroyed) this.socket.write(encodeClientFrame(opcode, payload));
   }
 

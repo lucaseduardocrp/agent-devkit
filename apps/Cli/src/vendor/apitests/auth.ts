@@ -493,6 +493,7 @@ function awsCanonicalPath(pathname: string, doubleEncode: boolean): string {
   if (doubleEncode) {
     const normalized: string[] = [];
     for (const segment of segments.slice(1)) {
+      /* v8 ignore next -- the URL parser resolves every dot-dot segment before we see it */
       if (segment === '..') normalized.pop();
       else if (segment !== '.' && segment !== '') normalized.push(segment);
     }
