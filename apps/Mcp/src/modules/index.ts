@@ -98,6 +98,8 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Repository and branch of the Design module, chosen by a person in the Design settings of the web app; the design tools work in whatever it points to.',
   'PUT /design/settings':
     'Repository and branch of the Design module, chosen by a person in the Design settings of the web app; the design tools work in whatever it points to.',
+  'DELETE /design/settings':
+    'Disconnects the repository of the Design module, chosen by a person in the Design settings of the web app, same as the two routes above.',
   'GET /design/repositories':
     'Repository picker of the Design settings in the web app; e2e_list_repositories lists the same repositories.',
   'GET /design/repositories/branches':
