@@ -88,6 +88,7 @@ describe('integration-model helpers', () => {
     expect(itemMatches(tree[1]!, 'folder')).toBe(true);
     expect(itemMatches(tree[1]!, 'api.test/c')).toBe(true);
     expect(itemMatches(tree[1]!, 'nothing')).toBe(false);
+    expect(itemMatches(tree[1]!, '')).toBe(true);
   });
 
   it('remembers the layout and survives blocked storage', () => {
@@ -175,8 +176,13 @@ describe('variableSuggestions', () => {
       },
       { variables: [{ key: 'baseUrl', value: 'env' }] },
       [{ name: '$x', group: 'ids', sample: '' }],
+      [
+        { key: 'token', value: 'rt' },
+        { key: 'off', value: '', enabled: false },
+      ],
     );
     expect(list).toEqual([
+      { name: 'token', source: 'runtime', value: 'rt', secret: undefined },
       { name: 'baseUrl', source: 'environment', value: 'env', secret: undefined },
       { name: 'only', source: 'collection', value: '1', secret: true },
       { name: '$x', source: 'dynamic' },
@@ -443,6 +449,15 @@ describe('EnvironmentsPane', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir' }));
     await waitFor(() => expect(api.deleteApiEnvironment).toHaveBeenCalledWith('e2'));
     expect(onActivate).toHaveBeenCalledTimes(1);
+
+    // Nothing selected by the time the confirm fires (e.g. the selection reset meanwhile):
+    // the deletion is skipped instead of deleting the wrong environment.
+    fireEvent.click(view.getByRole('button', { name: 'Staging' }));
+    fireEvent.click(view.getByRole('button', { name: /Excluir/ }));
+    const reopened = await view.findByRole('alertdialog');
+    fireEvent.click(view.getByTestId('new-environment'));
+    fireEvent.click(within(reopened).getByRole('button', { name: 'Excluir' }));
+    expect(api.deleteApiEnvironment).toHaveBeenCalledTimes(1);
   });
 
   it('deactivates the active environment it deletes and shows errors', async () => {

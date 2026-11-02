@@ -96,20 +96,32 @@ describe('inheritance', () => {
         type: 'folder',
         name: 'Admin',
         auth: { type: 'basic', username: 'a', password: 'b' },
-        items: [{ id: 'f2', type: 'folder', name: 'Inner', auth: { type: 'inherit' }, items: [] }],
+        items: [
+          { id: 'r0', type: 'request', name: 'Not a folder' } as ApiCollection['items'][number],
+          { id: 'f2', type: 'folder', name: 'Inner', auth: { type: 'inherit' }, items: [] },
+        ],
       },
-      { id: 'f3', type: 'folder', name: 'Open', items: [] },
+      {
+        id: 'f3',
+        type: 'folder',
+        name: 'Open',
+        items: [{ id: 'r1', type: 'request', name: 'Unauthed' } as ApiCollection['items'][number]],
+      },
     ],
   };
 
   it('finds the folders of an item and the auth it inherits', () => {
     expect(folderPath(collection.items, 'f2')?.map((folder) => folder.name)).toEqual(['Admin']);
     expect(folderPath(collection.items, 'missing')).toBeNull();
+    // r0 sits before f2 in Admin's items: the search skips past a plain request to find it.
+    expect(folderPath(collection.items, 'r0')?.map((folder) => folder.name)).toEqual(['Admin']);
     expect(inheritedAuth(collection, 'f2')).toEqual({
       from: 'Admin',
       auth: { type: 'basic', username: 'a', password: 'b' },
     });
     expect(inheritedAuth(collection, 'f3').from).toBe('Orders');
     expect(inheritedAuth(collection, 'missing').from).toBe('Orders');
+    // Open (f3) sets no auth at all, unlike Inner's explicit "inherit": both fall through.
+    expect(inheritedAuth(collection, 'r1').from).toBe('Orders');
   });
 });

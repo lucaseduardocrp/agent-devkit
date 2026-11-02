@@ -250,6 +250,8 @@ describe('GraphQL schema', () => {
     expect(at('{ a: "open |')).toBeNull();
     expect(at('{ ) @ | }')).toBe('Query');
     expect(at('{ a: "x\\"y" | }')).toBe('Query');
+    // A brace with nothing identifying it (not a field, a type or an operation) stays unresolved.
+    expect(at('{ user { { | } } }')).toBeNull();
   });
 
   it('completes the fields of the type at the caret', () => {

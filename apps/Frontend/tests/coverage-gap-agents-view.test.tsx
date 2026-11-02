@@ -341,6 +341,17 @@ describe('AgentsView workflow editor', () => {
     expect(view.getByTestId('tab-workflow').className).not.toContain('font-semibold');
     expect(await view.findByTestId('hub-panel')).toBeInTheDocument();
   });
+
+  it('starts on the section the navigation set, and follows it when it changes', () => {
+    const view = render(
+      <AgentsView apiClient={client} activeWorkspaceId="ws-1" section="workflow" />,
+    );
+    // No section given: the own tab bar is hidden, the sidebar drives navigation instead.
+    expect(view.queryByTestId('tab-catalog')).not.toBeInTheDocument();
+    expect(view.getByTestId('workflow-panel')).toBeInTheDocument();
+    view.rerender(<AgentsView apiClient={client} activeWorkspaceId="ws-1" section="agents" />);
+    expect(view.queryByTestId('workflow-panel')).not.toBeInTheDocument();
+  });
 });
 
 describe('AgentsView catalog extras', () => {

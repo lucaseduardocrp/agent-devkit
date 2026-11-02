@@ -40,6 +40,9 @@ export function RichTextEditor({
     editor.current?.focus();
     if (value === undefined) document.execCommand(command, false);
     else document.execCommand(command, false, value);
+    // The toolbar that calls format() only renders once the editor div (which owns this ref)
+    // is mounted, so editor.current is never null here.
+    /* v8 ignore next */
     if (editor.current) onChange(sanitizeRichText(editorHtml(editor.current)));
   };
 

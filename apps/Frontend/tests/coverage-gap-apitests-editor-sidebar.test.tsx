@@ -131,6 +131,10 @@ describe('CollectionsSidebar', () => {
     menu('Get user', /^Excluir$/);
     expect(spies.onDelete).toHaveBeenLastCalledWith('c1', getUser);
 
+    // An empty collection offers its own inline button, next to the row menu's.
+    fireEvent.click(screen.getByTestId('empty-new-request'));
+    expect(spies.onNewRequest).toHaveBeenLastCalledWith('c3', null);
+
     // Rows open and toggle; the unsaved request is marked.
     fireEvent.click(screen.getByTestId('tree-request-List users'));
     expect(spies.onOpenRequest).toHaveBeenCalledWith('c1', 'r2');

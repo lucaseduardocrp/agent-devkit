@@ -388,7 +388,10 @@ describe('EnvironmentsPane personal secrets', () => {
     const environment: ApiEnvironment = {
       id: 'e1',
       name: 'Staging',
-      variables: [{ key: 'token', value: '', secret: true, hasValue: true }],
+      variables: [
+        { key: 'token', value: '', secret: true, hasValue: true },
+        { key: 'other', value: 'kept' },
+      ],
       personalSecrets: ['var:token'],
     };
     const api = {

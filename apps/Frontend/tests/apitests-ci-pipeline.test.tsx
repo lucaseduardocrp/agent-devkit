@@ -273,6 +273,22 @@ describe('Pipeline tab', () => {
     expect(view.queryByRole('button', { name: 'Remover configuração do pipeline' })).toBeNull();
   });
 
+  it('does not report a publication when saving before it fails', async () => {
+    const api = client();
+    const onSave = vi.fn().mockResolvedValue(false);
+    const view = render(<Harness initial={{ ...base, ci: github }} api={api} onSave={onSave} />);
+    openPipeline(view);
+    fireEvent.click(view.getByRole('button', { name: /Commitar no repositório/ }));
+    fireEvent.click(
+      within(view.getByRole('alertdialog')).getByRole('button', {
+        name: 'Commitar no repositório',
+      }),
+    );
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(api.publishApiCollectionCi).not.toHaveBeenCalled();
+    expect(view.queryByTestId('ci-publication')).toBeNull();
+  });
+
   it('lets members who cannot edit see the settings and preview only', async () => {
     const view = render(<Harness initial={{ ...base, ci: github }} readOnly />);
     openPipeline(view);

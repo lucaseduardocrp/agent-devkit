@@ -58,6 +58,12 @@ export default async function beforeRun() {}`;
     ]);
     expect(hookStepTexts('export default async function afterRun() {}')).toEqual([]);
     expect(hookStepTexts(null)).toEqual([]);
+    // The first comment has no numbered list at all: the search moves on to the next one.
+    expect(
+      hookStepTexts(
+        '/* Just a license header, no steps here. */\n/* 1. Open the page */\nexport default async function beforeRun() {}',
+      ),
+    ).toEqual([{ action: 'Open the page', expectedResult: '' }]);
   });
 });
 
