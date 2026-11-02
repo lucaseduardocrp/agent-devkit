@@ -411,6 +411,9 @@ describe('CollectionSettingsPane', () => {
     // A negative timeout is read as none at all.
     fireEvent.change(timeout, { target: { value: '-5' } });
     expect(last(onChange).settings?.timeoutMs).toBe(0);
+    // A literal zero reads as the number 0, not as "no timeout" (that is an empty field).
+    fireEvent.change(timeout, { target: { value: '0' } });
+    expect(last(onChange).settings?.timeoutMs).toBe(0);
     fireEvent.change(timeout, { target: { value: '' } });
     fireEvent.click(within(network).getByLabelText(/Seguir redirecionamentos/));
     fireEvent.click(view.getByTestId('cookie-jar'));
@@ -448,6 +451,18 @@ describe('CollectionSettingsPane', () => {
     expect((view.getByRole('radio', { name: /Sanduíche/ }) as HTMLInputElement).disabled).toBe(
       true,
     );
+  });
+
+  it('swallows a file-read error when the caller gave no onError', async () => {
+    const view = render(<Harness initial={base} />);
+    tab(view, /Certificados de cliente/);
+    fireEvent.click(view.getByTestId('add-certificate'));
+    const certificate = view.getByTestId('certificate');
+    const [certFile] = within(certificate).getAllByLabelText('Carregar arquivo', {
+      selector: 'input',
+    });
+    fireEvent.change(certFile!, { target: { files: [{} as File] } });
+    await waitFor(() => expect(view.getByTestId('certificate')).toBeInTheDocument());
   });
 });
 

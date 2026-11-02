@@ -449,6 +449,33 @@ describe('RequestPane: GraphQL', () => {
     expect(last(onChange).graphql?.variables).toBe('{\n  "id": 1\n}');
   });
 
+  it('defaults an empty query and variables when the request carries no graphql spec at all', () => {
+    const view = render(<Harness initial={request('graphql', { graphql: undefined })} />);
+    expect((view.getByLabelText('Query') as HTMLTextAreaElement).value).toBe('');
+    openTab(view, /^Variáveis/);
+    expect((view.getByLabelText('Variáveis') as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('refuses to reload the schema once actions are no longer available', async () => {
+    schemaCache.clear();
+    const runAdHoc = vi.fn(() =>
+      Promise.resolve(result({ response: { headers: {}, bodyPreview: JSON.stringify(SCHEMA) } })),
+    );
+    const actions: RequestActions = {
+      runAdHoc,
+      listGrpcServices: () => Promise.reject(new Error('no')),
+    };
+    const spec = request('graphql', { graphql: { query: '{ a }' } });
+    const view = render(<Harness initial={spec} actions={actions} />);
+    fireEvent.click(view.getByTestId('graphql-schema'));
+    await view.findByTestId('graphql-docs');
+    // The explorer stays open with its stale schema when the pane loses its way to re-fetch.
+    view.rerender(<Harness initial={spec} />);
+    runAdHoc.mockClear();
+    fireEvent.click(view.getByRole('button', { name: 'Recarregar schema' }));
+    expect(runAdHoc).not.toHaveBeenCalled();
+  });
+
   it('fetches the schema, opens its docs and completes field names', async () => {
     schemaCache.clear();
     const runAdHoc = vi.fn(() =>
@@ -673,6 +700,33 @@ describe('RequestPane: gRPC', () => {
       />,
     );
     expect(view.getByTestId('grpc-source').textContent).toContain('Todos os arquivos proto');
+  });
+
+  it('does not try to load methods without a way to list them', () => {
+    const view = render(<Harness initial={request('grpc')} />);
+    fireEvent.focus(view.getByTestId('grpc-method-select'));
+    expect(view.queryByRole('alert')).toBeNull();
+  });
+
+  it('reports a non-Error rejection listing methods', async () => {
+    grpcServicesCache.clear();
+    const listGrpcServices = vi.fn().mockRejectedValueOnce('offline');
+    const view = render(
+      <Harness
+        initial={request('grpc')}
+        actions={{ runAdHoc: () => Promise.reject(new Error('no')), listGrpcServices }}
+      />,
+    );
+    fireEvent.focus(view.getByTestId('grpc-method-select'));
+    expect(await view.findByRole('alert')).toHaveTextContent('offline');
+    grpcServicesCache.clear();
+  });
+
+  it('clears the proto file when the chosen name is empty', () => {
+    const onChange = vi.fn();
+    const view = render(<Harness initial={request('grpc')} onChange={onChange} />);
+    fireEvent.change(view.getByTestId('grpc-source'), { target: { value: 'proto:' } });
+    expect(last(onChange).grpc?.protoFile).toBeUndefined();
   });
 });
 
