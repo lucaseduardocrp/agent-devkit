@@ -204,7 +204,7 @@ describe('runLoad without think time', () => {
       throw new Error('listener down');
     });
     const summary = await runLoad(
-      plan({ thinkTimeMs: 0, stages: [{ durationSec: 0.5, targetVus: 1 }] }),
+      plan({ thinkTimeMs: 0, stages: [{ durationSec: 0.05, targetVus: 1 }] }),
       { fetch: fetch as unknown as typeof globalThis.fetch, onTick, tickMs: 10, controlMs: 5 },
     );
     expect(summary.totalRequests).toBeGreaterThan(1);
