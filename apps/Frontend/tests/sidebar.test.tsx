@@ -69,6 +69,16 @@ describe('Sidebar', () => {
     expect(onSelect).toHaveBeenCalledWith('settings');
   });
 
+  it('toggles the Agents nav group open and closed', () => {
+    const { getByTestId } = render(<Sidebar activeTab="brain" onSelectTab={vi.fn()} />);
+    const groupBtn = getByTestId('sidebar-agents-group-button');
+    expect(groupBtn).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(groupBtn);
+    expect(groupBtn).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(groupBtn);
+    expect(groupBtn).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('renders and highlights Agents tab when activeTab is agents', () => {
     const onSelect = vi.fn();
     const { getByTestId } = render(<Sidebar activeTab="agents" onSelectTab={onSelect} />);
