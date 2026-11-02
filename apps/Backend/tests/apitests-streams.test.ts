@@ -488,6 +488,15 @@ describe('sseExchange', () => {
         setTimeout(() => res.socket?.destroy(), 30);
         return;
       }
+      if (req.url === '/end-staggered') {
+        // Each event lands in its own read, so the client sees maxEvents stop it mid-stream
+        // deterministically, instead of racing the parser against events from the same chunk.
+        res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+        res.write(': hello\n\nevent: tick\ndata: 1\n\n');
+        setTimeout(() => res.write('data: line 1\ndata: line 2\n\n'), 20);
+        setTimeout(() => res.end('data: last\n\n'), 40);
+        return;
+      }
       if (req.url === '/huge') {
         res.writeHead(200, { 'content-type': 'application/octet-stream' });
         const chunk = 'x'.repeat(1024 * 1024);
@@ -544,7 +553,7 @@ describe('sseExchange', () => {
     ]);
     // Already stopped by maxEvents before the stream ends: no "ended" message is added.
     const stoppedBeforeEnd = await sseExchange(
-      sse('/end', { listenMs: 2000, maxEvents: 1 }),
+      sse('/end-staggered', { listenMs: 2000, maxEvents: 1 }),
       local,
     );
     expect(stoppedBeforeEnd.messages.map((message) => message.data)).toEqual(['1']);
