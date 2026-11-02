@@ -27,7 +27,10 @@ const collection = (
 
 /** A Postman v2.1 document holding one request. */
 const postman = (item: Record<string, unknown>) => ({
-  info: { name: 'P', schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json' },
+  info: {
+    name: 'P',
+    schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+  },
   item: [item],
 });
 
@@ -163,10 +166,9 @@ describe('exportPostman writes the files and bodies a request may carry', () => 
       ]),
     );
     const body = (name: string) =>
-      (items.find((item) => item['name'] === name)?.['request'] as Record<string, unknown>)['body'] as Record<
-        string,
-        unknown
-      >;
+      (items.find((item) => item['name'] === name)?.['request'] as Record<string, unknown>)[
+        'body'
+      ] as Record<string, unknown>;
     const formdata = body('Form')['formdata'] as Record<string, unknown>[];
     expect(formdata[0]?.['src']).toBe('fallback.txt');
     expect(formdata[1]?.['src']).toBe('b.bin');
@@ -179,7 +181,10 @@ describe('exportPostman writes the files and bodies a request may carry', () => 
         { ...request({ id: 'g', name: 'Gql' }), kind: 'graphql', graphql: { query: '{ a }' } },
       ]),
     );
-    const body = (items[0]?.['request'] as Record<string, unknown>)['body'] as Record<string, unknown>;
+    const body = (items[0]?.['request'] as Record<string, unknown>)['body'] as Record<
+      string,
+      unknown
+    >;
     expect(body['graphql']).toEqual({ query: '{ a }', variables: '' });
   });
 });
@@ -193,7 +198,11 @@ describe('exportK6 writes graphql requests', () => {
           kind: 'graphql',
           graphql: { query: '{ a }', variables: '{"id":1}', operationName: 'Q' },
         },
-        { ...request({ id: 'b', name: 'NoVars' }), kind: 'graphql', graphql: { query: '{ b }', variables: '  ' } },
+        {
+          ...request({ id: 'b', name: 'NoVars' }),
+          kind: 'graphql',
+          graphql: { query: '{ b }', variables: '  ' },
+        },
         { ...request({ id: 'c', name: 'Bare' }), kind: 'graphql' },
       ]),
       {
@@ -216,7 +225,9 @@ describe('exportK6 writes graphql requests', () => {
 
 describe('renaming the script api', () => {
   it('leaves a phase that holds no script alone in both directions', () => {
-    expect(toAdkScripts({ preRequest: 'pm.test("a", () => {});', postResponse: undefined })).toEqual({
+    expect(
+      toAdkScripts({ preRequest: 'pm.test("a", () => {});', postResponse: undefined }),
+    ).toEqual({
       preRequest: 'adk.test("a", () => {});',
       postResponse: undefined,
     });

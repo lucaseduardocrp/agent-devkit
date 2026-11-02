@@ -280,9 +280,7 @@ export class ApiTestService {
     if (!strip(stored).extracted.size) return stored;
     // Re-read right before writing so a concurrent save is not overwritten with old content
     // (a document migrated meanwhile has nothing left to move and is written back unchanged).
-    const fresh =
-      (await this.store.getCollection(stored.workspaceId, stored.id)) ??
-      stored;
+    const fresh = (await this.store.getCollection(stored.workspaceId, stored.id)) ?? stored;
     const { shared, extracted } = strip({ ...fresh, variables: this.openLegacy(fresh.variables) });
     await this.adoptLegacy(
       {
@@ -302,9 +300,7 @@ export class ApiTestService {
    */
   private async migrateEnvironment(stored: ApiEnvironment): Promise<ApiEnvironment> {
     if (!stripVariables(stored.variables).extracted.size) return stored;
-    const fresh =
-      (await this.store.getEnvironment(stored.workspaceId, stored.id)) ??
-      stored;
+    const fresh = (await this.store.getEnvironment(stored.workspaceId, stored.id)) ?? stored;
     const { shared, extracted } = stripVariables(this.openLegacy(fresh.variables));
     if (fresh.createdBy) {
       await this.adoptLegacy(

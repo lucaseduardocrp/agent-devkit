@@ -100,7 +100,13 @@ const BARE: RequestAuth[] = [
 
 describe('exportBruno writes every auth, kind and setting', () => {
   const collection = (items: CollectionInput['items'], extra: Partial<CollectionInput> = {}) =>
-    ({ name: 'All', variables: [], auth: { type: 'none' }, items, ...extra }) satisfies CollectionInput;
+    ({
+      name: 'All',
+      variables: [],
+      auth: { type: 'none' },
+      items,
+      ...extra,
+    }) satisfies CollectionInput;
 
   it('writes each auth with its optional fields and then without them', () => {
     const files = exportBruno(
@@ -184,10 +190,7 @@ describe('exportBruno writes every auth, kind and setting', () => {
           ...request({ name: 'Ws' }),
           kind: 'websocket',
           websocket: {
-            messages: [
-              { name: 'first', content: 'a', type: 'json' },
-              { content: 'b' },
-            ],
+            messages: [{ name: 'first', content: 'a', type: 'json' }, { content: 'b' }],
           },
         },
         { ...request({ name: 'Bare ws' }), kind: 'websocket' },
@@ -236,7 +239,7 @@ describe('exportBruno writes every auth, kind and setting', () => {
       ]),
     );
     const bodies = fileOf(files, 'All/Bodies.bru');
-    expect(bodies).toContain('"a:b": \'\'\'');
+    expect(bodies).toContain("\"a:b\": '''");
     expect(bodies).toContain('@contentType(text/plain)');
     expect(bodies).toContain('f: @file(fallback)');
     expect(bodies).toContain('g: @file(g.bin)');
@@ -322,7 +325,7 @@ describe('parseBru reads the shapes Bruno writes', () => {
         '  ~off: 2',
         '  broken',
         '  "unclosed: 3',
-        '  multi: \'\'\'',
+        "  multi: '''",
         '    one',
         '    two',
         "  ''' @contentType(text/plain)",
@@ -476,9 +479,10 @@ describe('requestFromBru reads every kind', () => {
   });
 
   it('reads a binary body and an unknown mode', () => {
-    expect(
-      requestFromBru('post {\n  url: https://api.test/\n  body: file\n}', 'R').body,
-    ).toEqual({ mode: 'binary', file: null });
+    expect(requestFromBru('post {\n  url: https://api.test/\n  body: file\n}', 'R').body).toEqual({
+      mode: 'binary',
+      file: null,
+    });
     expect(
       requestFromBru('post {\n  url: https://api.test/\n  body: nonsense\n}', 'R').body,
     ).toEqual({ mode: 'none' });
@@ -501,10 +505,7 @@ describe('requestFromBru reads every kind', () => {
       'R',
     );
     expect(withVariables.graphql).toEqual({ query: '{ a }', variables: '{"id":1}' });
-    const bare = requestFromBru(
-      'post {\n  url: https://api.test/\n  body: graphql\n}',
-      'R',
-    );
+    const bare = requestFromBru('post {\n  url: https://api.test/\n  body: graphql\n}', 'R');
     expect(bare.graphql).toEqual({ query: '' });
   });
 
@@ -545,16 +546,16 @@ describe('requestFromBru reads every kind', () => {
       tokenPlacement: 'query',
       tokenQueryKey: 'at',
     });
-    expect(auth('oauth2', ['grant_type: client_credentials', 'token_placement: url'])).toMatchObject(
-      { tokenQueryKey: 'access_token' },
-    );
+    expect(
+      auth('oauth2', ['grant_type: client_credentials', 'token_placement: url']),
+    ).toMatchObject({ tokenQueryKey: 'access_token' });
     expect(
       auth('oauth2', ['grant_type: client_credentials', 'token_header_prefix: Token']),
     ).toMatchObject({ tokenPrefix: 'Token' });
     expect(auth('oauth2', ['grant_type: client_credentials'])).not.toHaveProperty('tokenPrefix');
-    expect(auth('oauth1', ['signature_method: HMAC-SHA512', 'realm: r', 'placement: query'])).toMatchObject(
-      { realm: 'r', addTo: 'query' },
-    );
+    expect(
+      auth('oauth1', ['signature_method: HMAC-SHA512', 'realm: r', 'placement: query']),
+    ).toMatchObject({ realm: 'r', addTo: 'query' });
     expect(auth('akamai-edgegrid', ['headersToSign: x-a', 'maxBodySize: 10'])).toMatchObject({
       headersToSign: 'x-a',
       maxBodySize: 10,
@@ -596,7 +597,9 @@ describe('environmentFromBru and importBruno', () => {
           id: 'f',
           type: 'folder',
           name: 'Folder',
-          items: [request({ name: 'Inner', method: 'POST', body: { mode: 'json', content: '{}' } })],
+          items: [
+            request({ name: 'Inner', method: 'POST', body: { mode: 'json', content: '{}' } }),
+          ],
         },
         {
           ...request({ name: 'Grpc' }),
@@ -619,7 +622,9 @@ describe('environmentFromBru and importBruno', () => {
   });
 
   it('names a collection that carries no name of its own', () => {
-    const { collection } = importBruno([{ path: 'collection.bru', content: 'auth {\n  mode: none\n}' }]);
+    const { collection } = importBruno([
+      { path: 'collection.bru', content: 'auth {\n  mode: none\n}' },
+    ]);
     expect(collection.name).toBe('Bruno collection');
     expect(collection.auth).toEqual({ type: 'none' });
   });
@@ -692,7 +697,7 @@ describe('the remaining defaults of both directions', () => {
   });
 
   it('reads a multi-line value that runs to the end of the file', () => {
-    const blocks = parseBru(["headers {", "  content: '''", '    {"a":1}'].join('\n'));
+    const blocks = parseBru(['headers {', "  content: '''", '    {"a":1}'].join('\n'));
     expect(blocks[0]?.pairs?.[0]?.value).toBe('{"a":1}');
     expect(blocks[0]?.pairs?.[0]?.contentType).toBeUndefined();
   });
@@ -703,9 +708,10 @@ describe('the remaining defaults of both directions', () => {
   });
 
   it('reads a bearer block with no token and an apikey placed in the header', () => {
-    expect(
-      requestFromBru('get {\n  url: https://api.test/\n  auth: bearer\n}', 'R').auth,
-    ).toEqual({ type: 'bearer', token: '' });
+    expect(requestFromBru('get {\n  url: https://api.test/\n  auth: bearer\n}', 'R').auth).toEqual({
+      type: 'bearer',
+      token: '',
+    });
     expect(
       requestFromBru(
         'get {\n  url: https://api.test/\n  auth: apikey\n}\nauth:apikey {\n  key: K\n}',
@@ -723,9 +729,10 @@ describe('the remaining defaults of both directions', () => {
   });
 
   it('reads a text body whose block is missing and a ws message list', () => {
-    expect(
-      requestFromBru('post {\n  url: https://api.test/\n  body: json\n}', 'R').body,
-    ).toEqual({ mode: 'json', content: '' });
+    expect(requestFromBru('post {\n  url: https://api.test/\n  body: json\n}', 'R').body).toEqual({
+      mode: 'json',
+      content: '',
+    });
     const ws = requestFromBru('ws {\n  url: ws://api.test\n}\nbody:ws [\n  a\n]', 'R');
     expect(ws.websocket?.messages[0]).toEqual({ content: '' });
   });
@@ -747,8 +754,14 @@ describe('the remaining defaults of both directions', () => {
   it('sorts two items that share a sequence number by name', () => {
     const { collection } = importBruno([
       { path: 'collection.bru', content: 'meta {\n  name: Same\n}' },
-      { path: 'b.bru', content: 'meta {\n  name: Beta\n  seq: 1\n}\nget {\n  url: https://api.test/b\n}' },
-      { path: 'a.bru', content: 'meta {\n  name: Alpha\n  seq: 1\n}\nget {\n  url: https://api.test/a\n}' },
+      {
+        path: 'b.bru',
+        content: 'meta {\n  name: Beta\n  seq: 1\n}\nget {\n  url: https://api.test/b\n}',
+      },
+      {
+        path: 'a.bru',
+        content: 'meta {\n  name: Alpha\n  seq: 1\n}\nget {\n  url: https://api.test/a\n}',
+      },
     ]);
     expect(collection.items.map((item) => item.name)).toEqual(['Alpha', 'Beta']);
   });
@@ -759,7 +772,9 @@ describe('the remaining defaults of both directions', () => {
         path: 'bruno.json',
         content: JSON.stringify({
           name: 'Protos',
-          protobuf: { protoFiles: [{ path: './protos/missing.proto' }, { path: 'protos/here.proto' }] },
+          protobuf: {
+            protoFiles: [{ path: './protos/missing.proto' }, { path: 'protos/here.proto' }],
+          },
         }),
       },
       { path: 'protos/here.proto', content: 'syntax = "proto3";' },

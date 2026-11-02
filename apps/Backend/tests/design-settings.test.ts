@@ -118,11 +118,16 @@ describe('design settings', () => {
   });
 
   it('refuses to clear settings when the ADK has no settings store configured', async () => {
-    const store = { configuredProviders: vi.fn().mockResolvedValue([]) } as unknown as DesignRemoteStore;
+    const store = {
+      configuredProviders: vi.fn().mockResolvedValue([]),
+    } as unknown as DesignRemoteStore;
     const app = express();
     app.use(express.json());
     app.use(
-      createDesignRouter(new DesignService(store, {} as AgentService, undefined, browser()), context),
+      createDesignRouter(
+        new DesignService(store, {} as AgentService, undefined, browser()),
+        context,
+      ),
     );
     app.use(errorMiddleware);
     const response = await request(app).delete('/design/settings');
@@ -156,11 +161,16 @@ describe('design settings', () => {
   });
 
   it('refuses to read or write settings when the ADK has no settings store configured', async () => {
-    const store = { configuredProviders: vi.fn().mockResolvedValue([]) } as unknown as DesignRemoteStore;
+    const store = {
+      configuredProviders: vi.fn().mockResolvedValue([]),
+    } as unknown as DesignRemoteStore;
     const app = express();
     app.use(express.json());
     app.use(
-      createDesignRouter(new DesignService(store, {} as AgentService, undefined, browser()), context),
+      createDesignRouter(
+        new DesignService(store, {} as AgentService, undefined, browser()),
+        context,
+      ),
     );
     app.use(errorMiddleware);
 

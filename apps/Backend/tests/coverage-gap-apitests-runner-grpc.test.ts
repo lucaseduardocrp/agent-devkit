@@ -10,12 +10,7 @@ import type {
   ScriptOutput,
 } from '../src/modules/apitests/engine/script-sandbox.js';
 import type { ApiRequestSpec, CollectionSpec } from '../src/modules/apitests/engine/types.js';
-import {
-  GREETER_PROTO,
-  echoServer,
-  grpcServer,
-  tokenServer,
-} from './apitests-stream-servers.js';
+import { GREETER_PROTO, echoServer, grpcServer, tokenServer } from './apitests-stream-servers.js';
 
 const request = (
   overrides: Partial<ApiRequestSpec> & Pick<ApiRequestSpec, 'id' | 'url'>,
@@ -114,7 +109,9 @@ describe('describeGrpc', () => {
         ],
       };
       // The test server answers no reflection service, so the listing comes back empty.
-      await expect(describeGrpc(spec, 'r', { timeoutMs: 2_000 })).resolves.toEqual({ services: [] });
+      await expect(describeGrpc(spec, 'r', { timeoutMs: 2_000 })).resolves.toEqual({
+        services: [],
+      });
       expect(server.metadata.at(-1)?.authorization).toBe('Bearer tok-acme');
       expect(server.metadata.at(-1)?.['x-tenant']).toBe('acme');
       expect(server.metadata.at(-1)?.['x-folder']).toBe('yes');
@@ -195,11 +192,9 @@ describe('what a script sends on its own', () => {
     await runCollectionWithState(collection({ settings: { timeoutMs: 3_000 } }), {
       scripts: scriptsReturning((input) => {
         const host = (input as ScriptInput & { host: ScriptHost }).host;
-        void host
-          .sendRequest({ method: 'GET', url: server.url, headers: {} })
-          .then((response) => {
-            status = response.status;
-          });
+        void host.sendRequest({ method: 'GET', url: server.url, headers: {} }).then((response) => {
+          status = response.status;
+        });
         return {};
       }),
     });
@@ -226,10 +221,9 @@ describe('flow control that stops a run', () => {
   });
 
   it('stops when a script names a request that the run does not hold', async () => {
-    const { result } = await runCollectionWithState(
-      two(),
-      { scripts: scriptsReturning(() => ({ nextRequest: 'nowhere' })) },
-    );
+    const { result } = await runCollectionWithState(two(), {
+      scripts: scriptsReturning(() => ({ nextRequest: 'nowhere' })),
+    });
     expect(result.results.length).toBe(1);
   });
 
@@ -306,7 +300,9 @@ describe('the defaults of a run and of a description', () => {
           request({
             id: 'r',
             url: server.url,
-            scripts: { tests: "test('ok', () => { if (res.getStatus() !== 200) throw new Error('no') });" },
+            scripts: {
+              tests: "test('ok', () => { if (res.getStatus() !== 200) throw new Error('no') });",
+            },
           }),
         ],
       } satisfies CollectionSpec,

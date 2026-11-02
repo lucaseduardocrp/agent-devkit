@@ -34,7 +34,14 @@ describe('importInsomnia reads the fields Insomnia leaves out', () => {
       (
         importInsomnia(
           document([
-            { _type: 'request', _id: 'r', parentId: 'w', name: 'R', url: 'https://a.test/', authentication },
+            {
+              _type: 'request',
+              _id: 'r',
+              parentId: 'w',
+              name: 'R',
+              url: 'https://a.test/',
+              authentication,
+            },
           ]) as never,
         ).items[0] as ApiRequestSpec
       ).auth;
@@ -241,9 +248,12 @@ describe('exportInsomnia writes the fields an auth may leave out', () => {
     const bodyOf = (name: string) =>
       JSON.parse(
         String(
-          (resources.find((resource) => resource['name'] === name)?.['body'] as Record<string, unknown>)[
-            'text'
-          ],
+          (
+            resources.find((resource) => resource['name'] === name)?.['body'] as Record<
+              string,
+              unknown
+            >
+          )['text'],
         ),
       ) as Record<string, unknown>;
     expect(bodyOf('Bare')['query']).toBe('');

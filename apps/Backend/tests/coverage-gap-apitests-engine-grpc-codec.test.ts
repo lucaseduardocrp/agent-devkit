@@ -25,9 +25,13 @@ describe('enum numbers and defaults', () => {
   );
 
   it('accepts a name, a numeric string and a plain number', () => {
-    expect(decodeMessage(schema, 'demo.v1.Item', encodeMessage(schema, 'demo.v1.Item', { color: 'GREEN' }))).toEqual(
-      { color: 'GREEN' },
-    );
+    expect(
+      decodeMessage(
+        schema,
+        'demo.v1.Item',
+        encodeMessage(schema, 'demo.v1.Item', { color: 'GREEN' }),
+      ),
+    ).toEqual({ color: 'GREEN' });
     expect(encodeMessage(schema, 'demo.v1.Item', { color: '1' })).toEqual(
       encodeMessage(schema, 'demo.v1.Item', { color: 1 }),
     );
@@ -113,9 +117,12 @@ describe('encoding and decoding every scalar type', () => {
 
   it('leaves an absent nested message field out, since it always has explicit presence', () => {
     const nested = registry(
-      ['syntax = "proto3";', 'package demo.v1;', 'message Inner {}', 'message Outer { Inner inner = 1; }'].join(
-        '\n',
-      ),
+      [
+        'syntax = "proto3";',
+        'package demo.v1;',
+        'message Inner {}',
+        'message Outer { Inner inner = 1; }',
+      ].join('\n'),
     );
     expect(decodeMessage(nested, 'demo.v1.Outer', Buffer.alloc(0))).toEqual({});
   });
@@ -153,9 +160,9 @@ describe('well-known types', () => {
       spent: '1.500s',
       mask: 'user_name,other_field',
     };
-    expect(decodeMessage(wrapped, 'demo.v1.Box', encodeMessage(wrapped, 'demo.v1.Box', value))).toMatchObject(
-      { at: '2026-01-01T00:00:00Z', spent: '1.500s', mask: 'userName,otherField' },
-    );
+    expect(
+      decodeMessage(wrapped, 'demo.v1.Box', encodeMessage(wrapped, 'demo.v1.Box', value)),
+    ).toMatchObject({ at: '2026-01-01T00:00:00Z', spent: '1.500s', mask: 'userName,otherField' });
     // An empty field mask has no paths.
     expect(
       decodeMessage(wrapped, 'demo.v1.Box', encodeMessage(wrapped, 'demo.v1.Box', { mask: '' })),
@@ -164,9 +171,9 @@ describe('well-known types', () => {
 
   it('round-trips a Struct and a ListValue', () => {
     const value = { data: { a: 1 }, items: [1, 'two'] };
-    expect(decodeMessage(wrapped, 'demo.v1.Box', encodeMessage(wrapped, 'demo.v1.Box', value))).toEqual(
-      value,
-    );
+    expect(
+      decodeMessage(wrapped, 'demo.v1.Box', encodeMessage(wrapped, 'demo.v1.Box', value)),
+    ).toEqual(value);
   });
 
   it('round-trips every kind of google.protobuf.Value, and an unset one', () => {
@@ -178,15 +185,19 @@ describe('well-known types', () => {
   });
 
   it('refuses an invalid google.protobuf.Value', () => {
-    expect(() =>
-      encodeMessage(wrapped, 'demo.v1.Box', { any: () => {} } as never),
-    ).toThrow('Invalid google.protobuf.Value');
+    expect(() => encodeMessage(wrapped, 'demo.v1.Box', { any: () => {} } as never)).toThrow(
+      'Invalid google.protobuf.Value',
+    );
   });
 
   it('round-trips an Any of a known message type, and one of an unknown type sent pre-encoded', () => {
     // The Any's own fields are inlined at the top level alongside "@type", per the JSON mapping.
     const known = { typed: { '@type': 'type.googleapis.com/demo.v1.Box', maybe: 7 } };
-    const roundTripped = decodeMessage(wrapped, 'demo.v1.Box', encodeMessage(wrapped, 'demo.v1.Box', known));
+    const roundTripped = decodeMessage(
+      wrapped,
+      'demo.v1.Box',
+      encodeMessage(wrapped, 'demo.v1.Box', known),
+    );
     expect((roundTripped as { typed: { maybe: number } }).typed).toMatchObject({ maybe: 7 });
 
     const raw = Buffer.from('anything').toString('base64');
@@ -209,7 +220,9 @@ describe('well-known types', () => {
   });
 
   it('refuses an Any with no @type and one of an unknown type with no pre-encoded value', () => {
-    expect(() => encodeMessage(wrapped, 'demo.v1.Box', { typed: { foo: 1 } })).toThrow('needs "@type"');
+    expect(() => encodeMessage(wrapped, 'demo.v1.Box', { typed: { foo: 1 } })).toThrow(
+      'needs "@type"',
+    );
     expect(() =>
       encodeMessage(wrapped, 'demo.v1.Box', {
         typed: { '@type': 'type.googleapis.com/demo.v1.Unknown', foo: 1 },
@@ -227,11 +240,15 @@ describe('well-known types', () => {
     // A message laid out exactly like google.protobuf.Any (same field numbers and wire types),
     // but under a plain name, so it can be encoded with "type_url" left unset.
     const fake = registry(
-      ['syntax = "proto3";', 'package demo.v1;', 'message FakeAny { string type_url = 1; bytes value = 2; }'].join(
-        '\n',
-      ),
+      [
+        'syntax = "proto3";',
+        'package demo.v1;',
+        'message FakeAny { string type_url = 1; bytes value = 2; }',
+      ].join('\n'),
     );
-    const bytes = encodeMessage(fake, 'demo.v1.FakeAny', { value: Buffer.from('x').toString('base64') });
+    const bytes = encodeMessage(fake, 'demo.v1.FakeAny', {
+      value: Buffer.from('x').toString('base64'),
+    });
     expect(decodeMessage(wrapped, 'google.protobuf.Any', bytes)).toEqual({});
   });
 });

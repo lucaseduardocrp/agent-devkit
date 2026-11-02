@@ -543,7 +543,10 @@ describe('sseExchange', () => {
       'Stream ended by the server',
     ]);
     // Already stopped by maxEvents before the stream ends: no "ended" message is added.
-    const stoppedBeforeEnd = await sseExchange(sse('/end', { listenMs: 2000, maxEvents: 1 }), local);
+    const stoppedBeforeEnd = await sseExchange(
+      sse('/end', { listenMs: 2000, maxEvents: 1 }),
+      local,
+    );
     expect(stoppedBeforeEnd.messages.map((message) => message.data)).toEqual(['1']);
     const down = await sseExchange(sse('/down', { listenMs: 2000 }), local);
     expect(down.error).toBe('The connection closed before the response ended');

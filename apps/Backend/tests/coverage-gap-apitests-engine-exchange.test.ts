@@ -38,11 +38,10 @@ const request = (
 
 /** Runs one request of `kind` with no auth and the scope's variables. */
 const run = (spec: ApiRequestSpec, variables: Record<string, string> = {}) =>
-  executeRequest(
-    spec,
-    scopeOf(Object.entries(variables).map(([key, value]) => ({ key, value }))),
-    { auth: { type: 'none' }, timeoutMs: 5_000 },
-  );
+  executeRequest(spec, scopeOf(Object.entries(variables).map(([key, value]) => ({ key, value }))), {
+    auth: { type: 'none' },
+    timeoutMs: 5_000,
+  });
 
 describe('networkOf, senderOf and resolveAuth', () => {
   const scope = scopeOf([
@@ -53,7 +52,13 @@ describe('networkOf, senderOf and resolveAuth', () => {
 
   it('resolves the variables of the proxy and of every client certificate', () => {
     const settings: CollectionSettings = {
-      proxy: { enabled: true, protocol: 'http', hostname: '{{host}}', port: 8080, password: '{{pass}}' },
+      proxy: {
+        enabled: true,
+        protocol: 'http',
+        hostname: '{{host}}',
+        port: 8080,
+        password: '{{pass}}',
+      },
       tls: { verify: false },
       clientCertificates: [{ domain: 'api.test', type: 'pem', cert: '{{cert}}', key: 'KEY' }],
     };
@@ -147,9 +152,9 @@ describe('websocket requests', () => {
     expect(result.passed).toBe(true);
     expect(scope.get('greeted')?.value).toBe('ana');
     // The body assertions read the received messages as a JSON array of their data.
-    expect(
-      result.response?.messages?.some((message) => message.direction === 'received'),
-    ).toBe(true);
+    expect(result.response?.messages?.some((message) => message.direction === 'received')).toBe(
+      true,
+    );
   });
 
   it('defaults the listening window and keeps no body for a websocket draft', async () => {
@@ -305,26 +310,25 @@ describe('request drafts of every kind', () => {
   it('drafts the body scripts read for each kind', async () => {
     const drafts: Record<string, string | undefined> = {};
     for (const [kind, spec] of [
-      ['grpc', request({ id: 'g', url: 'grpc://127.0.0.1:1', grpc: { method: 'M', message: '{}' } })],
+      [
+        'grpc',
+        request({ id: 'g', url: 'grpc://127.0.0.1:1', grpc: { method: 'M', message: '{}' } }),
+      ],
       ['websocket', request({ id: 'w', url: 'ws://127.0.0.1:1' })],
       ['socket', request({ id: 's', url: 'tcp://127.0.0.1:1' })],
     ] as const satisfies readonly (readonly [RequestKind, ApiRequestSpec])[]) {
-      const result = await executeRequest(
-        { ...spec, kind },
-        scopeOf([]),
-        {
-          auth: { type: 'none' },
-          timeoutMs: 50,
-          scripting: {
-            pre: async (view) => {
-              drafts[kind] = view.body;
-              return { tests: [], logs: [], skip: true };
-            },
-            post: async () => ({ tests: [], logs: [] }),
-            tests: async () => ({ tests: [], logs: [] }),
+      const result = await executeRequest({ ...spec, kind }, scopeOf([]), {
+        auth: { type: 'none' },
+        timeoutMs: 50,
+        scripting: {
+          pre: async (view) => {
+            drafts[kind] = view.body;
+            return { tests: [], logs: [], skip: true };
           },
+          post: async () => ({ tests: [], logs: [] }),
+          tests: async () => ({ tests: [], logs: [] }),
         },
-      );
+      });
       expect(result.passed).toBe(true);
     }
     expect(drafts).toEqual({ grpc: '{}', websocket: undefined, socket: undefined });
@@ -356,7 +360,11 @@ describe('grpc requests', () => {
         kind: 'grpc',
         url: server.url,
         headers: [{ key: 'x-tenant', value: '{{tenant}}' }],
-        grpc: { method: 'demo.v1.{{service}}/Say', message: '{"id":"{{who}}"}', protoFile: 'demo.proto' },
+        grpc: {
+          method: 'demo.v1.{{service}}/Say',
+          message: '{"id":"{{who}}"}',
+          protoFile: 'demo.proto',
+        },
         assertions: [
           { id: 'a1', source: 'status', operator: 'eq', expected: '0' },
           { id: 'a2', source: 'json', path: 'id', operator: 'eq', expected: 'hi' },
@@ -385,7 +393,11 @@ describe('grpc requests', () => {
           id: 'grpc-stream',
           kind: 'grpc',
           url: twice.url,
-          grpc: { method: '/demo.v1.Greeter/Say', message: '[{"id":"a"},{"id":"b"}]', protoFile: 'demo.proto' },
+          grpc: {
+            method: '/demo.v1.Greeter/Say',
+            message: '[{"id":"a"},{"id":"b"}]',
+            protoFile: 'demo.proto',
+          },
         }),
         scopeOf([]),
         { auth: { type: 'none' }, timeoutMs: 5_000, keepResponse: true, protoFiles },
@@ -428,7 +440,11 @@ describe('grpc requests', () => {
 
   it('asks the server through reflection when the request names no proto file', async () => {
     const result = await executeRequest(
-      { ...request({ id: 'grpc-reflect', url: server.url }), kind: 'grpc', grpc: { method: 'demo.v1.Greeter/Say', message: '{}' } },
+      {
+        ...request({ id: 'grpc-reflect', url: server.url }),
+        kind: 'grpc',
+        grpc: { method: 'demo.v1.Greeter/Say', message: '{}' },
+      },
       scopeOf([]),
       { auth: { type: 'none' }, timeoutMs: 2_000 },
     );

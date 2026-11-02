@@ -34,7 +34,15 @@ describe('LayeredScope', () => {
 describe('CookieJar', () => {
   it('serves a URL whose scheme leaves the path empty', () => {
     const jar = new CookieJar([
-      { name: 'a', value: '1', domain: 'a.test', path: '/', secure: false, httpOnly: false, hostOnly: true },
+      {
+        name: 'a',
+        value: '1',
+        domain: 'a.test',
+        path: '/',
+        secure: false,
+        httpOnly: false,
+        hostOnly: true,
+      },
     ]);
     expect(jar.cookieHeader(new URL('tcp://a.test'))).toBe('a=1');
   });

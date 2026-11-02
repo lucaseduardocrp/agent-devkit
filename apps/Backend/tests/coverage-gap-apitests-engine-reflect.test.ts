@@ -32,7 +32,9 @@ const grpcCollection = (grpc: ApiRequestSpec['grpc']): CollectionSpec => ({
   variables: [],
   auth: { type: 'none' },
   protoFiles: [{ name: 'demo.proto', content: GREETER_PROTO }],
-  items: [{ ...request({ id: 'r', url: 'grpc://127.0.0.1:1' }), kind: 'grpc', ...(grpc ? { grpc } : {}) }],
+  items: [
+    { ...request({ id: 'r', url: 'grpc://127.0.0.1:1' }), kind: 'grpc', ...(grpc ? { grpc } : {}) },
+  ],
 });
 
 describe('describing a gRPC request through a run', () => {
@@ -55,9 +57,10 @@ describe('describing a gRPC request through a run', () => {
     );
     expect(outcome.status).toBe('passed');
     expect(outcome.result?.passed).toBe(1);
-    const body = outcome.result && 'results' in outcome.result
-      ? outcome.result.results[0]?.response?.bodyPreview
-      : undefined;
+    const body =
+      outcome.result && 'results' in outcome.result
+        ? outcome.result.results[0]?.response?.bodyPreview
+        : undefined;
     const list = JSON.parse(String(body)) as GrpcServiceList;
     expect(list.services.map((service) => service.name)).toContain('demo.v1.Greeter');
   });
@@ -80,9 +83,9 @@ describe('describing a gRPC request through a run', () => {
       hooks(),
     );
     expect(outcome.status).toBe('failed');
-    expect(outcome.result && 'results' in outcome.result ? outcome.result.results[0]?.error : '').toBe(
-      'Choose a gRPC request.',
-    );
+    expect(
+      outcome.result && 'results' in outcome.result ? outcome.result.results[0]?.error : '',
+    ).toBe('Choose a gRPC request.');
   });
 
   it('reports a guard rejection as the error text', async () => {
@@ -161,7 +164,9 @@ describe('the options a run carries through', () => {
       hooks(),
     );
     expect(outcome.status).toBe('passed');
-    expect(outcome.result && 'results' in outcome.result ? outcome.result.results.length : 0).toBe(2);
+    expect(outcome.result && 'results' in outcome.result ? outcome.result.results.length : 0).toBe(
+      2,
+    );
   });
 
   it('runs with none of the optional settings', async () => {

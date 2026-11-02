@@ -60,45 +60,49 @@ describe('bodies sent for each editor mode', () => {
   });
 
   it('encodes urlencoded fields and skips the disabled ones', async () => {
-    await send({
-      body: {
-        mode: 'urlencoded',
-        fields: [
-          { key: 'a', value: '{{v}}' },
-          { key: 'skipped', value: 'no', enabled: false },
-          { key: 'b b', value: 'c&d' },
-        ],
+    await send(
+      {
+        body: {
+          mode: 'urlencoded',
+          fields: [
+            { key: 'a', value: '{{v}}' },
+            { key: 'skipped', value: 'no', enabled: false },
+            { key: 'b b', value: 'c&d' },
+          ],
+        },
       },
-    }, { v: 'one' });
-    expect(server.seen.at(-1)?.body).toBe('a=one&b+b=c%26d');
-    expect(server.seen.at(-1)?.headers['content-type']).toBe(
-      'application/x-www-form-urlencoded',
+      { v: 'one' },
     );
+    expect(server.seen.at(-1)?.body).toBe('a=one&b+b=c%26d');
+    expect(server.seen.at(-1)?.headers['content-type']).toBe('application/x-www-form-urlencoded');
   });
 
   it('encodes a multipart body with text fields, their content types and a file', async () => {
-    await send({
-      body: {
-        mode: 'form',
-        fields: [
-          { key: 'plain {{q}}"x"', value: '{{v}}' },
-          { key: 'typed', value: '{"a":1}', contentType: 'application/json' },
-          {
-            key: 'upload',
-            value: '',
-            type: 'file',
-            file: { fileName: 'a"b\nc.txt', contentType: 'text/plain', data: 'aGk=' },
-          },
-          {
-            key: 'untyped',
-            value: '',
-            type: 'file',
-            file: { fileName: 'raw.bin', contentType: '', data: 'aGk=' },
-          },
-          { key: 'off', value: 'no', enabled: false },
-        ],
+    await send(
+      {
+        body: {
+          mode: 'form',
+          fields: [
+            { key: 'plain {{q}}"x"', value: '{{v}}' },
+            { key: 'typed', value: '{"a":1}', contentType: 'application/json' },
+            {
+              key: 'upload',
+              value: '',
+              type: 'file',
+              file: { fileName: 'a"b\nc.txt', contentType: 'text/plain', data: 'aGk=' },
+            },
+            {
+              key: 'untyped',
+              value: '',
+              type: 'file',
+              file: { fileName: 'raw.bin', contentType: '', data: 'aGk=' },
+            },
+            { key: 'off', value: 'no', enabled: false },
+          ],
+        },
       },
-    }, { q: 'name', v: 'one' });
+      { q: 'name', v: 'one' },
+    );
     const seen = server.seen.at(-1);
     expect(seen?.headers['content-type']).toContain('multipart/form-data; boundary=----adk-');
     expect(seen?.body).toContain('name="plain name%22x%22"');
@@ -109,11 +113,15 @@ describe('bodies sent for each editor mode', () => {
   });
 
   it('sends a binary body with its type, and nothing when no file is attached', async () => {
-    await send({ body: { mode: 'binary', file: { fileName: 'a.bin', contentType: '', data: 'aGk=' } } });
+    await send({
+      body: { mode: 'binary', file: { fileName: 'a.bin', contentType: '', data: 'aGk=' } },
+    });
     expect(server.seen.at(-1)?.headers['content-type']).toBe('application/octet-stream');
     expect(server.seen.at(-1)?.body).toBe('hi');
 
-    await send({ body: { mode: 'binary', file: { fileName: 'b.png', contentType: 'image/png', data: 'aGk=' } } });
+    await send({
+      body: { mode: 'binary', file: { fileName: 'b.png', contentType: 'image/png', data: 'aGk=' } },
+    });
     expect(server.seen.at(-1)?.headers['content-type']).toBe('image/png');
 
     await send({ body: { mode: 'binary', file: null } });
@@ -167,12 +175,15 @@ describe('bodies sent for each editor mode', () => {
   });
 
   it('drops headers whose name is blank and resolves the rest', async () => {
-    await send({
-      headers: [
-        { key: '   ', value: 'ignored' },
-        { key: 'x-{{k}}', value: '{{v}}' },
-      ],
-    }, { k: 'name', v: 'value' });
+    await send(
+      {
+        headers: [
+          { key: '   ', value: 'ignored' },
+          { key: 'x-{{k}}', value: '{{v}}' },
+        ],
+      },
+      { k: 'name', v: 'value' },
+    );
     expect(server.seen.at(-1)?.headers['x-name']).toBe('value');
   });
 });
@@ -245,7 +256,13 @@ describe('repeated response headers and masked timelines', () => {
           id: 'headers',
           url: server.url,
           assertions: [
-            { id: 'a1', source: 'header', path: 'set-cookie', operator: 'eq', expected: 'a=1\nb=2' },
+            {
+              id: 'a1',
+              source: 'header',
+              path: 'set-cookie',
+              operator: 'eq',
+              expected: 'a=1\nb=2',
+            },
             { id: 'a2', source: 'header', path: 'x-many', operator: 'eq', expected: 'one, two' },
             { id: 'a3', source: 'header', path: '', operator: 'notExists' },
           ],
@@ -271,11 +288,11 @@ describe('repeated response headers and masked timelines', () => {
         value: 'super-secret',
         in: 'header',
       };
-      const result = await executeRequest(
-        request({ id: 'apikey', url: server.url }),
-        vars({}),
-        { auth, timeoutMs: 5_000, keepResponse: true },
-      );
+      const result = await executeRequest(request({ id: 'apikey', url: server.url }), vars({}), {
+        auth,
+        timeoutMs: 5_000,
+        keepResponse: true,
+      });
       expect(result.timeline?.request.headers['X-Api-Key']).not.toContain('super-secret');
       expect(server.seen.at(-1)?.headers['x-api-key']).toBe('super-secret');
     } finally {
@@ -303,11 +320,9 @@ describe('failures reported in the result', () => {
   });
 
   it('reports an unparseable URL as an invalid request', async () => {
-    const result = await executeRequest(
-      request({ id: 'bad-url', url: 'not-a-url' }),
-      vars({}),
-      { auth: { type: 'none' } },
-    );
+    const result = await executeRequest(request({ id: 'bad-url', url: 'not-a-url' }), vars({}), {
+      auth: { type: 'none' },
+    });
     expect(result.error).toContain('Invalid request:');
   });
 
@@ -385,11 +400,11 @@ describe('the last branches of a request run', () => {
   it('keeps the redirect chain in the timeline', async () => {
     const server = await redirectServer();
     try {
-      const result = await executeRequest(
-        request({ id: 'redirects', url: server.url }),
-        vars({}),
-        { auth: { type: 'none' }, timeoutMs: 5_000, keepResponse: true },
-      );
+      const result = await executeRequest(request({ id: 'redirects', url: server.url }), vars({}), {
+        auth: { type: 'none' },
+        timeoutMs: 5_000,
+        keepResponse: true,
+      });
       expect(result.status).toBe(200);
       expect(result.timeline?.redirects?.length).toBe(1);
     } finally {
@@ -432,19 +447,15 @@ describe('the last branches of a request run', () => {
   it('keeps the draft view when a pre-request script returns none', async () => {
     const server = await echoServer();
     try {
-      const result = await executeRequest(
-        request({ id: 'no-view', url: server.url }),
-        vars({}),
-        {
-          auth: { type: 'none' },
-          timeoutMs: 5_000,
-          scripting: {
-            pre: async () => ({ tests: [], logs: [] }),
-            post: async () => ({ tests: [], logs: [] }),
-            tests: async () => ({ tests: [], logs: [] }),
-          },
+      const result = await executeRequest(request({ id: 'no-view', url: server.url }), vars({}), {
+        auth: { type: 'none' },
+        timeoutMs: 5_000,
+        scripting: {
+          pre: async () => ({ tests: [], logs: [] }),
+          post: async () => ({ tests: [], logs: [] }),
+          tests: async () => ({ tests: [], logs: [] }),
         },
-      );
+      });
       expect(result.status).toBe(200);
     } finally {
       await server.close();
@@ -505,7 +516,11 @@ describe('the last branches of a request run', () => {
           auth: { type: 'none' },
           timeoutMs: 5_000,
           scripting: {
-            pre: async (view) => ({ request: { ...view, body: '{"replaced":1}' }, tests: [], logs: [] }),
+            pre: async (view) => ({
+              request: { ...view, body: '{"replaced":1}' },
+              tests: [],
+              logs: [],
+            }),
             post: async () => ({ tests: [], logs: [] }),
             tests: async () => ({ tests: [], logs: [] }),
           },

@@ -165,18 +165,14 @@ describe('oauth2 tokens', () => {
 
   it('reports a token endpoint that refuses the request', async () => {
     const ctx = context(() => response(401, 'denied'));
-    await expect(
-      authorizeRequest(get('https://a.test/'), oauth2(), ctx),
-    ).rejects.toThrow('OAuth2 token request failed: HTTP 401: denied');
+    await expect(authorizeRequest(get('https://a.test/'), oauth2(), ctx)).rejects.toThrow(
+      'OAuth2 token request failed: HTTP 401: denied',
+    );
   });
 
   it('sends the token with no prefix at all', async () => {
     const ctx = context(() => response(200, JSON.stringify({ access_token: 'raw' })));
-    const sent = await authorizeRequest(
-      get('https://a.test/'),
-      oauth2({ tokenPrefix: '' }),
-      ctx,
-    );
+    const sent = await authorizeRequest(get('https://a.test/'), oauth2({ tokenPrefix: '' }), ctx);
     expect(header(sent, 'authorization')).toBe('raw');
   });
 
@@ -184,7 +180,13 @@ describe('oauth2 tokens', () => {
     const ctx = context(() => response(200));
     const sent = await authorizeRequest(
       { method: 'POST', url: new URL('https://a.test/'), headers: [], body: Buffer.from('hi') },
-      { type: 'awsv4', accessKeyId: 'AK', secretAccessKey: 'SK', service: 'execute-api', region: 'us-east-1' },
+      {
+        type: 'awsv4',
+        accessKeyId: 'AK',
+        secretAccessKey: 'SK',
+        service: 'execute-api',
+        region: 'us-east-1',
+      },
       ctx,
     );
     expect(header(sent, 'authorization')).toContain('AWS4-HMAC-SHA256');
@@ -202,7 +204,11 @@ describe('digest challenges', () => {
   });
 
   it('keeps a 401 that carries no digest challenge it understands', async () => {
-    for (const value of ['Basic realm="r"', 'Digest realm="r"', 'Digest nonce="n", algorithm=RC4']) {
+    for (const value of [
+      'Basic realm="r"',
+      'Digest realm="r"',
+      'Digest nonce="n", algorithm=RC4',
+    ]) {
       const ctx = context(() => response(401, '', [['www-authenticate', value]]));
       const sent = await sendAuthorized(get('https://a.test/'), digest, ctx);
       expect(ctx.calls.length).toBe(1);
@@ -228,7 +234,12 @@ describe('digest challenges', () => {
           : response(401, '', [['www-authenticate', challenge]]),
       );
       const sent = await sendAuthorized(
-        { method: 'POST', url: new URL('https://a.test/x?q=1'), headers: [], ...(body !== undefined ? { body } : {}) },
+        {
+          method: 'POST',
+          url: new URL('https://a.test/x?q=1'),
+          headers: [],
+          ...(body !== undefined ? { body } : {}),
+        },
         digest,
         ctx,
       );
@@ -269,8 +280,16 @@ describe('AWS Signature v4 canonical forms', () => {
     region: 'us-east-1',
   });
 
-  const sign = async (url: string, headers: (readonly [string, string])[] = [], service = 'execute-api') =>
-    authorizeRequest(get(url, headers), aws(service), context(() => response(200)));
+  const sign = async (
+    url: string,
+    headers: (readonly [string, string])[] = [],
+    service = 'execute-api',
+  ) =>
+    authorizeRequest(
+      get(url, headers),
+      aws(service),
+      context(() => response(200)),
+    );
 
   it('leaves the headers a signature must not cover out of the signed list', async () => {
     const sent = await sign('https://a.test/', [
@@ -317,9 +336,7 @@ describe('AWS Signature v4 canonical forms', () => {
 });
 
 describe('OAuth 1.0a signatures', () => {
-  const oauth1 = (
-    extra: Partial<Extract<RequestAuth, { type: 'oauth1' }>> = {},
-  ): RequestAuth => ({
+  const oauth1 = (extra: Partial<Extract<RequestAuth, { type: 'oauth1' }>> = {}): RequestAuth => ({
     type: 'oauth1',
     consumerKey: 'ck',
     consumerSecret: 'cs',
@@ -335,7 +352,10 @@ describe('OAuth 1.0a signatures', () => {
     );
 
   it('adds the token, the realm and the signature to the header', async () => {
-    const sent = await sign('https://a.test/x', oauth1({ token: 't', tokenSecret: 'ts', realm: 'r' }));
+    const sent = await sign(
+      'https://a.test/x',
+      oauth1({ token: 't', tokenSecret: 'ts', realm: 'r' }),
+    );
     const authorization = String(header(sent, 'authorization'));
     expect(authorization).toContain('realm="r"');
     expect(authorization).toContain('oauth_token="t"');

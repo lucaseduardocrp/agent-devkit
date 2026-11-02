@@ -838,7 +838,12 @@ export default async function afterRun({ request }: { request: APIRequestContext
     const { service, scripts } = setup();
     const created = await service.create(context, { ...input, planning: 'host' });
     await service.idle();
-    const login = { title: 'Valid login', description: 'd', priority: 'high', steps: ['a'] } as const;
+    const login = {
+      title: 'Valid login',
+      description: 'd',
+      priority: 'high',
+      steps: ['a'],
+    } as const;
     await expect(
       service.savePlan('ws', created.id, {
         tests: [{ ...login, script: VALID, beforeRun: 'not a hook at all' }],

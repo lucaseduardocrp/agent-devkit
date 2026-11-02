@@ -829,7 +829,8 @@ function sourceOf(expression: string): Pick<Assertion, 'source' | 'path'> | unde
   const header =
     /^res\.headers(?:\.([\w-]+)|\[\s*["']([^"']+)["']\s*\])$/.exec(text) ??
     /^res\.getHeader\(\s*["']([^"']+)["']\s*\)$/.exec(text);
-  if (header) return { source: 'header', path: (group(header, 1) || group(header, 2)).toLowerCase() };
+  if (header)
+    return { source: 'header', path: (group(header, 1) || group(header, 2)).toLowerCase() };
   const json = /^res\.body((?:\.[\w$]+|\[\d+\]|\[["'][^"']+["']\])+)$/.exec(text);
   if (json) {
     const path = group(json, 1)
