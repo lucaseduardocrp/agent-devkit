@@ -152,6 +152,8 @@ export async function echoServer(
       response.writeHead(200, [
         'content-type',
         'application/json',
+        'x-content-type-options',
+        'nosniff',
         ...headers.flatMap(([key, value]) => [key, value]),
       ]);
       response.end(payload);

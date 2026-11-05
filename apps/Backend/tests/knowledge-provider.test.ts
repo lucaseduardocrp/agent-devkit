@@ -206,7 +206,7 @@ describe('knowledge synchronization', () => {
     const reconciled = await synchronizeKnowledge(
       {
         name: 'azure',
-        ownsSource: (source) => source.includes('dev.azure.com'),
+        ownsSource: (source) => new URL(source).hostname === 'dev.azure.com',
         listPages: async () => [
           {
             id: '42',
@@ -242,7 +242,7 @@ describe('knowledge synchronization', () => {
     const reconciled = await synchronizeKnowledge(
       {
         name: 'azure',
-        ownsSource: (source) => source.includes('dev.azure.com'),
+        ownsSource: (source) => new URL(source).hostname === 'dev.azure.com',
         listPages: async () => [
           {
             id: '42',
@@ -538,7 +538,7 @@ describe('sync identity transitions', () => {
     const remote = { ...old, id: 'new', content: '# Updated' };
     const provider = {
       name: 'wiki',
-      ownsSource: (source: string) => source.startsWith('https://example.com'),
+      ownsSource: (source: string) => new URL(source).origin === 'https://example.com',
       listPages: async () => [remote],
     };
     const before = await repository.all(context);
