@@ -130,31 +130,61 @@ export function FieldMappingEditor({
       else next[rule.targetFieldId] = value;
       change(next);
     };
+    const required = rule.required ?? field?.required ?? false;
+    // Text inputs follow the destination field type so the browser validates what it can.
+    const inputType =
+      field?.type === 'number' ? 'number' : field?.type === 'date' ? 'date' : 'text';
+    const control = field?.options?.length ? (
+      <Select
+        value={String(current ?? '')}
+        onChange={(event) => update(event.target.value)}
+        containerClassName="mt-1"
+      >
+        <option value="">{fromSource || (pt ? 'Selecione' : 'Select')}</option>
+        {field.options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.name}
+          </option>
+        ))}
+      </Select>
+    ) : field?.type === 'boolean' ? (
+      <Select
+        value={String(current ?? '')}
+        onChange={(event) => update(event.target.value)}
+        containerClassName="mt-1"
+      >
+        <option value="">{fromSource || (pt ? 'Selecione' : 'Select')}</option>
+        <option value="true">{pt ? 'Sim' : 'Yes'}</option>
+        <option value="false">{pt ? 'Não' : 'No'}</option>
+      </Select>
+    ) : (
+      <Input
+        type={inputType}
+        value={String(current ?? '')}
+        placeholder={fromSource}
+        onChange={(event) => update(event.target.value)}
+        className="mt-1"
+      />
+    );
     return (
       <label key={rule.targetFieldId} className="block">
-        {field?.name ?? rule.targetFieldId}{' '}
-        <span className="text-xs text-[var(--text-muted)]">({rule.targetFieldId})</span>
-        {field?.options?.length ? (
-          <Select
-            value={String(current ?? '')}
-            onChange={(event) => update(event.target.value)}
-            containerClassName="mt-1"
-          >
-            <option value="">{fromSource || (pt ? 'Selecione' : 'Select')}</option>
-            {field.options.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name}
-              </option>
-            ))}
-          </Select>
-        ) : (
-          <Input
-            value={String(current ?? '')}
-            placeholder={fromSource}
-            onChange={(event) => update(event.target.value)}
-            className="mt-1"
-          />
-        )}
+        {/* A single truncated line so every field's label takes the same height and the
+            controls line up across columns, however long the field name or id gets. */}
+        <span
+          className="flex items-baseline gap-1 overflow-hidden"
+          title={`${field?.name ?? rule.targetFieldId} (${rule.targetFieldId})`}
+        >
+          <span className="min-w-0 truncate">{field?.name ?? rule.targetFieldId}</span>
+          {required && (
+            <span className="shrink-0 text-red-400" title={pt ? 'Obrigatório' : 'Required'}>
+              *
+            </span>
+          )}
+          <span className="shrink-0 whitespace-nowrap text-xs text-[var(--text-muted)]">
+            ({rule.targetFieldId})
+          </span>
+        </span>
+        {control}
       </label>
     );
   };
@@ -211,7 +241,7 @@ export function FieldMappingEditor({
           </div>
           {selected &&
             (selected.rules.length && onValuesChange ? (
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {selected.rules.map((rule) => fieldInput(rule, onValuesChange))}
               </div>
             ) : selected.rules.length ? (

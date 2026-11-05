@@ -149,6 +149,11 @@ describe('PbiPushDialog field templates', () => {
       expect(api.getPbiPushContract).toHaveBeenCalledWith('item-1', 'azure_devops', {}),
     );
     const area = await within(dialog).findByRole('combobox', { name: /Area path/ });
+    // Nothing is flagged before the person acts; trying to push reveals what is missing.
+    expect(area).toHaveAttribute('aria-invalid', 'false');
+    expect(within(dialog).queryByText('Selecione um valor.')).not.toBeInTheDocument();
+    fireEvent.submit(area.closest('form')!);
+    expect(onSubmit).not.toHaveBeenCalled();
     expect(area).toHaveAttribute('aria-invalid', 'true');
     expect(area).toHaveAttribute('aria-describedby', 'pbi-push-areaPath-hint');
     expect(within(dialog).getByText('Selecione um valor.')).toBeInTheDocument();
@@ -171,7 +176,14 @@ describe('PbiPushDialog field templates', () => {
     const templates = await within(editor).findByRole('combobox', { name: 'Template salvo' });
     fireEvent.change(templates, { target: { value: 'tpl-1' } });
 
-    expect(previewPbiFields).toHaveBeenCalledWith('item-1', 'azure_devops', 'tpl-1', 'Proj', 'Bug');
+    expect(previewPbiFields).toHaveBeenCalledWith(
+      'item-1',
+      'azure_devops',
+      'tpl-1',
+      'Proj',
+      'Bug',
+      undefined,
+    );
     expect(within(dialog).getByText('Validando mapeamento...')).toBeInTheDocument();
     const submit = within(dialog).getByRole('button', { name: 'Fazer push' });
     expect(submit).toHaveProperty('disabled', true);
@@ -201,6 +213,116 @@ describe('PbiPushDialog field templates', () => {
         extra: undefined,
       },
       'tpl-1',
+      undefined,
+    );
+  });
+
+  it('opens with no field flagged and clears the flag once the value is chosen', async () => {
+    const api = client(vi.fn().mockResolvedValue({ definitions: [], values: {} }));
+    const onSubmit = vi.fn();
+    render(
+      <PbiPushDialog
+        apiClient={api as unknown as ApiClient}
+        item={item}
+        providers={[{ providerId: 'azure_devops', settings: {} }]}
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+    const dialog = screen.getByRole('dialog');
+    const area = await within(dialog).findByRole('combobox', { name: /Area path/ });
+    const submit = within(dialog).getByRole('button', { name: 'Fazer push' });
+    // The push stays available: the dialog opens clean, with nothing typed yet.
+    expect(submit).toHaveProperty('disabled', false);
+    for (const field of within(dialog).getAllByRole('combobox'))
+      expect(field).not.toHaveAttribute('aria-invalid', 'true');
+
+    fireEvent.click(submit);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(area).toHaveAttribute('aria-invalid', 'true');
+    expect(submit).toHaveProperty('disabled', true);
+
+    fireEvent.change(area, { target: { value: 'proj\\Web' } });
+    expect(area).toHaveAttribute('aria-invalid', 'false');
+    expect(submit).toHaveProperty('disabled', false);
+    fireEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('fills the template fields in the push and sends them with the values', async () => {
+    const previewPbiFields = vi.fn().mockResolvedValue({ definitions: [], values: {} });
+    const api = client(previewPbiFields);
+    api.getFieldMappingTemplates.mockResolvedValue([
+      {
+        ...template,
+        rules: [
+          { targetFieldId: 'Custom.Activity', source: { kind: 'constant', value: 'Development' } },
+          { targetFieldId: 'Custom.Effort', source: { kind: 'constant', value: null } },
+          { targetFieldId: 'Custom.Risk', source: { kind: 'core', key: 'status' } },
+        ],
+      },
+    ]);
+    api.getPbiFieldCatalog.mockResolvedValue([
+      {
+        id: 'Custom.Activity',
+        name: 'Activity',
+        type: 'single_select',
+        options: [
+          { id: 'Development', name: 'Development' },
+          { id: 'Testing', name: 'Testing' },
+        ],
+      },
+      { id: 'Custom.Effort', name: 'Estimated Hours', type: 'number', required: true },
+      { id: 'Custom.Risk', name: 'Risk', type: 'text' },
+    ]);
+    const onSubmit = vi.fn();
+    render(
+      <PbiPushDialog
+        apiClient={api as unknown as ApiClient}
+        item={item}
+        providers={[{ providerId: 'azure_devops', settings: { project: 'Proj' } }]}
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+    const dialog = screen.getByRole('dialog');
+    const area = await within(dialog).findByRole('combobox', { name: /Area path/ });
+    fireEvent.change(area, { target: { value: 'proj\\Web' } });
+    const editor = await within(dialog).findByRole('region', { name: 'Mapeamento de campos' });
+    fireEvent.change(await within(editor).findByRole('combobox', { name: 'Template salvo' }), {
+      target: { value: 'tpl-1' },
+    });
+
+    // A fixed value becomes a select on its options; the other types become inputs.
+    const activity = await within(editor).findByRole('combobox', { name: /Activity/ });
+    expect((activity as HTMLSelectElement).value).toBe('Development');
+    const hours = within(editor).getByRole('spinbutton', { name: /Estimated Hours \*/ });
+    const risk = within(editor).getByRole('textbox', { name: /Risk/ });
+    // A field filled from the item keeps that source until something is typed.
+    expect(risk).toHaveProperty('placeholder', 'Usar origem: Status');
+
+    fireEvent.change(activity, { target: { value: 'Testing' } });
+    fireEvent.change(hours, { target: { value: '8' } });
+    await waitFor(() =>
+      expect(previewPbiFields).toHaveBeenLastCalledWith(
+        'item-1',
+        'azure_devops',
+        'tpl-1',
+        'Proj',
+        'Bug',
+        { 'Custom.Activity': 'Testing', 'Custom.Effort': '8' },
+      ),
+    );
+
+    const submit = within(dialog).getByRole('button', { name: 'Fazer push' });
+    await waitFor(() => expect(submit).toHaveProperty('disabled', false));
+    fireEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledWith(
+      item,
+      'azure_devops',
+      expect.objectContaining({ areaPath: 'proj\\Web' }),
+      'tpl-1',
+      { 'Custom.Activity': 'Testing', 'Custom.Effort': '8' },
     );
   });
 

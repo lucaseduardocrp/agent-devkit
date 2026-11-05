@@ -79,9 +79,10 @@ export function Modal({
   return createPortal(
     <div
       data-modal-surface
-      // items-start + m-auto instead of items-center: a centered flex child taller than the
-      // viewport has its top clipped and unreachable by scrolling.
-      className={`fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm ${className}`}
+      // The section below caps itself at max-h-[calc(100vh-2rem)], so it never exceeds the
+      // backdrop's available space; no outer scroll is needed, and items-center keeps shorter
+      // modals vertically centered instead of pinned to the top.
+      className={`fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm ${className}`}
       onMouseDown={(event) => {
         if (closeOnBackdrop && event.target === event.currentTarget) onClose?.();
       }}

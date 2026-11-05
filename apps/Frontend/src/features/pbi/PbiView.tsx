@@ -29,6 +29,7 @@ import type { WorkspaceMember } from '../workspaces/workspace-types.js';
 import { HistoryViewer } from '../audit/HistoryViewer.js';
 import { usePermissions } from '../workspaces/permissions.js';
 import { PbiPushDialog } from './PbiPushDialog.js';
+import type { FieldValue } from '../field-mapping/types.js';
 import { PbiLinks } from './PbiLinks.js';
 import { AttachmentPanel } from '../shared/AttachmentPanel.js';
 import {
@@ -1134,6 +1135,7 @@ export function PbiView({
     provider: PbiProviderId,
     fields: Record<string, string>,
     templateId?: string,
+    fieldValues?: Readonly<Record<string, FieldValue>>,
   ) => {
     setPushItem(null);
     setPushingIds((current) => new Set(current).add(item.id));
@@ -1142,6 +1144,7 @@ export function PbiView({
         providerId: provider,
         fields,
         ...(templateId ? { templateId } : {}),
+        ...(templateId && fieldValues ? { fieldValues } : {}),
       }),
     )
       .then(

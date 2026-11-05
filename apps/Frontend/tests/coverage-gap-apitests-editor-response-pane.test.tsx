@@ -179,6 +179,24 @@ describe('ResponsePane', () => {
     expect(screen.getByText('Sem asserções.')).toBeTruthy();
   });
 
+  it('treats a response missing its headers object as having none, for the HTML check', () => {
+    render(
+      <ResponsePane
+        entries={[
+          entry({
+            result: result({
+              response: { bodyPreview: 'plain' } as unknown as RequestResult['response'],
+            }),
+          }),
+        ]}
+        target="remote"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Código' }));
+    expect(screen.queryByTestId('html-preview')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('response-body')).getByText('plain')).toBeTruthy();
+  });
+
   it('shows when there was no response, with the error the run recorded', () => {
     render(
       <ResponsePane

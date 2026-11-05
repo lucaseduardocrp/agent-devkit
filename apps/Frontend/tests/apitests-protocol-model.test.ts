@@ -348,6 +348,18 @@ describe('tokenizer and formatter edges', () => {
     expect(formatGraphql('')).toBe('');
   });
 
+  it('treats leading and trailing whitespace as having no neighbor to compare against', () => {
+    // Leading/trailing whitespace tokens scan past the start/end of the document without
+    // finding anything significant, so the neighbor comes back empty either way.
+    expect(formatGraphql(' { a } ')).toBe('{\n  a\n}');
+  });
+
+  it('inserts the space a field missed after a closing parenthesis', () => {
+    // No whitespace token runs between `)` and the next field, so the general case has to
+    // notice the parenthesis itself and add the separator.
+    expect(formatGraphql('{ a(id: 1)b }')).toBe('{\n  a(id: 1) b\n}');
+  });
+
   it('breaks the lines of a selection set written with commas', () => {
     expect(formatGraphql('{ a, b }')).toBe('{\n  a\n  b\n}');
     expect(formatGraphql('query A { a } query B { b }')).toBe(

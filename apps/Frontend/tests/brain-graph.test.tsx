@@ -2,12 +2,10 @@ import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { BrainGraph } from '../src/features/brain/BrainGraph.js';
 import {
+  ALPHA_MIN,
   buildWikilinkEdges,
   createBrainGraphState,
-  shouldStopGraphRebound,
-  simulateBrainGraph,
-  type BrainGraphIndexedEdge,
-  type BrainGraphNode,
+  stepBrainGraph,
 } from '../src/features/brain/brain-graph-model.js';
 import type { KnowledgeDocumentDto } from '../src/lib/api-client.js';
 
@@ -23,7 +21,7 @@ const document = (id: string, title: string, content = ''): KnowledgeDocumentDto
   isCustom: true,
 });
 
-describe('BrainGraph', () => {
+describe('brain graph model', () => {
   it('includes saved Azure links, deduplicates reverse and Markdown links, and ignores missing documents', () => {
     const azure = {
       ...document('42', 'Azure'),
@@ -66,30 +64,53 @@ describe('BrainGraph', () => {
     ]);
   });
 
-  it('applies the reference force, speed cap, spring, and boundary bounce', () => {
-    const nodes: BrainGraphNode[] = [
-      { id: 'a', label: 'A', x: -20, y: -20, vx: -20, vy: -20, radius: 6 },
-      { id: 'b', label: 'B', x: 1020, y: 620, vx: 20, vy: 20, radius: 6 },
-    ];
-    const edges: BrainGraphIndexedEdge[] = [
-      { sourceIndex: 0, targetIndex: 1, sourcePageId: 'a', targetPageId: 'b' },
-    ];
-
-    simulateBrainGraph(nodes, edges, null);
-    expect(nodes[0]!.x).toBe(14);
-    expect(nodes[0]!.y).toBe(14);
-    expect(nodes[1]!.x).toBe(986);
-    expect(nodes[1]!.y).toBe(586);
-    simulateBrainGraph(nodes, edges, nodes[0]!);
-    simulateBrainGraph(nodes, edges, nodes[1]!);
-    simulateBrainGraph(nodes, [{ ...edges[0]!, sourceIndex: 8 }], null);
-    expect(nodes.every((node) => Number.isFinite(node.x + node.y))).toBe(true);
-    expect(shouldStopGraphRebound(100, 1, 1)).toBe(false);
-    expect(shouldStopGraphRebound(180, 0.2, 0.05)).toBe(true);
-    expect(shouldStopGraphRebound(700, 1, 1)).toBe(true);
+  it('sizes nodes by connections and pre-settles the layout without overlap', () => {
+    const hub = document('hub', 'Hub', '[[A]] [[B]] [[C]] [[D]]');
+    const leaves = ['A', 'B', 'C', 'D'].map((name) => document(name, name));
+    const state = createBrainGraphState([hub, ...leaves, document('lonely', 'Lonely')]);
+    const byId = new Map(state.nodes.map((node) => [node.id, node]));
+    expect(byId.get('hub')!.degree).toBe(4);
+    expect(byId.get('hub')!.radius).toBeGreaterThan(byId.get('A')!.radius);
+    expect(byId.get('lonely')!.radius).toBe(byId.get('A')!.radius - 1.3);
+    expect(state.alpha).toBeLessThan(1);
+    expect(state.nodes.every((node) => Number.isFinite(node.x + node.y))).toBe(true);
+    const hubNode = byId.get('hub')!;
+    const leaf = byId.get('A')!;
+    expect(Math.hypot(hubNode.x - leaf.x, hubNode.y - leaf.y)).toBeGreaterThan(20);
   });
 
-  it('animates dragging, release rebound, camera pan, and centering', () => {
+  it('cools down, keeps dragged nodes pinned and survives degenerate positions', () => {
+    const a = document('a', 'A', '[[B]]');
+    const b = document('b', 'B');
+    const state = createBrainGraphState([a, b]);
+    const [welcome, first, second] = state.nodes;
+
+    // Far apart nodes skip repulsion, coincident linked nodes do not blow up.
+    welcome!.x = -5000;
+    first!.x = second!.x = 500;
+    first!.y = second!.y = 300;
+    first!.vx = first!.vy = second!.vx = second!.vy = 0;
+    state.dragging = welcome!;
+    welcome!.vx = 9;
+    expect(stepBrainGraph(state)).toBe(true);
+    expect(welcome!.vx).toBe(0);
+    expect(welcome!.x).toBe(-5000);
+    expect(state.nodes.every((node) => Number.isFinite(node.x + node.y))).toBe(true);
+
+    state.dragging = null;
+    state.alphaTarget = 0.3;
+    for (let tick = 0; tick < 50; tick += 1) stepBrainGraph(state);
+    expect(state.alpha).toBeGreaterThan(0.2);
+    state.alphaTarget = 0;
+    let ticks = 0;
+    while (stepBrainGraph(state)) ticks += 1;
+    expect(ticks).toBeGreaterThan(10);
+    expect(state.alpha).toBeLessThan(ALPHA_MIN);
+  });
+});
+
+describe('BrainGraph', () => {
+  it('lays out, highlights on hover, drags, pans, zooms and opens documents', () => {
     const context = {
       arc: vi.fn(),
       beginPath: vi.fn(),
@@ -107,31 +128,46 @@ describe('BrainGraph', () => {
       translate: vi.fn(),
       fillStyle: '',
       font: '',
+      globalAlpha: 1,
       lineWidth: 1,
       strokeStyle: '',
       textAlign: 'start',
+      textBaseline: 'alphabetic',
     } as unknown as CanvasRenderingContext2D;
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context);
     const frames = new Map<number, FrameRequestCallback>();
     let nextFrameId = 1;
-    const requestFrame = vi
-      .spyOn(window, 'requestAnimationFrame')
-      .mockImplementation((callback) => {
-        const id = nextFrameId++;
-        frames.set(id, callback);
-        return id;
-      });
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      const id = nextFrameId++;
+      frames.set(id, callback);
+      return id;
+    });
     const cancelFrame = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
       frames.delete(id);
     });
+    let clock = 0;
+    const flush = (limit = 3000) => {
+      for (let count = 0; count < limit && frames.size > 0; count += 1) {
+        const [id, callback] = frames.entries().next().value as [number, FrameRequestCallback];
+        frames.delete(id);
+        clock += 16;
+        callback(clock);
+      }
+    };
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 0 });
-    const first = document('first', 'First document with a deliberately long title', '[[Second]]');
+
+    const first = document(
+      'first',
+      'First document with a deliberately long title that must be truncated',
+      '[[Second]]',
+    );
     const second = document('second', 'Second');
+    const third = document('third', 'Third');
     const onOpenDocument = vi.fn();
     const onOpenWelcome = vi.fn();
     const view = render(
       <BrainGraph
-        documents={[first, second]}
+        documents={[first, second, third]}
         onOpenDocument={onOpenDocument}
         onOpenWelcome={onOpenWelcome}
       />,
@@ -148,12 +184,10 @@ describe('BrainGraph', () => {
       y: 0,
       toJSON: () => ({}),
     });
-    const setPointerCapture = vi.fn();
-    const releasePointerCapture = vi.fn();
     Object.assign(canvas, {
-      setPointerCapture,
+      setPointerCapture: vi.fn(),
       hasPointerCapture: () => true,
-      releasePointerCapture,
+      releasePointerCapture: vi.fn(),
     });
     const pointer = (
       type: string,
@@ -166,92 +200,112 @@ describe('BrainGraph', () => {
       Object.assign(event, { pointerId, clientX, clientY, button });
       return event;
     };
-
-    fireEvent(canvas, pointer('pointerdown', 9, 500, 300));
-    fireEvent(canvas, pointer('pointerup', 9, 500, 300));
-    expect(onOpenWelcome).toHaveBeenCalledOnce();
-    requestFrame.mockClear();
-    cancelFrame.mockClear();
-    fireEvent(canvas, pointer('pointermove', 1, 500, 100));
-    fireEvent(canvas, pointer('pointermove', 1, 500, 100));
-    fireEvent(canvas, pointer('pointermove', 1, 500, 500));
-    fireEvent(canvas, pointer('pointermove', 1, 20, 20));
-    fireEvent(canvas, pointer('pointerdown', 1, 500, 100, 2));
-    fireEvent(canvas, pointer('pointerdown', 1, 20, 20));
-    expect(requestFrame).not.toHaveBeenCalled();
-
-    fireEvent(canvas, pointer('pointerdown', 1, 500, 100));
-    expect(requestFrame).toHaveBeenCalledTimes(1);
-    expect(setPointerCapture).toHaveBeenCalledWith(1);
-    const firstFrameEntry = frames.entries().next().value as [number, FrameRequestCallback];
-    frames.delete(firstFrameEntry[0]);
-    const firstFrame = firstFrameEntry[1];
-    firstFrame(0);
-    expect(requestFrame).toHaveBeenCalledTimes(2);
-    const secondFrameEntry = [...frames.entries()].at(-1)!;
-    frames.delete(secondFrameEntry[0]);
-    secondFrameEntry[1](1);
-    const thirdFrameEntry = [...frames.entries()].at(-1)!;
-    frames.delete(thirdFrameEntry[0]);
-    thirdFrameEntry[1](100);
-    const stoppedFrame = [...frames.values()].at(-1)!;
-    fireEvent(canvas, pointer('pointermove', 2, 300, 250));
-    fireEvent(canvas, pointer('pointerup', 2, 300, 250));
-    fireEvent(canvas, pointer('pointermove', 1, 501, 101));
-    fireEvent(canvas, pointer('pointermove', 1, 300, 250));
-    fireEvent(canvas, pointer('pointerup', 1, 300, 250));
-    expect(releasePointerCapture).toHaveBeenCalledWith(1);
-    expect(onOpenDocument).not.toHaveBeenCalled();
-    const stoppedFrameId = [...frames.entries()].find(
-      ([, callback]) => callback === stoppedFrame,
-    )![0];
-    frames.delete(stoppedFrameId);
-    stoppedFrame(116);
+    // The simulation runs on animation frames until it cools down.
     expect(frames.size).toBeGreaterThan(0);
-    for (let index = 1; index <= 32 && frames.size > 0; index += 1) {
-      const reboundFrame = [...frames.entries()].at(-1)!;
-      frames.delete(reboundFrame[0]);
-      reboundFrame[1](116 + index * 25);
-    }
+    flush();
     expect(frames.size).toBe(0);
 
-    fireEvent(canvas, pointer('pointerdown', 3, 300, 250));
-    fireEvent(canvas, pointer('pointerup', 3, 300, 250));
-    expect(onOpenDocument).toHaveBeenCalledWith(first);
-    fireEvent(canvas, pointer('pointerdown', 4, 300, 250));
-    const cancelledDragFrame = [...frames.values()].at(-1)!;
-    fireEvent(canvas, pointer('pointercancel', 4, 300, 250));
-    cancelledDragFrame(900);
-    expect(onOpenDocument).toHaveBeenCalledTimes(1);
-    Object.assign(canvas, { hasPointerCapture: () => false });
+    // Reads node screen positions back from the last painted frame.
+    const nodePositions = () => {
+      fireEvent.click(view.getByTestId('graph-zoom-in'));
+      const [tx, ty] = vi.mocked(context.translate).mock.calls.at(-1)!;
+      const [scale] = vi.mocked(context.scale).mock.calls.at(-1)!;
+      return vi
+        .mocked(context.arc)
+        .mock.calls.slice(-4)
+        .map(([x, y]) => ({ x: tx + x * scale, y: ty + y * scale }));
+    };
+    const [welcomeAt, firstAt, secondAt] = nodePositions();
+    expect(
+      vi.mocked(context.fillText).mock.calls.some(([text]) => String(text).endsWith('…')),
+    ).toBe(true);
 
+    // Hovering focuses a node and its neighbours; leaving restores the graph.
+    vi.mocked(context.stroke).mockClear();
+    fireEvent(canvas, pointer('pointermove', 5, firstAt!.x, firstAt!.y));
+    expect(canvas.style.cursor).toBe('pointer');
+    expect(context.stroke).toHaveBeenCalledTimes(2);
+    fireEvent(canvas, pointer('pointermove', 5, firstAt!.x, firstAt!.y));
+    expect(context.stroke).toHaveBeenCalledTimes(2);
+    fireEvent(canvas, pointer('pointermove', 5, secondAt!.x, secondAt!.y));
+    fireEvent(canvas, pointer('pointermove', 5, 3, 3));
+    expect(canvas.style.cursor).toBe('');
+
+    // Clicks open documents / the welcome note; a tiny jitter still counts as a click.
+    fireEvent(canvas, pointer('pointerdown', 1, welcomeAt!.x, welcomeAt!.y, 2));
+    fireEvent(canvas, pointer('pointerdown', 1, welcomeAt!.x, welcomeAt!.y));
+    fireEvent(canvas, pointer('pointerup', 1, welcomeAt!.x, welcomeAt!.y));
+    expect(onOpenWelcome).toHaveBeenCalledOnce();
+    fireEvent(canvas, pointer('pointerdown', 1, firstAt!.x, firstAt!.y));
+    fireEvent(canvas, pointer('pointermove', 1, firstAt!.x + 1, firstAt!.y));
+    fireEvent(canvas, pointer('pointerup', 1, firstAt!.x + 1, firstAt!.y));
+    expect(onOpenDocument).toHaveBeenCalledWith(first);
+    fireEvent(canvas, pointer('pointerup', 1, 0, 0));
+
+    // Dragging reheats the layout; releasing lets it settle without opening the note.
+    fireEvent(canvas, pointer('pointerdown', 2, secondAt!.x, secondAt!.y));
+    fireEvent(canvas, pointer('pointermove', 99, 400, 400));
+    fireEvent(canvas, pointer('pointermove', 2, secondAt!.x + 120, secondAt!.y + 80));
+    expect(frames.size).toBeGreaterThan(0);
+    fireEvent(canvas, pointer('pointermove', 2, secondAt!.x + 140, secondAt!.y + 90));
+    for (let index = 0; index < 5; index += 1) flush(1);
+    fireEvent(canvas, pointer('pointerup', 2, secondAt!.x + 140, secondAt!.y + 90));
+    flush();
+    expect(onOpenDocument).toHaveBeenCalledTimes(1);
+
+    // A cancelled drag, and a cancelled press without moving, never open anything.
+    const [, , movedSecond] = nodePositions();
+    fireEvent(canvas, pointer('pointerdown', 3, movedSecond!.x, movedSecond!.y));
+    fireEvent(canvas, pointer('pointermove', 3, movedSecond!.x + 30, movedSecond!.y + 30));
+    fireEvent(canvas, pointer('pointercancel', 3, 0, 0));
+    flush();
+    fireEvent(canvas, pointer('pointerdown', 4, welcomeAt!.x, welcomeAt!.y));
+    fireEvent(canvas, pointer('pointercancel', 4, 0, 0));
+    flush();
+    expect(onOpenDocument).toHaveBeenCalledTimes(1);
+    expect(onOpenWelcome).toHaveBeenCalledTimes(1);
+    Object.assign(canvas, { hasPointerCapture: () => false });
+    fireEvent(canvas, pointer('pointerdown', 5, 3, 3));
+    fireEvent(canvas, pointer('pointerup', 5, 3, 3));
+
+    // Pan, wheel zoom, buttons and recentering.
+    fireEvent(canvas, pointer('pointerdown', 6, 3, 3));
+    fireEvent(canvas, pointer('pointermove', 6, 60, 40));
+    fireEvent(canvas, pointer('pointerup', 6, 60, 40));
+    fireEvent.wheel(canvas, { deltaY: -100, clientX: 400, clientY: 200 });
+    fireEvent.wheel(canvas, { deltaY: 100, clientX: 400, clientY: 200 });
+    fireEvent.click(view.getByTestId('graph-zoom-out'));
+    fireEvent.click(view.getByTestId('graph-zoom-in'));
+    expect(view.getByTestId('graph-zoom-reset')).toHaveTextContent('%');
+    fireEvent.click(view.getByTestId('graph-zoom-reset'));
+    fireEvent.click(view.getByTestId('center-graph'));
+    flush();
+    fireEvent.click(view.getByTestId('center-graph'));
+    fireEvent(canvas, pointer('pointerdown', 7, 3, 3));
+    fireEvent(canvas, pointer('pointerup', 7, 3, 3));
+    flush();
+
+    fireEvent.wheel(canvas, { deltaY: 5000, clientX: 400, clientY: 200 });
     fireEvent.click(view.getByTestId('graph-node-welcome'));
     fireEvent.click(view.getByTestId('graph-node-second'));
     expect(onOpenWelcome).toHaveBeenCalledTimes(2);
     expect(onOpenDocument).toHaveBeenCalledWith(second);
 
-    fireEvent(canvas, pointer('pointerdown', 7, 20, 20));
-    fireEvent(canvas, pointer('pointermove', 7, 80, 70));
-    fireEvent(canvas, pointer('pointerup', 7, 80, 70));
-    fireEvent.click(view.getByTestId('center-graph'));
-    fireEvent.click(view.getByTestId('graph-zoom-in'));
-    expect(view.getByTestId('graph-zoom-reset')).toHaveTextContent('%');
-    fireEvent.click(view.getByTestId('graph-zoom-out'));
-    fireEvent.wheel(canvas, { deltaY: -100, clientX: 400, clientY: 200 });
-    fireEvent.wheel(canvas, { deltaY: 100, clientX: 400, clientY: 200 });
-    fireEvent.click(view.getByTestId('graph-zoom-reset'));
-    const runLatestFrame = (timestamp: number) => {
-      const entry = [...frames.entries()].at(-1)!;
-      frames.delete(entry[0]);
-      entry[1](timestamp);
-    };
-    runLatestFrame(0);
-    runLatestFrame(140);
-    runLatestFrame(280);
-    fireEvent(canvas, pointer('pointerdown', 8, 20, 20));
-    fireEvent(canvas, pointer('pointermove', 8, 40, 40));
-    fireEvent(canvas, pointer('pointerup', 8, 40, 40));
-    fireEvent.click(view.getByTestId('center-graph'));
+    view.rerender(
+      <BrainGraph
+        documents={[second]}
+        onOpenDocument={onOpenDocument}
+        onOpenWelcome={onOpenWelcome}
+      />,
+    );
+    view.rerender(
+      <BrainGraph
+        documents={[third]}
+        onOpenDocument={onOpenDocument}
+        onOpenWelcome={onOpenWelcome}
+      />,
+    );
+    flush();
     view.unmount();
     expect(cancelFrame).toHaveBeenCalled();
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });

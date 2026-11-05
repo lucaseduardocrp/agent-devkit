@@ -408,11 +408,14 @@ describe('CollectionSettingsPane', () => {
     const timeout = within(network).getByLabelText('Timeout (ms)');
     fireEvent.change(timeout, { target: { value: '5000' } });
     expect(last(onChange).settings?.timeoutMs).toBe(5000);
-    // A negative timeout is read as none at all.
-    fireEvent.change(timeout, { target: { value: '-5' } });
-    expect(last(onChange).settings?.timeoutMs).toBe(0);
     // A literal zero reads as the number 0, not as "no timeout" (that is an empty field).
     fireEvent.change(timeout, { target: { value: '0' } });
+    expect(last(onChange).settings?.timeoutMs).toBe(0);
+    // A negative timeout is read as none at all. (Goes through '7' first so the field's
+    // displayed value actually changes from '0' before landing on '-5', which also computes
+    // to 0 - otherwise the no-op re-render never fires a change event at all.)
+    fireEvent.change(timeout, { target: { value: '7' } });
+    fireEvent.change(timeout, { target: { value: '-5' } });
     expect(last(onChange).settings?.timeoutMs).toBe(0);
     fireEvent.change(timeout, { target: { value: '' } });
     fireEvent.click(within(network).getByLabelText(/Seguir redirecionamentos/));

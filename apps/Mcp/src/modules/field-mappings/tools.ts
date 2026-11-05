@@ -21,6 +21,13 @@ const fieldValue = z.union([
   z.array(z.string().max(500)).max(100),
   z.null(),
 ]);
+/** Values filled in for the fields of a template at push time, keyed by destination field id. */
+export const templateFieldValues = z
+  .record(z.string().trim().min(1).max(200), fieldValue)
+  .optional()
+  .describe(
+    'Values for the template fields in this push, keyed by provider field id (see pbi_field_catalog). They override the template rule for that field; fields left out keep the rule.',
+  );
 const templateInput = {
   name: z.string().trim().min(1).max(200).describe('Template name, e.g. "Bugs → Azure DevOps".'),
   entityType,
@@ -161,6 +168,7 @@ export const pbiFieldsModule: McpModule = {
         templateId,
         scope: z.string().max(200).optional(),
         itemType: z.string().max(100).optional(),
+        fieldValues: templateFieldValues,
       },
       run: async ({ itemId, ...body }, { api }) =>
         json(

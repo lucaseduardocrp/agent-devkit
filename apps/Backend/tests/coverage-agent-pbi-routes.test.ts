@@ -79,7 +79,15 @@ describe('PBI field preview route', () => {
       .send({ providerId: 'azure_devops', templateId: TEMPLATE_ID })
       .expect(200);
     expect(response.body).toEqual({ definitions: fields, values: { cf_1: 3 } });
-    expect(previewFields).toHaveBeenCalledWith('ws', ITEM_ID, 'azure_devops', TEMPLATE_ID, '', '');
+    expect(previewFields).toHaveBeenCalledWith(
+      'ws',
+      ITEM_ID,
+      'azure_devops',
+      TEMPLATE_ID,
+      '',
+      '',
+      {},
+    );
   });
 
   it('passes the chosen destination and forwards validation and service errors', async () => {
@@ -101,7 +109,76 @@ describe('PBI field preview route', () => {
           .expect(400)
       ).body.code,
     ).toBe('FIELD_MAPPING_INVALID');
-    expect(previewFields).toHaveBeenCalledWith('ws', ITEM_ID, 'jira', TEMPLATE_ID, 'KEY', 'Bug');
+    expect(previewFields).toHaveBeenCalledWith(
+      'ws',
+      ITEM_ID,
+      'jira',
+      TEMPLATE_ID,
+      'KEY',
+      'Bug',
+      {},
+    );
+  });
+
+  it('forwards the values filled in for the template fields', async () => {
+    const previewFields = vi.fn(() =>
+      Promise.resolve({ definitions: fields, values: { cf_1: 8 } }),
+    );
+    const app = build({ previewFields });
+    await request(app)
+      .post(`/pbi/items/${ITEM_ID}/field-preview`)
+      .send({
+        providerId: 'azure_devops',
+        templateId: TEMPLATE_ID,
+        fieldValues: { cf_1: 8, 'Custom.Tags': ['web'] },
+      })
+      .expect(200);
+    expect(previewFields).toHaveBeenCalledWith('ws', ITEM_ID, 'azure_devops', TEMPLATE_ID, '', '', {
+      cf_1: 8,
+      'Custom.Tags': ['web'],
+    });
+  });
+});
+
+describe('PBI push route', () => {
+  const item = { id: ITEM_ID, title: 'Checkout', links: [], sourceData: {} };
+  it('pushes the filled template fields with the contract values', async () => {
+    const push = vi.fn(() => Promise.resolve({ item, warnings: [] }));
+    const app = build({ get: vi.fn(() => Promise.resolve(item)), push });
+    await request(app)
+      .post(`/pbi/items/${ITEM_ID}/push`)
+      .send({
+        providerId: 'azure_devops',
+        fields: { workItemType: 'Task' },
+        templateId: TEMPLATE_ID,
+        fieldValues: { cf_1: 8 },
+      })
+      .expect(200);
+    expect(push).toHaveBeenCalledWith(
+      'ws',
+      ITEM_ID,
+      {
+        providerId: 'azure_devops',
+        fields: { workItemType: 'Task' },
+        templateId: TEMPLATE_ID,
+        fieldValues: { cf_1: 8 },
+      },
+      null,
+    );
+  });
+
+  it('rejects filled fields without a template', async () => {
+    const push = vi.fn(() => Promise.resolve({ item, warnings: [] }));
+    const app = build({ get: vi.fn(() => Promise.resolve(item)), push });
+    expect(
+      (
+        await request(app)
+          .post(`/pbi/items/${ITEM_ID}/push`)
+          .send({ providerId: 'azure_devops', fieldValues: { cf_1: 8 } })
+          .expect(400)
+      ).body.code,
+    ).toBe('VALIDATION_ERROR');
+    expect(push).not.toHaveBeenCalled();
   });
 });
 

@@ -35,7 +35,7 @@ const collection: ApiCollection = {
   auth: { type: 'none' },
   source: { kind: 'manual' },
   updatedAt: '',
-  personalSecrets: ['var:password'],
+  personalSecrets: ['var:password', 'auth:f1:token'],
   settings: { presets: { kind: 'graphql', baseUrl: '{{api}}' } },
   items: [
     {
@@ -55,6 +55,7 @@ const collection: ApiCollection = {
       id: 'f1',
       type: 'folder',
       name: 'Orders',
+      auth: { type: 'bearer', token: '' },
       items: [
         {
           id: 'svc',
@@ -279,6 +280,24 @@ describe('IntegrationTestsView workbench', () => {
     fireEvent.click(await view.findByRole('menuitem', { name: 'Configurações' }));
     const pane = await view.findByTestId('folder-settings');
     expect(within(pane).queryByRole('button', { name: /Adicionar/ })).toBeNull();
+  });
+
+  it('clears a personal secret of a folder auth field', async () => {
+    const api = client();
+    const { view } = mount(api);
+    await view.findByTestId('request-pane-stub');
+    fireEvent.click(view.getByRole('button', { name: 'Ações de Orders' }));
+    fireEvent.click(await view.findByRole('menuitem', { name: 'Configurações' }));
+    const pane = await view.findByTestId('folder-settings');
+    fireEvent.click(within(pane).getByRole('tab', { name: /Auth/ }));
+    fireEvent.click(within(pane).getByTestId('clear-personal'));
+    await waitFor(() =>
+      expect(api.clearPersonalSecret).toHaveBeenCalledWith({
+        scope: 'collection',
+        scopeId: 'c1',
+        ref: 'auth:f1:token',
+      }),
+    );
   });
 
   it('clears a personal secret of the collection and suggests runtime variables', async () => {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
@@ -8,6 +8,33 @@ import { Select } from '../../components/ui/select.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import type { TranslationKey } from '../../lib/i18n/index.js';
+import { AgentWorkflowCanvas, type WorkflowNodeView } from './AgentWorkflowCanvas.js';
+import { AgentWorkflowNodeInspector } from './AgentWorkflowNodeInspector.js';
+import { toolsetLabels } from './workflow-labels.js';
+import {
+  ADDABLE_NODE_KINDS,
+  addNode,
+  applyGraph,
+  connectNodes,
+  countApprovalGates,
+  disconnectEdge,
+  findChainTail,
+  findNode,
+  incompleteNodes,
+  moveNode,
+  newWorkflowId,
+  normalizeGraph,
+  removeNode,
+  updateNode,
+  WORKFLOW_PRODUCT_EVENTS,
+  WORKFLOW_TRIGGER_NODE_ID,
+  type WorkflowGraph,
+  type WorkflowNode,
+  type WorkflowNodeKind,
+  type WorkflowPort,
+  type WorkflowProductEvent,
+  type WorkflowTriggerKind,
+} from './workflow-graph.js';
 import type {
   AgentRole,
   AgentWorkflowDto,
@@ -44,38 +71,66 @@ const unassignedVisual = {
   className: 'bg-[var(--surface-1)] text-[var(--text-secondary)]',
 };
 
-/** Four nodes per row, so the flow snakes down instead of scrolling sideways forever. */
-const COLUMNS = 4;
-/** Node width: the row minus its three 56px connectors, split evenly. */
-const NODE_WIDTH = 'calc((100% - 168px) / 4)';
+/** Rule card width: the row minus its three 56px gaps, split evenly. */
+const RULE_WIDTH = 'calc((100% - 168px) / 4)';
 
-/** The modules a rule can cover, in the order the inspector lists them. */
-const toolsetLabels: Record<AgentWorkflowToolset, TranslationKey> = {
-  all: 'agents.workflowModuleAll',
-  agents: 'agents.workflowModuleAgents',
-  integrations: 'agents.workflowModuleIntegrations',
-  brain: 'agents.workflowModuleBrain',
-  issues: 'agents.workflowModuleIssues',
-  pbi: 'agents.workflowModulePbi',
-  spec: 'agents.workflowModuleSpec',
-  testplans: 'agents.workflowModuleTestPlans',
-  design: 'agents.workflowModuleDesign',
-  e2e: 'agents.workflowModuleE2e',
-  releasenotes: 'agents.workflowModuleReleaseNotes',
-  integrationtests: 'agents.workflowModuleIntegrationTests',
-  loadtests: 'agents.workflowModuleLoadTests',
-  audit: 'agents.workflowModuleAudit',
-  workspaces: 'agents.workflowModuleWorkspaces',
+/** The palette entry of each node kind the canvas can add. */
+const nodeKindVisuals: Record<
+  WorkflowNodeKind,
+  { readonly icon: string; readonly className: string; readonly label: TranslationKey }
+> = {
+  trigger: {
+    icon: 'ti-bolt-filled',
+    className: 'bg-[var(--fill-warning)]/15 text-[var(--text-warning)]',
+    label: 'agents.workflowTriggerNode',
+  },
+  step: {
+    icon: 'ti-bolt',
+    className: 'bg-amber-500/15 text-amber-300',
+    label: 'agents.addWorkflowStep',
+  },
+  approval: {
+    icon: 'ti-user-check',
+    className: 'bg-[var(--fill-accent)]/15 text-[var(--fill-accent)]',
+    label: 'agents.workflowApprovalNode',
+  },
+  action: {
+    icon: 'ti-plug-connected',
+    className: 'bg-[var(--fill-success)]/15 text-[var(--text-success)]',
+    label: 'agents.workflowActionNode',
+  },
+  condition: {
+    icon: 'ti-git-branch',
+    className: 'bg-[var(--fill-pro)]/15 text-[var(--text-pro)]',
+    label: 'agents.workflowConditionNode',
+  },
+  delay: {
+    icon: 'ti-clock-pause',
+    className: 'bg-[var(--surface-1)] text-[var(--text-secondary)]',
+    label: 'agents.workflowDelayNode',
+  },
+};
+
+const triggerKinds: readonly WorkflowTriggerKind[] = [
+  'issue-assigned',
+  'product-event',
+  'schedule',
+];
+
+const triggerLabels: Record<WorkflowTriggerKind, TranslationKey> = {
+  'issue-assigned': 'agents.workflowTriggerIssueAssigned',
+  'product-event': 'agents.workflowTriggerProductEvent',
+  schedule: 'agents.workflowTriggerSchedule',
+};
+
+const productEventLabels: Record<WorkflowProductEvent, TranslationKey> = {
+  'pbi.created': 'agents.workflowEventPbiCreated',
+  'pbi.moved': 'agents.workflowEventPbiMoved',
+  'spec.published': 'agents.workflowEventSpecPublished',
+  'issue.commented': 'agents.workflowEventIssueCommented',
 };
 
 const padNumber = (value: number) => (value < 10 ? `0${value}` : String(value));
-
-function newId(prefix: string): string {
-  return (
-    globalThis.crypto?.randomUUID?.() ??
-    `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  );
-}
 
 /** The pill switch of the header and of the approval rows. */
 function Switch({
@@ -115,44 +170,10 @@ function Switch({
   );
 }
 
-/** The approval gate on a connector: on means the run pauses after the previous step. */
-function GateButton({
-  on,
-  label,
-  disabled,
-  onToggle,
-  className,
-}: {
-  readonly on: boolean;
-  readonly label: string;
-  readonly disabled?: boolean;
-  readonly onToggle: () => void;
-  readonly className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={on}
-      disabled={disabled}
-      onClick={onToggle}
-      className={cn(
-        'absolute flex h-7 w-7 items-center justify-center rounded-full border text-xs transition-colors disabled:cursor-not-allowed',
-        on
-          ? 'border-[var(--fill-accent)] bg-[var(--fill-accent)] text-white'
-          : 'border-[var(--border)] bg-[var(--surface-1)] text-[var(--text-muted)] hover:border-[var(--fill-accent)] hover:text-[var(--text-primary)]',
-        className,
-      )}
-    >
-      <i className="ti ti-user-check text-sm" aria-hidden="true" />
-    </button>
-  );
-}
-
 /**
- * The workflow as a flow board: a settings node, the steps in order, and an add card, joined by
- * connectors whose circles turn the approval gates on and off. A node opens in the inspector.
+ * The workflow as a free flow canvas: a settings node, the steps, and the approval nodes, each
+ * sitting where it was dropped and wired to as many others as the flow needs. A click on a node
+ * opens it in the inspector; a step whose output reaches an approval node pauses the run.
  */
 export function AgentWorkflowBoard({
   workflow,
@@ -167,12 +188,16 @@ export function AgentWorkflowBoard({
 }: AgentWorkflowBoardProps): React.JSX.Element {
   const { t } = useI18n();
   const [openNode, setOpenNode] = useState<string | null>(null);
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [overId, setOverId] = useState<string | null>(null);
 
   const steps = workflow.steps;
   const rules = workflow.rules;
-  const gateCount = steps.filter((step) => step.reviewRequired).length;
+  const gateCount = countApprovalGates(steps);
+  /** The canvas as stored, repaired against the steps the workflow actually has. */
+  const graph = useMemo(() => normalizeGraph(workflow), [workflow]);
+
+  /** Every canvas change re-derives the step order and the approval gates from the connections. */
+  const commitGraph = (next: WorkflowGraph, base: AgentWorkflowDto = workflow) =>
+    onChange(applyGraph(base, next));
 
   const updateStep = (stepId: string, patch: Partial<AgentWorkflowStepDto>) =>
     onChange({
@@ -180,25 +205,52 @@ export function AgentWorkflowBoard({
       steps: steps.map((step) => (step.id === stepId ? { ...step, ...patch } : step)),
     });
 
-  const addStep = () => {
+  /** New nodes continue the open end of the flow, so adding one does not leave it stranded. */
+  const appendNode = (id: string, kind: WorkflowNodeKind, base: AgentWorkflowDto) => {
+    const placed = addNode(graph, id, kind);
+    const tail = findChainTail(graph);
+    commitGraph(tail ? connectNodes(placed, tail, id) : placed, base);
+  };
+
+  /** A step is the only node kind that also carries a record outside the canvas. */
+  const addNodeOfKind = (kind: WorkflowNodeKind) => {
+    if (kind !== 'step') {
+      const id = newWorkflowId(kind);
+      appendNode(id, kind, workflow);
+      setOpenNode(id);
+      return;
+    }
     const step: AgentWorkflowStepDto = {
-      id: newId('step'),
+      id: newWorkflowId('step'),
       name: '',
       instructions: '',
       reviewRequired: false,
     };
-    onChange({ ...workflow, steps: [...steps, step] });
+    appendNode(step.id, 'step', { ...workflow, steps: [...steps, step] });
     setOpenNode(step.id);
   };
 
   const removeStep = (stepId: string) => {
-    onChange({ ...workflow, steps: steps.filter((step) => step.id !== stepId) });
+    commitGraph(removeNode(graph, stepId), {
+      ...workflow,
+      steps: steps.filter((step) => step.id !== stepId),
+    });
     setOpenNode(null);
+  };
+
+  /** A node removed from the canvas takes its step with it; an approval node is only a node. */
+  const removeCanvasNode = (nodeId: string) => {
+    if (steps.some((step) => step.id === nodeId)) {
+      removeStep(nodeId);
+      return;
+    }
+    commitGraph(removeNode(graph, nodeId));
+    if (openNode === nodeId) setOpenNode(null);
   };
 
   const addRule = () => {
     const rule: AgentWorkflowRuleDto = {
-      id: newId('rule'),
+      id: newWorkflowId('rule'),
       name: `${t('agents.workflowRule')} ${rules.length + 1}`,
       toolset: 'pbi',
       effect: 'allow',
@@ -218,59 +270,98 @@ export function AgentWorkflowBoard({
     setOpenNode(null);
   };
 
-  const reorder = (fromId: string, toId: string) => {
-    setDragId(null);
-    setOverId(null);
-    if (fromId === toId) return;
-    const from = steps.findIndex((step) => step.id === fromId);
-    const to = steps.findIndex((step) => step.id === toId);
-    if (from < 0 || to < 0) return;
-    const next = [...steps];
-    const [moved] = next.splice(from, 1);
-    next.splice(to, 0, moved!);
-    onChange({ ...workflow, steps: next });
+  const agentName = (step: AgentWorkflowStepDto) =>
+    agents.find((agent) => agent.id === step.agentId)?.name ?? t('agents.workflowRequestedAgent');
+
+  /** What each canvas node shows, by kind. */
+  const describeNode = (node: WorkflowNode): WorkflowNodeView => {
+    const visual = nodeKindVisuals[node.kind];
+    const chrome = { icon: visual.icon, iconClassName: visual.className };
+    switch (node.kind) {
+      case 'approval':
+        return {
+          ...chrome,
+          kicker: t('agents.workflowApproval'),
+          title: t('agents.workflowApprovalNode'),
+          subtitle: t('agents.workflowApprovalNodeHint'),
+        };
+      case 'trigger':
+        return {
+          ...chrome,
+          kicker: t('agents.workflowTrigger'),
+          title: t(triggerLabels[node.trigger.kind]),
+          subtitle:
+            node.trigger.kind === 'schedule'
+              ? (node.trigger.cron ?? '')
+              : node.trigger.kind === 'product-event'
+                ? (node.trigger.events ?? [])
+                    .map((event) => t(productEventLabels[event]))
+                    .join(', ')
+                : t('agents.workflowControls'),
+        };
+      case 'action':
+        return {
+          ...chrome,
+          kicker: t(toolsetLabels[node.action.toolset]),
+          title: node.action.toolName ?? t('agents.workflowActionNode'),
+          subtitle: node.action.provider ?? t('agents.workflowAllProviders'),
+        };
+      case 'condition':
+        return {
+          ...chrome,
+          kicker: t('agents.workflowConditionNode'),
+          title: node.condition.value || t('agents.workflowConditionNode'),
+          subtitle: t('agents.workflowConditionBranches'),
+        };
+      case 'delay':
+        return {
+          ...chrome,
+          kicker: t('agents.workflowDelayNode'),
+          title: t('agents.workflowDelayOf', { minutes: node.delay.minutes }),
+          subtitle: t('agents.workflowDelayNodeSubtitle'),
+        };
+      default: {
+        const index = steps.findIndex((step) => step.id === node.id);
+        const step = steps[index]!;
+        const stepAgent = agents.find((agent) => agent.id === step.agentId);
+        const stepVisual = stepAgent ? roleVisuals[stepAgent.role] : unassignedVisual;
+        return {
+          icon: stepVisual.icon,
+          iconClassName: stepVisual.className,
+          kicker: t('agents.workflowStep', { number: padNumber(index + 1) }),
+          title: step.name || t('agents.workflowUntitledStep'),
+          subtitle: agentName(step),
+        };
+      }
+    }
   };
-
-  const gateLabel = (index: number, on: boolean) =>
-    on
-      ? t('agents.workflowGateRemove', { number: padNumber(index + 1) })
-      : t('agents.workflowGateAdd', { number: padNumber(index + 1) });
-
-  /** The nodes in flow order: settings, every step, then the add card. */
-  const nodes: readonly {
-    readonly id: string;
-    readonly kind: 'settings' | 'step' | 'add';
-    readonly step?: AgentWorkflowStepDto;
-    readonly index: number;
-  }[] = [
-    { id: 'settings', kind: 'settings', index: -1 },
-    ...steps.map((step, index) => ({ id: step.id, kind: 'step' as const, step, index })),
-    { id: 'add', kind: 'add', index: steps.length },
-  ];
-
-  /** The gate a connector carries belongs to the node before it. */
-  const gateBefore = (position: number) => {
-    const previous = nodes[position - 1];
-    if (!previous || previous.kind !== 'step' || !previous.step) return null;
-    return {
-      on: previous.step.reviewRequired ?? false,
-      label: gateLabel(previous.index, previous.step.reviewRequired ?? false),
-      toggle: () =>
-        updateStep(previous.step!.id, { reviewRequired: !previous.step!.reviewRequired }),
-    };
-  };
-
-  const rows: (typeof nodes)[] = [];
-  for (let index = 0; index < nodes.length; index += COLUMNS) {
-    rows.push(nodes.slice(index, index + COLUMNS));
-  }
 
   const openStep = steps.find((step) => step.id === openNode) ?? null;
   const openIndex = openStep ? steps.indexOf(openStep) : -1;
   const openRule = rules.find((rule) => rule.id === openNode) ?? null;
   const openRuleIndex = openRule ? rules.indexOf(openRule) : -1;
-  const agentName = (step: AgentWorkflowStepDto) =>
-    agents.find((agent) => agent.id === step.agentId)?.name ?? t('agents.workflowRequestedAgent');
+  /** An action, condition or delay node, which edits its configuration on the graph itself. */
+  const openConfigNode =
+    openNode !== null && openStep === null
+      ? ((node) =>
+          node && (node.kind === 'action' || node.kind === 'condition' || node.kind === 'delay')
+            ? node
+            : null)(findNode(graph, openNode))
+      : null;
+  // normalizeGraph always leaves a trigger node on the canvas, carrying its configuration.
+  const triggerNode = findNode(graph, WORKFLOW_TRIGGER_NODE_ID) as Extract<
+    WorkflowNode,
+    { kind: 'trigger' }
+  >;
+  const trigger = triggerNode.trigger;
+  const isInspectorOpen =
+    openNode !== null &&
+    (openStep !== null ||
+      openRule !== null ||
+      openConfigNode !== null ||
+      openNode === WORKFLOW_TRIGGER_NODE_ID);
+  /** Nodes that cannot run as configured; saving is refused while any remains. */
+  const problems = incompleteNodes(graph);
 
   return (
     <div className="flex flex-col gap-4" data-testid="workflow-board">
@@ -307,7 +398,7 @@ export function AgentWorkflowBoard({
             type="button"
             onClick={onSave}
             isLoading={isSaving}
-            disabled={isReadOnly || isSaving || !isDirty}
+            disabled={isReadOnly || isSaving || !isDirty || problems.length > 0}
             data-testid="workflow-save-button"
           >
             <i className="ti ti-check mr-2 text-base" aria-hidden="true" />
@@ -319,220 +410,51 @@ export function AgentWorkflowBoard({
       {/* Canvas */}
       <section
         aria-label={t('agents.workflowFlow')}
-        className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)] [background-image:radial-gradient(var(--border)_1px,transparent_1px)] [background-size:20px_20px]"
+        className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)]"
       >
-        <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2 border-b border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
-          <span className="text-sm font-semibold text-[var(--text-primary)]">
-            {t('agents.workflowFlow')}
-          </span>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--text-muted)]">
-            <span>{t('agents.workflowFlowHint')}</span>
-            <span className="flex items-center gap-2">
-              <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[var(--fill-accent)] text-white">
-                <i className="ti ti-user-check text-[11px]" aria-hidden="true" />
-              </span>
-              {t('agents.workflowGateLegend')}
+        <AgentWorkflowCanvas
+          graph={graph}
+          isReadOnly={isReadOnly}
+          isDimmed={!workflow.enabled}
+          selectedNodeId={openNode}
+          describeNode={describeNode}
+          onOpenNode={setOpenNode}
+          onMoveNode={(id, x, y) => commitGraph(moveNode(graph, id, x, y))}
+          onRemoveNode={removeCanvasNode}
+          onConnect={(from: string, to: string, port?: WorkflowPort) =>
+            commitGraph(connectNodes(graph, from, to, port))
+          }
+          onDisconnect={(edgeId) => commitGraph(disconnectEdge(graph, edgeId))}
+        />
+
+        {/* Palette: the nodes that can be dropped on the canvas. */}
+        <div className="flex flex-wrap items-center gap-3 border-t border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
+          {ADDABLE_NODE_KINDS.map((kind) => (
+            <Button
+              key={kind}
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => addNodeOfKind(kind)}
+              disabled={isReadOnly || (kind === 'step' && steps.length >= 20)}
+              data-testid={`workflow-add-${kind}`}
+            >
+              <i
+                className={cn('ti mr-2 text-base', nodeKindVisuals[kind].icon)}
+                aria-hidden="true"
+              />
+              {t(nodeKindVisuals[kind].label)}
+            </Button>
+          ))}
+          {problems.length > 0 && (
+            <span
+              className="flex items-center gap-2 text-xs text-[var(--text-warning)]"
+              data-testid="workflow-incomplete-warning"
+            >
+              <i className="ti ti-alert-triangle text-sm" aria-hidden="true" />
+              {t('agents.workflowIncompleteNodes', { count: problems.length })}
             </span>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto px-7 pb-11 pt-8">
-          <div
-            className={cn(
-              'flex w-full min-w-[880px] flex-col items-stretch transition-opacity',
-              !workflow.enabled && 'opacity-50',
-            )}
-          >
-            {rows.map((row, rowIndex) => {
-              const returnGate = rowIndex > 0 ? gateBefore(rowIndex * COLUMNS) : null;
-              return (
-                <div key={`row-${rowIndex}`} className="flex flex-col items-stretch">
-                  {rowIndex > 0 && (
-                    /* The turn back to the left edge, drawn with borders. */
-                    <div className="relative h-14 w-full">
-                      <div
-                        className={cn(
-                          'absolute left-[calc((100%-168px)/8)] right-[calc((100%-168px)/8)] top-0 box-border h-7 border-b-2 border-r-2',
-                          returnGate?.on ? 'border-[var(--fill-accent)]' : 'border-[var(--border)]',
-                        )}
-                      />
-                      <div
-                        className={cn(
-                          'absolute left-[calc((100%-168px)/8)] top-7 h-[21px] border-l-2',
-                          returnGate?.on ? 'border-[var(--fill-accent)]' : 'border-[var(--border)]',
-                        )}
-                      />
-                      <i
-                        className={cn(
-                          'ti ti-caret-down-filled absolute left-[calc((100%-168px)/8-7px)] top-[42px] text-sm leading-none',
-                          returnGate?.on ? 'text-[var(--fill-accent)]' : 'text-[var(--border)]',
-                        )}
-                        aria-hidden="true"
-                      />
-                      {returnGate && (
-                        <GateButton
-                          on={returnGate.on}
-                          label={returnGate.label}
-                          disabled={isReadOnly}
-                          onToggle={returnGate.toggle}
-                          className="left-[calc(50%-14px)] top-3.5"
-                        />
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex h-[104px] w-full items-center">
-                    {row.map((node, columnIndex) => {
-                      const position = rowIndex * COLUMNS + columnIndex;
-                      const gate = columnIndex === 0 ? null : gateBefore(position);
-                      const stepAgent = node.step
-                        ? agents.find((agent) => agent.id === node.step?.agentId)
-                        : undefined;
-                      const visual = stepAgent ? roleVisuals[stepAgent.role] : unassignedVisual;
-                      return (
-                        <React.Fragment key={node.id}>
-                          {columnIndex > 0 && (
-                            /* Connector between two nodes of the same row. */
-                            <span className="relative block h-7 w-14 shrink-0">
-                              <span
-                                className={cn(
-                                  'absolute left-0 right-[7px] top-[13px] border-t-2',
-                                  node.kind === 'add' ? 'border-dashed' : 'border-solid',
-                                  gate?.on
-                                    ? 'border-[var(--fill-accent)]'
-                                    : 'border-[var(--border)]',
-                                )}
-                              />
-                              <i
-                                className={cn(
-                                  'ti ti-caret-right-filled absolute right-0 top-[5px] text-sm leading-none',
-                                  gate?.on ? 'text-[var(--fill-accent)]' : 'text-[var(--border)]',
-                                )}
-                                aria-hidden="true"
-                              />
-                              {gate && (
-                                <GateButton
-                                  on={gate.on}
-                                  label={gate.label}
-                                  disabled={isReadOnly}
-                                  onToggle={gate.toggle}
-                                  className="left-3 top-0"
-                                />
-                              )}
-                            </span>
-                          )}
-
-                          {node.kind === 'add' ? (
-                            <button
-                              type="button"
-                              onClick={addStep}
-                              disabled={isReadOnly || steps.length >= 20}
-                              style={{ width: NODE_WIDTH }}
-                              data-testid="workflow-add-step"
-                              className="flex h-[104px] shrink-0 flex-col items-center justify-center gap-2 rounded-xl border-[1.5px] border-dashed border-[var(--border)] text-sm font-medium text-[var(--text-muted)] transition-colors hover:border-[var(--fill-accent)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              <i className="ti ti-plus text-xl" aria-hidden="true" />
-                              {t('agents.addWorkflowStep')}
-                            </button>
-                          ) : (
-                            <div
-                              draggable={node.kind === 'step' && !isReadOnly}
-                              onDragStart={(event) => {
-                                event.dataTransfer.effectAllowed = 'move';
-                                event.dataTransfer.setData('text/plain', node.id);
-                                setDragId(node.id);
-                              }}
-                              onDragOver={(event) => {
-                                if (!dragId || node.kind !== 'step') return;
-                                event.preventDefault();
-                                if (overId !== node.id) setOverId(node.id);
-                              }}
-                              onDrop={(event) => {
-                                event.preventDefault();
-                                if (dragId && node.kind === 'step') reorder(dragId, node.id);
-                              }}
-                              onDragEnd={() => {
-                                setDragId(null);
-                                setOverId(null);
-                              }}
-                              style={{ width: NODE_WIDTH }}
-                              className={cn(
-                                'relative h-[104px] shrink-0 rounded-xl',
-                                node.kind === 'step' &&
-                                  !isReadOnly &&
-                                  'cursor-grab active:cursor-grabbing',
-                                dragId === node.id && 'opacity-40',
-                                overId === node.id &&
-                                  dragId &&
-                                  dragId !== node.id &&
-                                  'outline outline-2 outline-offset-4 outline-dashed outline-[var(--fill-accent)]',
-                              )}
-                            >
-                              <button
-                                type="button"
-                                aria-pressed={openNode === node.id}
-                                onClick={() => setOpenNode(node.id)}
-                                data-testid={
-                                  node.kind === 'settings'
-                                    ? 'workflow-settings-node'
-                                    : `workflow-step-node-${node.index + 1}`
-                                }
-                                className={cn(
-                                  'flex h-[104px] w-full items-start gap-3 border-[1.5px] bg-[var(--surface-2)] p-3.5 text-left transition-colors hover:border-[var(--fill-accent)]',
-                                  node.kind === 'settings'
-                                    ? 'rounded-l-[36px] rounded-r-xl'
-                                    : 'rounded-xl',
-                                  openNode === node.id
-                                    ? 'border-[var(--fill-accent)] ring-4 ring-[var(--fill-accent)]/15'
-                                    : 'border-[var(--border)]',
-                                )}
-                              >
-                                <span
-                                  className={cn(
-                                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px]',
-                                    node.kind === 'settings'
-                                      ? 'bg-[var(--surface-1)] text-[var(--text-secondary)]'
-                                      : visual.className,
-                                  )}
-                                >
-                                  <i
-                                    className={cn(
-                                      'ti text-lg',
-                                      node.kind === 'settings' ? 'ti-adjustments' : visual.icon,
-                                    )}
-                                    aria-hidden="true"
-                                  />
-                                </span>
-                                <span className="flex min-w-0 flex-col gap-0.5">
-                                  <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
-                                    {node.kind === 'settings'
-                                      ? t('agents.workflowSetup')
-                                      : t('agents.workflowStep', {
-                                          number: padNumber(node.index + 1),
-                                        })}
-                                  </span>
-                                  <span className="line-clamp-2 text-sm font-semibold text-[var(--text-primary)]">
-                                    {node.kind === 'settings'
-                                      ? t('agents.workflowSettings')
-                                      : node.step?.name || t('agents.workflowUntitledStep')}
-                                  </span>
-                                  <span className="truncate text-xs text-[var(--text-secondary)]">
-                                    {node.kind === 'settings'
-                                      ? t('agents.workflowControls')
-                                      : agentName(node.step!)}
-                                  </span>
-                                </span>
-                              </button>
-                            </div>
-                          )}
-                        </React.Fragment>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          )}
         </div>
 
         {/* Module rules: nodes of the same board, opened and added like the steps. */}
@@ -547,10 +469,10 @@ export function AgentWorkflowBoard({
                 type="button"
                 aria-pressed={openNode === rule.id}
                 onClick={() => setOpenNode(rule.id)}
-                style={{ width: NODE_WIDTH }}
+                style={{ width: RULE_WIDTH }}
                 data-testid={`workflow-rule-node-${index + 1}`}
                 className={cn(
-                  'flex h-[104px] shrink-0 items-start gap-3 rounded-xl border-[1.5px] bg-[var(--surface-2)] p-3.5 text-left transition-colors hover:border-[var(--fill-accent)]',
+                  'flex h-[104px] shrink-0 items-start gap-3 rounded-2xl border-[1.5px] bg-[var(--surface-2)] p-3.5 text-left shadow-sm transition-colors hover:border-[var(--fill-accent)]',
                   openNode === rule.id
                     ? 'border-[var(--fill-accent)] ring-4 ring-[var(--fill-accent)]/15'
                     : 'border-[var(--border)]',
@@ -558,7 +480,7 @@ export function AgentWorkflowBoard({
               >
                 <span
                   className={cn(
-                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px]',
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
                     rule.effect === 'deny'
                       ? 'bg-red-500/15 text-red-300'
                       : 'bg-[var(--fill-accent)]/15 text-[var(--fill-accent)]',
@@ -593,9 +515,9 @@ export function AgentWorkflowBoard({
               type="button"
               onClick={addRule}
               disabled={isReadOnly || rules.length >= 100}
-              style={{ width: NODE_WIDTH }}
+              style={{ width: RULE_WIDTH }}
               data-testid="workflow-add-rule"
-              className="flex h-[104px] shrink-0 flex-col items-center justify-center gap-2 rounded-xl border-[1.5px] border-dashed border-[var(--border)] text-sm font-medium text-[var(--text-muted)] transition-colors hover:border-[var(--fill-accent)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex h-[104px] shrink-0 flex-col items-center justify-center gap-2 rounded-2xl border-[1.5px] border-dashed border-[var(--border)] text-sm font-medium text-[var(--text-muted)] transition-colors hover:border-[var(--fill-accent)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <i className="ti ti-plus text-xl" aria-hidden="true" />
               {t('agents.workflowAddRule')}
@@ -606,7 +528,7 @@ export function AgentWorkflowBoard({
 
       {/* Inspector */}
       <Modal
-        open={openNode !== null}
+        open={isInspectorOpen}
         onClose={() => setOpenNode(null)}
         labelledBy="workflow-inspector-title"
       >
@@ -691,23 +613,31 @@ export function AgentWorkflowBoard({
                     }
                   />
                 </label>
-                <div className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4">
+                {/* The gate is a node now: the inspector only reports what the canvas wired. */}
+                <div
+                  className="flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4"
+                  data-testid="workflow-step-review-state"
+                >
+                  <span
+                    className={cn(
+                      'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
+                      openStep.reviewRequired
+                        ? 'bg-[var(--fill-accent)]/15 text-[var(--fill-accent)]'
+                        : 'bg-[var(--surface-2)] text-[var(--text-muted)]',
+                    )}
+                  >
+                    <i className="ti ti-user-check text-lg" aria-hidden="true" />
+                  </span>
                   <div className="flex min-w-0 flex-col gap-1">
                     <span className="text-sm font-medium text-[var(--text-primary)]">
-                      {t('agents.workflowStepReview')}
+                      {openStep.reviewRequired
+                        ? t('agents.workflowStepReviewOn')
+                        : t('agents.workflowStepReviewOff')}
                     </span>
                     <span className="text-xs text-[var(--text-secondary)]">
-                      {t('agents.workflowStepReviewHint')}
+                      {t('agents.workflowApprovalNodeHint')}
                     </span>
                   </div>
-                  <Switch
-                    checked={openStep.reviewRequired ?? false}
-                    label={t('agents.workflowStepReview')}
-                    disabled={isReadOnly}
-                    onChange={() =>
-                      updateStep(openStep.id, { reviewRequired: !openStep.reviewRequired })
-                    }
-                  />
                 </div>
               </div>
             </>
@@ -867,18 +797,80 @@ export function AgentWorkflowBoard({
                 </div>
               </div>
             </>
-          ) : (
+          ) : openConfigNode ? (
             <>
-              <div className="flex items-start gap-3 border-b border-[var(--border)] p-5">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[var(--surface-1)] text-[var(--text-secondary)]">
-                  <i className="ti ti-adjustments text-lg" aria-hidden="true" />
+              <div className="flex items-center gap-3 border-b border-[var(--border)] p-5">
+                <span
+                  className={cn(
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px]',
+                    nodeKindVisuals[openConfigNode.kind].className,
+                  )}
+                >
+                  <i
+                    className={cn('ti text-lg', nodeKindVisuals[openConfigNode.kind].icon)}
+                    aria-hidden="true"
+                  />
                 </span>
                 <div className="flex flex-col gap-1">
                   <h2
                     id="workflow-inspector-title"
                     className="text-base font-semibold text-[var(--text-primary)]"
                   >
-                    {t('agents.workflowControls')}
+                    {t(nodeKindVisuals[openConfigNode.kind].label)}
+                  </h2>
+                  <span className="text-xs text-[var(--text-secondary)]">
+                    {describeNode(openConfigNode).kicker}
+                  </span>
+                </div>
+                <div className="ml-auto flex shrink-0 items-center gap-1">
+                  <IconButton
+                    variant="subtle"
+                    size="sm"
+                    icon={<i className="ti ti-trash" aria-hidden="true" />}
+                    label={t('agents.workflowRemoveNode', {
+                      name: t(nodeKindVisuals[openConfigNode.kind].label),
+                    })}
+                    disabled={isReadOnly}
+                    onClick={() => removeCanvasNode(openConfigNode.id)}
+                    className="text-red-400"
+                  />
+                  <IconButton
+                    variant="subtle"
+                    size="sm"
+                    icon={<i className="ti ti-x" aria-hidden="true" />}
+                    label={t('common.close')}
+                    onClick={() => setOpenNode(null)}
+                  />
+                </div>
+              </div>
+
+              <div className="flex max-h-[calc(100vh-14rem)] flex-col gap-4 overflow-y-auto p-5">
+                <AgentWorkflowNodeInspector
+                  node={openConfigNode}
+                  isReadOnly={isReadOnly}
+                  toolNames={toolNames}
+                  providerOptions={providerOptions}
+                  onChange={(next) => commitGraph(updateNode(graph, next))}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-3 border-b border-[var(--border)] p-5">
+                <span
+                  className={cn(
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px]',
+                    nodeKindVisuals.trigger.className,
+                  )}
+                >
+                  <i className="ti ti-bolt-filled text-lg" aria-hidden="true" />
+                </span>
+                <div className="flex flex-col gap-1">
+                  <h2
+                    id="workflow-inspector-title"
+                    className="text-base font-semibold text-[var(--text-primary)]"
+                  >
+                    {t('agents.workflowTriggerNode')}
                   </h2>
                   <span className="text-xs text-[var(--text-secondary)]">
                     {t('agents.workflowDescription')}
@@ -895,6 +887,96 @@ export function AgentWorkflowBoard({
               </div>
 
               <div className="flex max-h-[calc(100vh-14rem)] flex-col gap-4 overflow-y-auto p-5">
+                {
+                  <div className="flex flex-col gap-4" data-testid="workflow-trigger-inspector">
+                    <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                      {t('agents.workflowTriggerKind')}
+                      <Select
+                        value={trigger.kind}
+                        disabled={isReadOnly}
+                        onChange={(event) =>
+                          commitGraph(
+                            updateNode(graph, {
+                              ...triggerNode,
+                              trigger: {
+                                ...trigger,
+                                kind: event.target.value as WorkflowTriggerKind,
+                              },
+                            }),
+                          )
+                        }
+                      >
+                        {triggerKinds.map((kind) => (
+                          <option key={kind} value={kind}>
+                            {t(triggerLabels[kind])}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+
+                    {trigger.kind === 'product-event' && (
+                      <fieldset className="flex flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4">
+                        <legend className="px-1 text-sm text-[var(--text-secondary)]">
+                          {t('agents.workflowTriggerEvents')}
+                        </legend>
+                        {WORKFLOW_PRODUCT_EVENTS.map((event) => {
+                          const listening = trigger.events ?? [];
+                          const selected = listening.includes(event);
+                          return (
+                            <div
+                              key={event}
+                              className="flex items-center justify-between gap-4 text-sm text-[var(--text-primary)]"
+                            >
+                              <span>{t(productEventLabels[event])}</span>
+                              <Switch
+                                checked={selected}
+                                label={t(productEventLabels[event])}
+                                disabled={isReadOnly}
+                                onChange={() =>
+                                  commitGraph(
+                                    updateNode(graph, {
+                                      ...triggerNode,
+                                      trigger: {
+                                        ...trigger,
+                                        events: selected
+                                          ? listening.filter((item) => item !== event)
+                                          : [...listening, event],
+                                      },
+                                    }),
+                                  )
+                                }
+                              />
+                            </div>
+                          );
+                        })}
+                      </fieldset>
+                    )}
+
+                    {trigger.kind === 'schedule' && (
+                      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
+                        {t('agents.workflowTriggerCron')}
+                        <Input
+                          value={trigger.cron ?? ''}
+                          placeholder={t('agents.workflowTriggerCronPlaceholder')}
+                          disabled={isReadOnly}
+                          onChange={(event) =>
+                            commitGraph(
+                              updateNode(graph, {
+                                ...triggerNode,
+                                trigger: {
+                                  ...trigger,
+                                  cron: event.target.value.trim() || undefined,
+                                },
+                              }),
+                            )
+                          }
+                        />
+                      </label>
+                    )}
+
+                    <hr className="border-[var(--border)]" />
+                  </div>
+                }
                 <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
                   {t('agents.workflowAutonomy')}
                   <Select

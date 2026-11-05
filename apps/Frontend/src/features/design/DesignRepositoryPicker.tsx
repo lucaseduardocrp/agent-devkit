@@ -101,6 +101,9 @@ export function DesignRepositoryPicker({
   }, [apiClient, chosen]);
 
   const save = async () => {
+    // Its only caller is the Save button below, which is disabled whenever there is no chosen
+    // repository, so this never actually runs - it only keeps `chosen` narrowed for TypeScript.
+    /* v8 ignore next */
     if (!chosen) return;
     setSaving(true);
     try {

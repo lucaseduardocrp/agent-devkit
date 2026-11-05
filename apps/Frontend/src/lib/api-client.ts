@@ -14,6 +14,9 @@ import type {
   UpdateAgentDto,
   ExecuteAgentDto,
   ExecuteAgentResponse,
+  AgentWorkflowCanvasDto,
+  AgentWorkflowCanvasEdgeDto,
+  AgentWorkflowCanvasNodeDto,
   AgentWorkflowDto,
   HubAgentCatalogDto,
 } from '../features/agents/agent-types.js';
@@ -510,6 +513,19 @@ function normalizeAgentWorkflow(
       })
     : fallback.rules;
 
+  // The flow canvas travels as it was saved; `workflow-graph.ts` is what validates its shape and
+  // repairs it against the steps, so dropping unknown parts here would only lose the layout.
+  const canvas = isRecord(value['canvas'])
+    ? ({
+        nodes: Array.isArray(value['canvas']['nodes'])
+          ? (value['canvas']['nodes'] as AgentWorkflowCanvasNodeDto[])
+          : [],
+        edges: Array.isArray(value['canvas']['edges'])
+          ? (value['canvas']['edges'] as AgentWorkflowCanvasEdgeDto[])
+          : [],
+      } satisfies AgentWorkflowCanvasDto)
+    : null;
+
   return {
     enabled: typeof value['enabled'] === 'boolean' ? value['enabled'] : fallback.enabled,
     autonomy:
@@ -534,6 +550,7 @@ function normalizeAgentWorkflow(
         : fallback.defaultAction,
     steps,
     rules,
+    ...(canvas ? { canvas } : fallback.canvas ? { canvas: fallback.canvas } : {}),
     ...(typeof value['updatedAt'] === 'string'
       ? { updatedAt: value['updatedAt'] }
       : fallback.updatedAt
@@ -864,11 +881,18 @@ export class ApiClient {
     templateId: string,
     scope = '',
     itemType = '',
+    fieldValues?: Readonly<Record<string, FieldValue>>,
   ): Promise<{ definitions: FieldDefinition[]; values: Record<string, FieldValue> }> {
     return this.issueRequest(`/pbi/items/${encodeURIComponent(id)}/field-preview`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ providerId, templateId, scope, itemType }),
+      body: JSON.stringify({
+        providerId,
+        templateId,
+        scope,
+        itemType,
+        ...(fieldValues ? { fieldValues } : {}),
+      }),
     });
   }
   public async pullPbiBoards(): Promise<PbiPullResult> {
@@ -920,7 +944,12 @@ export class ApiClient {
   }
   public async pushPbiItem(
     id: string,
-    fields: { providerId: PbiProviderId; fields?: Record<string, string>; templateId?: string },
+    fields: {
+      providerId: PbiProviderId;
+      fields?: Record<string, string>;
+      templateId?: string;
+      fieldValues?: Readonly<Record<string, FieldValue>>;
+    },
   ): Promise<{ item: PbiItem; warnings: string[] }> {
     return this.issueRequest(`/pbi/items/${encodeURIComponent(id)}/push`, {
       method: 'POST',
@@ -2662,6 +2691,7 @@ export class ApiClient {
         defaultAction: workflow.defaultAction,
         steps: workflow.steps,
         rules: workflow.rules,
+        ...(workflow.canvas ? { canvas: workflow.canvas } : {}),
       }),
       signal,
     });

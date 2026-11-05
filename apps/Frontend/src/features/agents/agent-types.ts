@@ -42,6 +42,38 @@ export interface AgentWorkflowRuleDto {
   readonly requireApproval?: boolean;
 }
 
+/**
+ * A node of the saved canvas layout, as it travels over the wire. The kinds and the shape of each
+ * configuration bag are checked when the canvas is read, in `workflow-graph.ts`, which is why this
+ * transport type stays permissive: a canvas saved by an older or newer client still parses, and
+ * `start` is the name the trigger node had before triggers were configurable.
+ */
+export interface AgentWorkflowCanvasNodeDto {
+  readonly id: string;
+  readonly kind: string;
+  readonly x: number;
+  readonly y: number;
+  readonly trigger?: unknown;
+  readonly action?: unknown;
+  readonly condition?: unknown;
+  readonly delay?: unknown;
+}
+
+/** A connection between two canvas nodes, drawn from an output port to an input port. */
+export interface AgentWorkflowCanvasEdgeDto {
+  readonly id: string;
+  readonly from: string;
+  /** Which output of `from` the edge leaves by; only condition nodes have named outputs. */
+  readonly fromPort?: 'true' | 'false';
+  readonly to: string;
+}
+
+/** The hand-arranged layout of the flow. Absent on workflows saved before the canvas existed. */
+export interface AgentWorkflowCanvasDto {
+  readonly nodes: readonly AgentWorkflowCanvasNodeDto[];
+  readonly edges: readonly AgentWorkflowCanvasEdgeDto[];
+}
+
 export interface AgentWorkflowDto {
   readonly enabled: boolean;
   readonly autonomy: 'supervised' | 'balanced' | 'autonomous';
@@ -51,6 +83,7 @@ export interface AgentWorkflowDto {
   readonly defaultAction: 'allow' | 'deny';
   readonly steps: readonly AgentWorkflowStepDto[];
   readonly rules: readonly AgentWorkflowRuleDto[];
+  readonly canvas?: AgentWorkflowCanvasDto;
   readonly updatedAt?: string;
 }
 

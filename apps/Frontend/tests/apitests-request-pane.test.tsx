@@ -551,9 +551,21 @@ describe('RequestPane: GraphQL', () => {
     const words = await view.findByTestId('word-suggestions');
     expect(within(words).getByText('user')).toBeInTheDocument();
     expect(within(words).getByText('User')).toBeInTheDocument();
+    // The keyboard chooses among the field suggestions too, not just the mouse.
     fireEvent.keyDown(editor, { key: 'ArrowDown' });
     fireEvent.keyDown(editor, { key: 'Enter' });
     expect(last(onChange).graphql?.query).toBe('query { user');
+
+    // Hovering and clicking a suggestion with the mouse chooses it as well.
+    fireEvent.change(editor, {
+      target: { value: 'query { user { fir', selectionStart: 19, selectionEnd: 19 },
+    });
+    const mouseWords = await view.findByTestId('word-suggestions');
+    const options = within(mouseWords).getAllByRole('option');
+    fireEvent.mouseEnter(options[0]!);
+    expect(options[0]!.getAttribute('aria-selected')).toBe('true');
+    fireEvent.mouseDown(options[0]!);
+    expect(last(onChange).graphql?.query).toBe('query { user { first');
 
     // The docs close and open again from the cache, without another request.
     fireEvent.click(panel().getByRole('button', { name: 'Fechar' }));
@@ -1101,5 +1113,22 @@ describe('RequestPane: checks and corners', () => {
     fireEvent.click(within(docs).getAllByRole('button', { name: 'Query' })[1]!);
     expect(within(view.getByTestId('graphql-docs')).getByText('first')).toBeInTheDocument();
     schemaCache.clear();
+  });
+
+  it('falls back to the new kind’s first tab when the chosen tab no longer exists', () => {
+    function KindSwitcher() {
+      const [req, setReq] = useState<ApiRequestSpec>(request('http'));
+      return (
+        <>
+          <button onClick={() => setReq(request('grpc'))}>switch</button>
+          <RequestPane request={req} readOnly={false} mocks={MOCKS} onChange={setReq} />
+        </>
+      );
+    }
+    const view = render(<KindSwitcher />);
+    // The default HTTP tab is "query", which grpc has no equivalent of.
+    expect(tabNames(view)[0]).toMatch(/Query/i);
+    fireEvent.click(view.getByRole('button', { name: 'switch' }));
+    expect(view.getByRole('tab', { selected: true }).textContent).toMatch(/Mensagem/i);
   });
 });

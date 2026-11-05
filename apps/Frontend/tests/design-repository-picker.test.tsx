@@ -116,6 +116,48 @@ describe('DesignRepositoryPicker', () => {
     await waitFor(() => expect(onError).toHaveBeenCalledWith('Sem acesso'));
   });
 
+  it('reports a listing that fails without an Error object', async () => {
+    const api = client();
+    vi.mocked(api.getDesignRepositories).mockRejectedValue('boom');
+    const { onError } = view(api);
+    await waitFor(() =>
+      expect(onError).toHaveBeenCalledWith('Não foi possível carregar os repositórios.'),
+    );
+  });
+
+  it('falls back to the default branch when none of the branches is marked as the default', async () => {
+    const api = client();
+    vi.mocked(api.getDesignBranches).mockResolvedValue([{ name: 'feature-x', isDefault: false }]);
+    const { ui } = view(api);
+    fireEvent.change(await ui.findByLabelText('Repositório'), {
+      target: { value: 'github:42' },
+    });
+    await waitFor(() => expect(api.getDesignBranches).toHaveBeenCalled());
+    fireEvent.click(ui.getByRole('button', { name: /Salvar repositório/ }));
+    // The saved branch is the repository's own default, since none of the fetched branches
+    // is marked as it and the field had no previous value to keep.
+    await waitFor(() =>
+      expect(api.saveDesignSettings).toHaveBeenCalledWith({
+        provider: 'github',
+        repositoryId: '42',
+        branch: 'main',
+      }),
+    );
+  });
+
+  it('clears the branch list when loading branches fails', async () => {
+    const api = client();
+    vi.mocked(api.getDesignBranches).mockRejectedValue(new Error('offline'));
+    const { ui } = view(api);
+    fireEvent.change(await ui.findByLabelText('Repositório'), {
+      target: { value: 'github:42' },
+    });
+    await waitFor(() => expect(api.getDesignBranches).toHaveBeenCalled());
+    const branch = (await ui.findByLabelText('Branch')) as HTMLSelectElement;
+    // The branch list comes back empty, so the select falls back to the repository's default.
+    await waitFor(() => expect([...branch.options].map((o) => o.value)).toEqual(['main']));
+  });
+
   it('reports a save that fails', async () => {
     const api = client();
     const { ui, onError } = view(api);
@@ -127,5 +169,33 @@ describe('DesignRepositoryPicker', () => {
     await waitFor(() =>
       expect(onError).toHaveBeenCalledWith('Não foi possível salvar o repositório.'),
     );
+  });
+
+  it('reports the message of a save that fails with an Error', async () => {
+    const api = client();
+    const { ui, onError } = view(api);
+    fireEvent.change(await ui.findByLabelText('Repositório'), {
+      target: { value: 'github:42' },
+    });
+    vi.mocked(api.saveDesignSettings).mockRejectedValue(new Error('Token expirado'));
+    fireEvent.click(ui.getByRole('button', { name: /Salvar repositório/ }));
+    await waitFor(() => expect(onError).toHaveBeenCalledWith('Token expirado'));
+  });
+
+  it('does not update branches once unmounted while they were still loading', async () => {
+    const api = client();
+    let resolveBranches: (list: { name: string; isDefault: boolean }[]) => void = () => undefined;
+    vi.mocked(api.getDesignBranches).mockReturnValue(
+      new Promise((resolve) => {
+        resolveBranches = resolve;
+      }),
+    );
+    const { ui } = view(api);
+    fireEvent.change(await ui.findByLabelText('Repositório'), {
+      target: { value: 'github:42' },
+    });
+    await waitFor(() => expect(api.getDesignBranches).toHaveBeenCalled());
+    ui.unmount();
+    expect(() => resolveBranches([{ name: 'main', isDefault: true }])).not.toThrow();
   });
 });

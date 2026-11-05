@@ -402,6 +402,9 @@ export function IntegrationTestsView({
   /** Sends the request as it is in the editor: unsaved changes go along and stay unsaved. */
   const send = useCallback(
     async (collectionId: string, requestId: string) => {
+      // Both callers (the Send button and the Ctrl+Enter shortcut) only ever name a request
+      // tab that is already open, which only happens once its collection has loaded.
+      /* v8 ignore next */
       const request = findRequest(loadedRef.current[collectionId]?.items ?? [], requestId);
       if (isReadOnly || pending[requestId] || !request) return;
       setError(null);
@@ -471,6 +474,9 @@ export function IntegrationTestsView({
     void apiClient.cancelApiRun('integration', pending[requestId]!.runId).catch(fail);
 
   const runCollection = async (collectionId: string, options: RunnerOptions) => {
+    // Its only callers are the Runner pane's Run button and the sidebar's Run menu item, both
+    // of which the read-only member never sees.
+    /* v8 ignore next */
     if (isReadOnly) return;
     setError(null);
     openTab({ kind: 'runner', collectionId });
@@ -527,6 +533,9 @@ export function IntegrationTestsView({
     const gone = tabs.filter((tab) => {
       if (tab.kind !== 'request' && tab.kind !== 'folder') return false;
       const collection = loaded[tab.collectionId];
+      // Every opener of a request or folder tab only runs once its collection has loaded, so
+      // this is never actually missing - it only narrows the type below.
+      /* v8 ignore next */
       if (!collection) return false;
       return tab.kind === 'request'
         ? !findRequest(collection.items, tab.requestId)

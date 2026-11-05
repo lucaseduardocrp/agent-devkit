@@ -377,12 +377,15 @@ describe('PbiView', () => {
     const list = await within(dialog).findByRole('combobox', { name: /Lista/ });
     await waitFor(() => expect(list).toHaveProperty('disabled', false));
     expect(api.getPbiPushContract).toHaveBeenCalledWith('card', 'trello', {});
-    // "New" could not be mapped to a Trello list, so the list is highlighted and required.
+    // "New" could not be mapped to a Trello list, so attempting the push highlights the list.
+    expect(list).toHaveAttribute('aria-invalid', 'false');
+    const submit = within(dialog).getByRole('button', { name: 'Fazer push' });
+    fireEvent.click(submit);
+    expect(api.pushPbiItem).not.toHaveBeenCalled();
     expect(list).toHaveAttribute('aria-invalid', 'true');
     expect(
       within(dialog).getByText('Não foi possível mapear “New”. Selecione um valor.'),
     ).toBeInTheDocument();
-    const submit = within(dialog).getByRole('button', { name: 'Fazer push' });
     expect(submit).toHaveProperty('disabled', true);
     fireEvent.change(list, { target: { value: 'list-1' } });
     expect(list).toHaveAttribute('aria-invalid', 'false');
