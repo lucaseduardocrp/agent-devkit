@@ -43,6 +43,25 @@ function realService() {
 }
 
 describe('agents workflow routes', () => {
+  it('reads the start node of an older canvas as its trigger', async () => {
+    const app = build(realService());
+    const saved = await request(app)
+      .put('/agents/workflow')
+      .send({
+        enabled: true,
+        steps: [{ id: 's1', name: 'Plan', instructions: 'Plan it.' }],
+        canvas: {
+          nodes: [
+            { id: 'start', kind: 'start', x: 0, y: 0 },
+            { id: 's1', kind: 'step', x: 1, y: 0 },
+          ],
+          edges: [{ id: 'e1', from: 'start', to: 's1' }],
+        },
+      });
+    expect(saved.status).toBe(200);
+    expect(saved.body.workflow.canvas.nodes[0].kind).toBe('trigger');
+  });
+
   it('saves a workflow with defaults and lists steps with their agents', async () => {
     const service = realService();
     const app = build(service);

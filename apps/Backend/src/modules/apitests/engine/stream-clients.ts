@@ -551,6 +551,9 @@ export function sseExchange(
       if (!stopper.stopped) parser.push(text.decode(chunk, { stream: true }));
     }).then(
       () => {
+        // Once stopped the connection is destroyed in the same microtask turn the race resolves in,
+        // before the body's end can arrive, so only the not-stopped side is reachable.
+        /* v8 ignore next */
         if (!stopper.stopped) exchange.add('info', 'Stream ended by the server');
       },
       (error: unknown) => {

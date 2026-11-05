@@ -866,7 +866,7 @@ export class RunService {
 
     if (input.action !== 'approve' && !input.answer?.trim())
       throw new ApplicationError('WORKFLOW_ANSWER_REQUIRED', 'A response is required.', 400);
-    const answer = input.answer?.trim();
+    const answer = input.answer?.trim() ?? '';
     // A revision re-runs the agent step that produced the result under review.
     const reviseNodeId = [...state.results]
       .reverse()
@@ -875,23 +875,21 @@ export class RunService {
           (result.kind === undefined || result.kind === 'result') &&
           state.steps.some((step) => step.id === result.stepId),
       )?.stepId;
-    const answerEvent: WorkflowRunStepResult | undefined =
-      input.action !== 'approve' && answer
-        ? {
-            stepId: state.canvas
-              ? ((input.action === 'revise' ? reviseNodeId : state.currentNodeId) ?? 'workflow')
-              : (state.steps[
-                  input.action === 'revise'
-                    ? Math.max(0, state.currentStepIndex - 1)
-                    : state.currentStepIndex
-                ]?.id ?? 'workflow'),
-            name: input.action === 'revise' ? 'Pedido de revisão' : 'Resposta do usuário',
-            agentId: run.actorId,
-            output: answer,
-            provider: 'user',
-            kind: 'answer',
-          }
-        : undefined;
+    const legacyIndex =
+      input.action === 'revise' ? Math.max(0, state.currentStepIndex - 1) : state.currentStepIndex;
+    // A run always carries at least one step, so the placeholder only satisfies the index type.
+    /* v8 ignore next */
+    const legacyStepId = state.steps[legacyIndex]?.id ?? 'workflow';
+    const answerEvent = (): WorkflowRunStepResult => ({
+      stepId: state.canvas
+        ? ((input.action === 'revise' ? reviseNodeId : state.currentNodeId) ?? 'workflow')
+        : legacyStepId,
+      name: input.action === 'revise' ? 'Pedido de revisão' : 'Resposta do usuário',
+      agentId: run.actorId,
+      output: answer,
+      provider: 'user',
+      kind: 'answer',
+    });
     const nextState: WorkflowRunState =
       input.action !== 'approve'
         ? {
@@ -905,7 +903,7 @@ export class RunService {
             ...(state.canvas && input.action === 'revise' && reviseNodeId
               ? { currentNodeId: reviseNodeId }
               : {}),
-            results: answerEvent ? [...state.results, answerEvent] : state.results,
+            results: [...state.results, answerEvent()],
           }
         : state;
     const resumed = await this.store.resume(

@@ -1,6 +1,9 @@
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { FilePicker, MultipartEditor } from '../src/features/apitests/integration/MultipartEditor.js';
+import {
+  FilePicker,
+  MultipartEditor,
+} from '../src/features/apitests/integration/MultipartEditor.js';
 import type { FormField } from '../src/features/apitests/api-test-types.js';
 
 describe('MultipartEditor', () => {
@@ -27,7 +30,13 @@ describe('FilePicker', () => {
   it('opens the hidden file input when the button is clicked', () => {
     const onChange = vi.fn();
     const view = render(
-      <FilePicker file={null} readOnly={false} label="File" onChange={onChange} testId="file-input" />,
+      <FilePicker
+        file={null}
+        readOnly={false}
+        label="File"
+        onChange={onChange}
+        testId="file-input"
+      />,
     );
     const input = view.getByTestId('file-input') as HTMLInputElement;
     const click = vi.spyOn(input, 'click');

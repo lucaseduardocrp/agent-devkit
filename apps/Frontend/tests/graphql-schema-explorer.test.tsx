@@ -21,9 +21,20 @@ const schema: GraphqlSchema = {
     ],
     [
       'Mutation',
-      { kind: 'OBJECT', name: 'Mutation', fields: [{ name: 'createUser', args: [], type: scalar('User') }] },
+      {
+        kind: 'OBJECT',
+        name: 'Mutation',
+        fields: [{ name: 'createUser', args: [], type: scalar('User') }],
+      },
     ],
-    ['User', { kind: 'OBJECT', name: 'User', fields: [{ name: 'name', args: [], type: scalar('String') }] }],
+    [
+      'User',
+      {
+        kind: 'OBJECT',
+        name: 'User',
+        fields: [{ name: 'name', args: [], type: scalar('String') }],
+      },
+    ],
   ]),
 };
 
