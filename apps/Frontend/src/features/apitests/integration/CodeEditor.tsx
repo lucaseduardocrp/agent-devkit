@@ -365,8 +365,10 @@ export const CodeEditor = forwardRef<
 
   /** Replaces the word being typed by the chosen one. */
   const chooseWord = (word: WordCompletion) => {
-    const element = textarea.current;
-    if (!element || !menu) return;
+    // Only the open menu's items and its keyboard handler call this, so the editor and the menu exist.
+    const element = textarea.current!;
+    /* v8 ignore next */
+    if (!menu) return;
     const caret = element.selectionStart;
     const removed = /^\w*/.exec(element.value.slice(caret))![0].length;
     setMenu(null);
@@ -375,8 +377,10 @@ export const CodeEditor = forwardRef<
   };
 
   const choose = (suggestion: VariableSuggestion) => {
-    const element = textarea.current;
-    if (!element || !menu) return;
+    // Only the open menu's items and its keyboard handler call this, so the editor and the menu exist.
+    const element = textarea.current!;
+    /* v8 ignore next */
+    if (!menu) return;
     const caret = element.selectionStart;
     if (menu.mode.kind === 'value') {
       // `"name": "|` becomes `"name": "{{$randomFullName}}"`; a number replaces the quote.

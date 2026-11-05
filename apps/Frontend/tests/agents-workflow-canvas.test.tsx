@@ -332,6 +332,35 @@ describe('AgentWorkflowBoard approval nodes', () => {
   });
 });
 
+describe('AgentWorkflowBoard open flow node', () => {
+  it('forgets the open flow node when it is removed', () => {
+    const onWorkflow = vi.fn();
+    render(<Host onWorkflow={onWorkflow} />);
+    fireEvent.click(screen.getByTestId('workflow-add-delay'));
+    const approval = onWorkflow.mock.calls
+      .at(-1)![0]
+      .canvas.nodes.find((entry: { kind: string }) => entry.kind === 'delay');
+    pointerDown(node(approval.id), { clientX: 0, clientY: 0 });
+    pointerUp(node(approval.id), { clientX: 0, clientY: 0 });
+    fireEvent.click(screen.getByTestId('workflow-node-remove-' + approval.id));
+    expect(screen.queryByTestId('workflow-node-' + approval.id)).toBeNull();
+  });
+
+  it('keeps another node open when a different flow node is removed', () => {
+    const onWorkflow = vi.fn();
+    render(<Host onWorkflow={onWorkflow} />);
+    fireEvent.click(screen.getByTestId('workflow-add-delay'));
+    const delay = onWorkflow.mock.calls
+      .at(-1)![0]
+      .canvas.nodes.find((entry: { kind: string }) => entry.kind === 'delay');
+    pointerDown(node('step-a'), { clientX: 0, clientY: 0 });
+    pointerUp(node('step-a'), { clientX: 0, clientY: 0 });
+    fireEvent.click(screen.getByTestId('workflow-node-remove-' + delay.id));
+    expect(screen.queryByTestId('workflow-node-' + delay.id)).toBeNull();
+    expect(screen.getByTestId('workflow-inspector')).toBeInTheDocument();
+  });
+});
+
 describe('AgentWorkflowBoard steps and rules', () => {
   it('adds a step wired to the open end of the flow and opens it', () => {
     const onWorkflow = vi.fn();

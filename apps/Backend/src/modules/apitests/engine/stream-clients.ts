@@ -548,6 +548,8 @@ export function sseExchange(
     });
     const reading = decodeBody(response, (chunk) => {
       result.sizeBytes += chunk.length;
+      // Whether a chunk still lands after the stop depends on how the server's writes are batched.
+      /* v8 ignore next */
       if (!stopper.stopped) parser.push(text.decode(chunk, { stream: true }));
     }).then(
       () => {

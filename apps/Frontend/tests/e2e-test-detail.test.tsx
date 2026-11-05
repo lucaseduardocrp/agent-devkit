@@ -543,6 +543,34 @@ export default async function beforeRun() {}`;
     expect(view.queryByLabelText('Instruções para a IA')).toBeNull();
   });
 
+  it('starts the After Run of a backend test from a template and saves its instructions', async () => {
+    const { view, client } = setup(
+      detail({ creation: { ...detail().creation, mode: 'backend' }, afterRunInstructions: null }),
+    );
+    await view.findByText('TC007-Ensure real-time ordering');
+    client.getE2eScript.mockResolvedValueOnce({ ...script(null), kind: 'afterRun' });
+    fireEvent.click(view.getByRole('tab', { name: 'After Run' }));
+    await view.findByText(/Este teste não tem After Run/);
+    fireEvent.click(view.getByRole('button', { name: /Editar|Criar/ }));
+    const editor = view.getByLabelText('After Run') as HTMLTextAreaElement;
+    expect(editor.value).toContain('{ request }: { request: APIRequestContext }');
+    expect(editor.value).toContain('After Run');
+
+    fireEvent.click(view.getByRole('button', { name: 'Alterar instruções' }));
+    const instructions = view.getByLabelText('Instruções para a IA');
+    instructions.innerHTML = '<p>Apagar o registro</p>';
+    fireEvent.input(instructions);
+    client.saveE2eHookInstructions.mockResolvedValueOnce(detail({ afterRunInstructions: null }));
+    fireEvent.click(view.getByRole('button', { name: /Salvar instruções/ }));
+    await waitFor(() =>
+      expect(client.saveE2eHookInstructions).toHaveBeenCalledWith(
+        't1',
+        'afterRun',
+        '<p>Apagar o registro</p>',
+      ),
+    );
+  });
+
   it('shows the saved hook instructions and hides editing them from viewers', async () => {
     const { view } = setup(detail({ afterRunInstructions: '<p>Apagar o registro</p>' }), true);
     await view.findByText('TC007-Ensure real-time ordering');
