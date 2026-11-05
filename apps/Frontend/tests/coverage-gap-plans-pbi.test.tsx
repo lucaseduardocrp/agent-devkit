@@ -246,6 +246,36 @@ describe('PbiView coverage gaps: rows and search', () => {
   });
 });
 
+describe('PbiView coverage gaps: push values', () => {
+  it('sends the values typed for the fields of the template', async () => {
+    const api = mockClient();
+    api.getFieldMappingTemplates.mockResolvedValue([
+      { ...template, rules: [{ targetFieldId: 'Label', source: { kind: 'constant', value: '' } }] },
+    ]);
+    api.getPbiFieldCatalog.mockResolvedValue([{ id: 'Label', name: 'Label', type: 'text' }]);
+    renderView(api);
+    await screen.findByRole('button', { name: 'Verify release' });
+    openRowMenu('Verify release');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Publicar' }));
+    const dialog = screen.getByRole('dialog');
+    const editor = await within(dialog).findByRole('region', { name: 'Mapeamento de campos' });
+    fireEvent.change(await within(editor).findByRole('combobox', { name: 'Template salvo' }), {
+      target: { value: 'tpl-1' },
+    });
+    const field = (await within(dialog).findByTitle('Label (Label)')).closest('label')!;
+    fireEvent.change(field.querySelector('input')!, { target: { value: 'QA' } });
+    const submit = within(dialog).getByRole('button', { name: 'Fazer push' });
+    await waitFor(() => expect(submit).toHaveProperty('disabled', false));
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(api.pushPbiItem).toHaveBeenCalledWith(
+        'card',
+        expect.objectContaining({ templateId: 'tpl-1', fieldValues: { Label: 'QA' } }),
+      ),
+    );
+  });
+});
+
 describe('PbiView coverage gaps: item editor', () => {
   it('opens items without description or state as an empty backlog item', async () => {
     const api = mockClient();

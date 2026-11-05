@@ -44,6 +44,16 @@ export interface E2eScriptRepository {
     content: string,
     message: string,
   ): Promise<void>;
+  /**
+   * Creates, updates (`content`) or deletes (`content: null`) several files in one commit on
+   * `ref.branch`. Resolves with the commit's browser link, or null when nothing changed.
+   */
+  commitFiles(
+    workspaceId: string,
+    ref: E2eRepositoryRef,
+    changes: readonly { readonly path: string; readonly content: string | null }[],
+    message: string,
+  ): Promise<string | null>;
   /** Browser link to the file, when the provider exposes one. */
   fileUrl(workspaceId: string, ref: E2eRepositoryRef, filePath: string): Promise<string | null>;
 }

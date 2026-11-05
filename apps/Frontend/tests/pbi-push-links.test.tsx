@@ -131,6 +131,10 @@ describe('PbiPushDialog', () => {
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('status')).toHaveTextContent('Carregando campos');
     const assignee = await within(dialog).findByRole('combobox', { name: /Responsável/ });
+    // Unmapped fields are only highlighted once the push is attempted.
+    expect(assignee).toHaveAttribute('aria-invalid', 'false');
+    fireEvent.submit(assignee.closest('form')!);
+    expect(onSubmit).not.toHaveBeenCalled();
     expect(assignee).toHaveAttribute('aria-invalid', 'true');
     expect(
       within(dialog).getByText(

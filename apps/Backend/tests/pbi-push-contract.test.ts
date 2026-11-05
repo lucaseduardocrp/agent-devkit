@@ -304,6 +304,11 @@ describe('Azure DevOps push contract', () => {
     });
     expect(byKey.assignee!.options).toHaveLength(2);
     expect(byKey.state).toMatchObject({ value: 'In Progress', source: 'Active' });
+    expect(byKey.descriptionFormat).toMatchObject({ value: 'html', status: 'resolved' });
+    expect(byKey.descriptionFormat!.options.map((option) => option.value)).toEqual([
+      'html',
+      'markdown',
+    ]);
 
     await expect(
       service.push('ws', item.id, { providerId: 'azure_devops' }, ana),
@@ -384,6 +389,38 @@ describe('Azure DevOps push contract', () => {
     expect(updateContract.fields.find((field) => field.key === 'iterationPath')?.value).toBe(
       'proj\\Sprint 2',
     );
+
+    // Markdown: the HTML description is converted and Azure is told to keep the field in Markdown.
+    const markdown = await service.push(
+      'ws',
+      item.id,
+      {
+        providerId: 'azure_devops',
+        fields: { iterationPath: 'proj\\Sprint 2', descriptionFormat: 'markdown' },
+      },
+      ana,
+    );
+    expect(markdown.item.sourceData).toMatchObject({ descriptionFormat: 'markdown' });
+    const markdownPatch = calls.filter((call) => call.method === 'PATCH').at(-2)!.body;
+    expect(markdownPatch).toContainEqual({
+      op: 'add',
+      path: '/fields/System.Description',
+      value: 'Teste',
+    });
+    expect(markdownPatch).toContainEqual({
+      op: 'add',
+      path: '/multilineFieldsFormat/System.Description',
+      value: 'Markdown',
+    });
+    // Azure cannot convert Markdown back to HTML, so the format is locked afterwards.
+    const lockedContract = await service.pushContract('ws', item.id, 'azure_devops', {
+      descriptionFormat: 'html',
+    });
+    expect(lockedContract.fields.find((field) => field.key === 'descriptionFormat')).toMatchObject({
+      value: 'markdown',
+      readOnly: true,
+      options: [{ value: 'markdown', label: 'Markdown' }],
+    });
   });
 
   it('updates a linked work item in one patch, adds parents and reports link failures', async () => {
@@ -410,7 +447,7 @@ describe('Azure DevOps push contract', () => {
     expect(updated).toMatchObject({ status: 'Done', sourceData: { type: 'Bug' } });
     expect(calls[0]!.body).toEqual([
       { op: 'add', path: '/fields/System.Title', value: 'T' },
-      { op: 'add', path: '/fields/System.Description', value: 'D' },
+      { op: 'add', path: '/fields/System.Description', value: '<p>D</p>' },
       { op: 'add', path: '/fields/System.State', value: 'Done' },
     ]);
     const created = await provider.push(

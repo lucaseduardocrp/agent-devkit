@@ -15,7 +15,7 @@ describe('Sidebar collapsed mode', () => {
     expect(localStorage.getItem(COLLAPSED_KEY)).toBe('1');
     const expand = screen.getByRole('button', { name: 'Expandir barra lateral' });
     expect(expand).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getByRole('button', { name: 'Brain' })).not.toHaveTextContent('Brain');
+    expect(screen.getByRole('button', { name: 'Cérebro' })).not.toHaveTextContent('Cérebro');
 
     fireEvent.click(expand);
     expect(localStorage.getItem(COLLAPSED_KEY)).toBe('0');

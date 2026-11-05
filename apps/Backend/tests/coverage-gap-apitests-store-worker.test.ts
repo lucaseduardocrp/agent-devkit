@@ -193,7 +193,7 @@ describe('ApiTestWorker', () => {
     worker.wake();
     expect(worker.status.draining).toBe(true);
     await worker.idle();
-    expect(finish).toHaveBeenCalledWith('r1', worker.workerId, {
+    expect(finish).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1' }), worker.workerId, {
       status: 'error',
       result: null,
       error: 'bad payload',
@@ -235,7 +235,11 @@ describe('ApiTestWorker', () => {
     });
     worker.wake();
     await worker.idle();
-    expect(finish).toHaveBeenCalledWith('r2', 'w-1', expect.objectContaining({ error: 'corrupt' }));
+    expect(finish).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'r2' }),
+      'w-1',
+      expect.objectContaining({ error: 'corrupt' }),
+    );
   });
 });
 
@@ -292,7 +296,11 @@ describe('ApiTestWorker executing a run', () => {
     expect(fakeFetch).toHaveBeenCalled();
     expect(heartbeat).toHaveBeenCalledWith('r3', 'w-2', null);
     expect(heartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(finish).toHaveBeenCalledWith('r3', 'w-2', expect.objectContaining({ error: null }));
+    expect(finish).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'r3' }),
+      'w-2',
+      expect.objectContaining({ error: null }),
+    );
   });
 });
 
@@ -319,7 +327,7 @@ describe('ApiTestWorker defaults', () => {
     worker.wake();
     await worker.idle();
     expect(finish).toHaveBeenCalledWith(
-      'r4',
+      expect.objectContaining({ id: 'r4' }),
       worker.workerId,
       expect.objectContaining({ status: 'passed', error: null }),
     );

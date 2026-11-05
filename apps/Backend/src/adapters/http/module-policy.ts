@@ -68,6 +68,9 @@ export function moduleRequirements(method: string, path: string): readonly Modul
   if ((path === '/agents' || path === '/agents/workflow') && byMethod(method) === 'view') return [];
   // Read state of the personal inbox does not change shared work items.
   if (/^\/inbox\//.test(path)) return [{ module: 'issues', operation: 'view' }];
+  // A member's own credentials and runtime state of integration tests are personal data.
+  if (/^\/integration-tests\/(personal-secrets|collections\/[^/]+\/runtime)$/.test(path))
+    return [{ module: 'integrationTests', operation: 'view' }];
   // Budget and rates are governed by the manageCosts workspace permission.
   if (/^\/costs(\/|$)/.test(path)) return [{ module: 'issues', operation: 'view' }];
   if (method === 'POST' && path === '/agents/default/brain-query')

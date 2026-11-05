@@ -13,6 +13,8 @@ const detail: Dto = {
   description: 'Validar o login.',
   steps: ['Abrir login'],
   priority: 'medium',
+  beforeRunInstructions: null,
+  afterRunInstructions: null,
   status: 'passed',
   error: null,
   analysis: null,

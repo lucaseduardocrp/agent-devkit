@@ -113,11 +113,11 @@ describe('runLoad edges', () => {
     // A roll at the very top of the range lands on the last request.
     vi.spyOn(Math, 'random').mockReturnValue(1);
     let calls = 0;
-    const fetch: typeof globalThis.fetch = (_input, init) => {
+    const fetch: typeof globalThis.fetch = (input) => {
       calls += 1;
       if (calls === 1) return Promise.reject(new Error('connection reset'));
       return new Promise((_resolve, reject) => {
-        init!.signal!.addEventListener('abort', () => reject(new Error('aborted')));
+        (input as Request).signal.addEventListener('abort', () => reject(new Error('aborted')));
       });
     };
     const controller = new AbortController();
@@ -160,10 +160,37 @@ describe('runLoad edges', () => {
       signal: controller.signal,
       controlMs: 5,
     });
-    // Each user that started records its one request, then stops without waiting a minute.
-    expect(summary.totalRequests).toBeGreaterThan(0);
-    expect(summary.totalRequests).toBe(fetch.mock.calls.length);
+    expect(fetch.mock.calls.length).toBeGreaterThan(0);
+    expect(summary.totalRequests).toBe(0);
     expect(performance.now() - started).toBeLessThan(5_000);
+  });
+});
+
+describe('runLoad plumbing options', () => {
+  it('passes connectHost, the collection settings and inherited headers to every request', async () => {
+    const seen: (readonly [string, string])[][] = [];
+    const fetch = vi.fn(async (input: Request) => {
+      seen.push([...input.headers].map(([key, value]) => [key, value] as const));
+      return new Response('ok', { status: 200 });
+    });
+    const connectHost = vi.fn((host: string) => host);
+    const summary = await runLoad(
+      plan({
+        settings: { timeoutMs: 5_000 },
+        requests: [
+          {
+            request: request('a'),
+            auth: { type: 'none' },
+            weight: 1,
+            inheritedHeaders: [{ key: 'x-inherited', value: 'yes' }],
+          },
+        ],
+        stages: [{ durationSec: 0.05, targetVus: 1 }],
+      }),
+      { fetch: fetch as unknown as typeof globalThis.fetch, connectHost, tickMs: 10, controlMs: 5 },
+    );
+    expect(summary.totalRequests).toBeGreaterThan(0);
+    expect(seen[0]?.some(([key, value]) => key === 'x-inherited' && value === 'yes')).toBe(true);
   });
 });
 
@@ -177,7 +204,7 @@ describe('runLoad without think time', () => {
       throw new Error('listener down');
     });
     const summary = await runLoad(
-      plan({ thinkTimeMs: 0, stages: [{ durationSec: 0.05, targetVus: 1 }] }),
+      plan({ thinkTimeMs: 0, stages: [{ durationSec: 0.3, targetVus: 1 }] }),
       { fetch: fetch as unknown as typeof globalThis.fetch, onTick, tickMs: 10, controlMs: 5 },
     );
     expect(summary.totalRequests).toBeGreaterThan(1);

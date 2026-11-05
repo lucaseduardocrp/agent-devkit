@@ -4,25 +4,29 @@ import { Input } from '../../../components/ui/input.js';
 import { Modal } from '../../../components/ui/modal.js';
 import { useI18n } from '../../../lib/i18n/index.js';
 import { cn } from '../../../lib/utils.js';
-import type { HttpMethod } from '../api-test-types.js';
-import { METHOD_COLOR, METHOD_SHORT } from './integration-model.js';
+import type { HttpMethod, RequestKind } from '../api-test-types.js';
+import { KIND_COLOR, KIND_SHORT, METHOD_COLOR, METHOD_SHORT } from './integration-model.js';
 
+/** The method of an HTTP request, or the protocol of the other kinds (GQL, gRPC, WS...). */
 export function MethodLabel({
   method,
+  kind = 'http',
   className,
 }: {
   readonly method: HttpMethod;
+  readonly kind?: RequestKind;
   readonly className?: string;
 }): React.JSX.Element {
+  const protocol = kind === 'http' ? null : kind;
   return (
     <span
       className={cn(
         'shrink-0 font-mono text-[10px] font-bold uppercase tracking-tight',
-        METHOD_COLOR[method],
+        protocol ? KIND_COLOR[protocol] : METHOD_COLOR[method],
         className,
       )}
     >
-      {METHOD_SHORT[method] ?? method}
+      {protocol ? KIND_SHORT[protocol] : (METHOD_SHORT[method] ?? method)}
     </span>
   );
 }
@@ -156,6 +160,82 @@ export function EmptyPane({
     <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-xs text-[var(--text-muted)]">
       <i className={cn('ti text-4xl', icon)} aria-hidden="true" />
       {children}
+    </div>
+  );
+}
+
+/** A labelled field of the settings panes. */
+export function SettingField({
+  label,
+  hint,
+  className,
+  children,
+}: {
+  readonly label: string;
+  readonly hint?: string;
+  readonly className?: string;
+  readonly children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <label
+      className={cn(
+        'flex min-w-0 flex-col gap-1.5 text-xs text-[var(--text-secondary)]',
+        className,
+      )}
+    >
+      {label}
+      {children}
+      {hint && <span className="text-[11px] text-[var(--text-muted)]">{hint}</span>}
+    </label>
+  );
+}
+
+/** An on/off setting with what it does under it. */
+export function CheckboxField({
+  label,
+  hint,
+  checked,
+  disabled,
+  onChange,
+  testId,
+}: {
+  readonly label: string;
+  readonly hint?: string;
+  readonly checked: boolean;
+  readonly disabled?: boolean;
+  readonly onChange: (checked: boolean) => void;
+  readonly testId?: string;
+}): React.JSX.Element {
+  return (
+    <label className="flex cursor-pointer items-start gap-2 text-xs">
+      <input
+        type="checkbox"
+        className="mt-0.5"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        data-testid={testId}
+      />
+      <span>
+        <span className="font-medium text-[var(--text-primary)]">{label}</span>
+        {hint && <span className="block text-[var(--text-muted)]">{hint}</span>}
+      </span>
+    </label>
+  );
+}
+
+/** Title and description of a settings section. */
+export function SectionTitle({
+  title,
+  hint,
+}: {
+  readonly title: string;
+  readonly hint?: string;
+}): React.JSX.Element {
+  return (
+    <div className="flex flex-col gap-1">
+      <h3 className="text-xs font-semibold text-[var(--text-primary)]">{title}</h3>
+      {hint && <p className="text-xs text-[var(--text-secondary)]">{hint}</p>}
     </div>
   );
 }

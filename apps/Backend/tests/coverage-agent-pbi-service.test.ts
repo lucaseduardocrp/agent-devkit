@@ -166,6 +166,30 @@ describe('PbiService.previewFields', () => {
     expect(listFields).not.toHaveBeenCalled();
   });
 
+  it('replaces the rules of the fields filled in when publishing', async () => {
+    const { provider } = fakeProvider();
+    const { service, mappings, item } = await setup(provider);
+    const saved = await mappings.save(
+      'ws',
+      null,
+      template({
+        rules: [
+          { targetFieldId: 'cf_title', source: { kind: 'core', key: 'title' } },
+          { targetFieldId: 'cf_points', source: { kind: 'constant', value: '8' } },
+        ],
+      }),
+    );
+    expect(
+      await service.previewFields('ws', item.id, 'jira', saved.id, '', '', {
+        cf_title: 'Typed title',
+        cf_points: 13,
+      }),
+    ).toEqual({ definitions, values: { cf_title: 'Typed title', cf_points: 13 } });
+    await expect(
+      service.previewFields('ws', item.id, 'jira', saved.id, '', '', { cf_other: 'x' }),
+    ).rejects.toMatchObject({ code: 'FIELD_MAPPING_INVALID' });
+  });
+
   it('uses an empty scope and item type by default', async () => {
     const { provider, listFields } = fakeProvider();
     const { service, mappings, item } = await setup(provider);
@@ -201,6 +225,35 @@ describe('PbiService.push with a field mapping template', () => {
     expect(result.item.links).toEqual([
       expect.objectContaining({ providerId: 'jira', externalId: 'R1' }),
     ]);
+  });
+
+  it('pushes the values filled in for the template fields', async () => {
+    const { provider, push } = fakeProvider({
+      pushContract: vi.fn(() =>
+        Promise.resolve([field('project', 'KEY'), field('issueType', 'Story')]),
+      ),
+    });
+    const { service, mappings, item } = await setup(provider);
+    const saved = await mappings.save(
+      'ws',
+      null,
+      template({
+        rules: [
+          { targetFieldId: 'cf_title', source: { kind: 'core', key: 'title' } },
+          { targetFieldId: 'cf_points', source: { kind: 'constant', value: '1' } },
+        ],
+      }),
+    );
+    await service.push('ws', item.id, {
+      providerId: 'jira',
+      templateId: saved.id,
+      fieldValues: { cf_points: 5 },
+    });
+    expect(push).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Checkout' }),
+      // The field left out keeps the template rule; the filled one wins.
+      expect.objectContaining({ customFields: { cf_title: 'Checkout', cf_points: 5 } }),
+    );
   });
 
   it('keeps the item custom fields untouched when the template maps nothing', async () => {

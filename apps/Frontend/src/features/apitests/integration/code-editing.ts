@@ -240,3 +240,80 @@ export function formatXml(text: string): string | null {
   }
   return depth === 0 ? lines.join('\n') : null;
 }
+
+const GRAPHQL_PART =
+  /\{\{[^{}\n]*\}\}|#[^\n]*|"""[\s\S]*?(?:"""|$)|"(?:\.|[^"\\n])*"?|\.\.\.|\$?[_A-Za-z][_0-9A-Za-z]*|@[_A-Za-z][_0-9A-Za-z]*|-?\d[\d.eE+-]*|\s+|[\s\S]/g;
+const GRAPHQL_WORD = /^\$?[_A-Za-z]/;
+
+/**
+ * Re-indents a GraphQL document: one field per line inside `{ }`, arguments kept on the line of
+ * their field. Null when the braces or parentheses do not balance.
+ */
+export function formatGraphql(text: string): string | null {
+  const parts = text.match(GRAPHQL_PART) ?? [];
+  const lines: string[] = [];
+  let line = '';
+  let depth = 0;
+  let parens = 0;
+  const flush = () => {
+    if (line.trim()) lines.push(INDENT.repeat(depth) + line.trim());
+    line = '';
+  };
+  const significant = (from: number, step: 1 | -1) => {
+    for (let index = from; index >= 0 && index < parts.length; index += step) {
+      if (!/^\s+$/.test(parts[index]!) && parts[index] !== ',') return parts[index]!;
+    }
+    return '';
+  };
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
+    if (part.startsWith('#')) {
+      flush();
+      lines.push(INDENT.repeat(depth) + part.trim());
+    } else if (part === '{' && parens === 0) {
+      line = `${line.trimEnd()} {`;
+      flush();
+      depth += 1;
+    } else if (part === '}' && parens === 0) {
+      flush();
+      depth -= 1;
+      if (depth < 0) return null;
+      line = '}';
+      flush();
+    } else if (part === '(' || part === '[') {
+      // `field(` has no space before it; a `[` list value keeps the space after its `:`.
+      if (part === '(') {
+        parens += 1;
+        line = line.trimEnd();
+      }
+      line += part;
+    } else if (part === ')' || part === ']') {
+      if (part === ')') parens -= 1;
+      if (parens < 0) return null;
+      line = line.trimEnd() + part;
+    } else if (part === ',') {
+      if (parens > 0 || depth === 0) line = `${line.trimEnd()}, `;
+      else flush();
+    } else if (/^\s+$/.test(part)) {
+      const previous = significant(index - 1, -1);
+      const next = significant(index + 1, 1);
+      // Two selections in a row (`id name`, `id\nname`) are two lines.
+      const newSelection =
+        depth > 0 &&
+        parens === 0 &&
+        (GRAPHQL_WORD.test(previous) || previous === ')' || previous === '}') &&
+        !['on', '...', 'query', 'mutation', 'subscription', 'fragment'].includes(previous) &&
+        (GRAPHQL_WORD.test(next) || next === '...') &&
+        next !== 'on';
+      if (newSelection) flush();
+      else if (line && !/[ ([]$/.test(line) && !/^[)\]:]$/.test(next)) line += ' ';
+    } else if (part === ':') {
+      line = `${line.trimEnd()}: `;
+    } else {
+      if (line.endsWith('}') || (GRAPHQL_WORD.test(part) && /[\w)]$/.test(line))) line += ' ';
+      line += part;
+    }
+  }
+  flush();
+  return depth === 0 && parens === 0 ? lines.join('\n') : null;
+}

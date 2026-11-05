@@ -142,7 +142,7 @@ tools) in [apps/Mcp/README.md](apps/Mcp/README.md).
 - **Agents and Issues**: agent hierarchy, issue inbox, runs, budgets and cost tracking.
 - **Design**: design systems and prototype projects.
 - **E2E Automation**: Playwright runs on ADK workers or on your own computer, with videos,
-  screenshots and test-management reporting.
+  screenshots, per-test Before Run and After Run setup/cleanup and test-management reporting.
 - **Integration Tests**: API request collections with assertions and chained variables, generated
   by AI from test plans, Brain, specs and PBIs or imported from Postman, Insomnia and OpenAPI;
   exported to Postman, Insomnia and Bruno.

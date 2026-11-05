@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RemoteDesignStore } from '../src/modules/design/adapters/remote-design-store.js';
 import type { DesignProject } from '../src/modules/design/application/design-service.js';
 import type { IntegrationsService } from '../src/modules/integrations/application/integrations-service.js';
+import { InMemoryDesignSettingsStore } from '../src/modules/design/application/design-settings-store.js';
 
 interface Integration {
   providerId: string;
@@ -185,7 +186,7 @@ describe('RemoteDesignStore configuration', () => {
     const run = (item: Integration, provider: 'github' | 'azure') =>
       new RemoteDesignStore(integrations([item]), vi.fn()).list('ws', provider);
     await expect(run(github({ owner: 'acme' }), 'github')).rejects.toMatchObject({
-      message: 'Informe o repositório na configuração da integração.',
+      message: 'Escolha o repositório e a branch nas configurações do Design.',
     });
     await expect(run(github({ repo: 'ui', owner: ' ' }), 'github')).rejects.toMatchObject({
       message: expect.stringContaining('proprietario'),
@@ -476,6 +477,55 @@ describe('RemoteDesignStore design systems', () => {
     await expect(store.listDesignSystems('ws', 'github')).resolves.toEqual([
       { id: 'x', name: 'x', content: '', updatedAt: '' },
     ]);
+  });
+});
+
+describe('RemoteDesignStore with a repository chosen in the Design module', () => {
+  const settingsStore = async (settings: {
+    provider: 'github' | 'azure';
+    repositoryName: string;
+    branch: string;
+  }) => {
+    const store = new InMemoryDesignSettingsStore();
+    await store.save('ws', { ...settings, repositoryId: 'repo-id' });
+    return store;
+  };
+
+  it('uses the chosen GitHub repository and branch instead of the integration ones', async () => {
+    const server = githubServer();
+    const store = new RemoteDesignStore(
+      integrations([github({ owner: 'old', repo: 'old-ui', branch: 'old' })]),
+      server.fetcher,
+      await settingsStore({ provider: 'github', repositoryName: 'acme/prototypes', branch: 'dev' }),
+    );
+    expect(await store.configuredProviders('ws')).toEqual(['github']);
+    await expect(store.list('ws', 'github')).resolves.toEqual([]);
+    expect(server.calls[0]!.url).toBe(
+      'https://api.github.com/repos/acme/prototypes/git/trees/dev?recursive=1',
+    );
+  });
+
+  it('uses the chosen Azure project, repository and branch', async () => {
+    const server = azureServer();
+    const store = new RemoteDesignStore(
+      integrations([azure({ organization: 'acme', project: 'Old', repository: 'old' })]),
+      server.fetcher,
+      await settingsStore({ provider: 'azure', repositoryName: 'Work/proto', branch: 'release' }),
+    );
+    expect(await store.configuredProviders('ws')).toEqual(['azure']);
+    await expect(store.list('ws', 'azure')).resolves.toEqual([]);
+    expect(server.calls[0]!.url).toMatch(
+      /\/acme\/Work\/_apis\/git\/repositories\/proto\/items\?.*version=release/,
+    );
+  });
+
+  it('reports no provider while the chosen one is not connected', async () => {
+    const store = new RemoteDesignStore(
+      integrations([github()]),
+      vi.fn(),
+      await settingsStore({ provider: 'azure', repositoryName: 'Work/proto', branch: 'main' }),
+    );
+    expect(await store.configuredProviders('ws')).toEqual([]);
   });
 });
 

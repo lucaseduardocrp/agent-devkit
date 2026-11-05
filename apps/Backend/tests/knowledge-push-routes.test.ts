@@ -37,7 +37,7 @@ describe('POST /knowledge/documents/:pageId/push', () => {
     expect(destinations.body.destinations).toEqual([{ id: 'list-1', label: 'Docs' }]);
   });
 
-  it('publishes only the selected document at an explicit Wiki path and keeps local pages', async () => {
+  it('publishes only the selected document at an explicit Wiki path and moves it to the Wiki section', async () => {
     const pushPage = vi.fn(async ({ path, content }: { path: string; content: string }) => ({
       id: 'remote-child',
       source: `https://dev.azure.com/wiki?pagePath=${encodeURIComponent(path)}`,
@@ -80,14 +80,25 @@ describe('POST /knowledge/documents/:pageId/push', () => {
       undefined,
       'wiki-2',
     );
+    expect(result.body.published).toEqual([
+      expect.objectContaining({ oldId: child.id, newId: expect.stringMatching(/:remote-child$/) }),
+    ]);
     expect((await request(app).get('/knowledge/documents')).body.documents).toMatchObject([
       { pageId: parent.pageId, isCustom: true },
-      { pageId: child.pageId, isCustom: true, parentPageId: parent.pageId },
+      {
+        pageId: 'remote-child',
+        isCustom: false,
+        provider: 'azure_devops_wiki',
+        pagePath: '/Doc 1/Doc 3.1/Doc 2',
+      },
     ]);
   });
 
   it('requires a Trello list and publishes the selected document as a card', async () => {
-    const push = vi.fn(async () => ({ externalUrl: 'https://trello.com/c/card' }));
+    const push = vi.fn(async () => ({
+      externalId: 'card-1',
+      externalUrl: 'https://trello.com/c/card',
+    }));
     const app = createApp({
       requestContextResolver: async () => ({ ownerId: 'trello-push', requestId: 'trello-push' }),
       knowledgeRepository: new InMemoryKnowledgeChunkRepository(),
@@ -111,6 +122,20 @@ describe('POST /knowledge/documents/:pageId/push', () => {
       { kind: 'card', title: 'Note', description: '# Note\n\nBody', status: 'backlog' },
       { listId: 'list-1' },
     );
+    const [moved] = (await request(app).get('/knowledge/documents')).body.documents;
+    expect(moved).toMatchObject({
+      pageId: doc.pageId,
+      title: 'Note',
+      isCustom: false,
+      provider: 'trello',
+    });
+    expect(result.body.published).toEqual([
+      { oldId: doc.id, newId: moved.id, remoteUrl: 'https://trello.com/c/card' },
+    ]);
+    const edit = await request(app)
+      .put(`/knowledge/documents/${doc.pageId}`)
+      .send({ title: 'Note', content: 'changed' });
+    expect(edit.status).toBe(400);
   });
 
   it('uses the workspace Azure integration and writes through the Wiki API', async () => {

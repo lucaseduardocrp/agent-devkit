@@ -153,18 +153,19 @@ describe('IntegrationConfigModal provider forms', () => {
     },
   );
 
-  it('saves the design repository and branch of an Azure DevOps wiki', async () => {
+  // The repository and branch Design works in are chosen in the Design module, not here.
+  it('saves an Azure DevOps wiki without a design repository', async () => {
     const { view, save } = renderModal(item('azure_devops_wiki', 'Azure DevOps', 'KNOWLEDGE'));
 
-    const branch = view.getByLabelText('Branch') as HTMLInputElement;
-    expect(branch.value).toBe('main');
-    fill(view, { 'Repositório Git para Design': 'design-system', Branch: 'develop' });
+    expect(view.queryByLabelText('Repositório Git para Design')).toBeNull();
+    expect(view.queryByLabelText('Branch')).toBeNull();
+    fill(view, { 'Identificador da Wiki (necessário se houver mais de uma)': 'Documents' });
     fireEvent.click(view.getByRole('button', { name: 'Salvar' }));
 
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith('KNOWLEDGE', 'azure_devops_wiki', {
         isEnabled: true,
-        settings: { repository: 'design-system', branch: 'develop' },
+        settings: { wikiIdentifier: 'Documents' },
         secret: undefined,
       }),
     );

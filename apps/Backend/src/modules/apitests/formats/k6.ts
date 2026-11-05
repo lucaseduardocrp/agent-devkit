@@ -3,6 +3,7 @@ import { flattenRequests } from '../engine/collection-runner.js';
 import { DYNAMIC_VALUE_NAMES, resolveDynamicValue } from '../engine/dynamic-values.js';
 import { fillPathParams } from '../engine/http-request.js';
 import type {
+  ApiRequestSpec,
   Assertion,
   LoadThreshold,
   RequestAuth,
@@ -129,8 +130,11 @@ function authLines(auth: RequestAuth): string[] {
             `query.push(encodeURIComponent(v(${js(auth.key)})) + '=' + encodeURIComponent(v(${js(auth.value)})));`,
           ]
         : [`headers[v(${js(auth.key)})] = v(${js(auth.value)});`];
-    default:
+    case 'none':
+    case 'inherit':
       return [];
+    default:
+      return [`// TODO: ${auth.type} auth is not exported to k6`];
   }
 }
 
@@ -138,9 +142,13 @@ function bodyExpression(body: RequestBody): string {
   switch (body.mode) {
     case 'none':
       return 'null';
+    // The file of a binary body stays in ADK; k6 would need `open()` on a local copy.
+    case 'binary':
+      return 'null';
     case 'json':
     case 'text':
     case 'xml':
+    case 'sparql':
       return `v(${js(body.content)})`;
     case 'urlencoded':
     case 'form':
@@ -149,6 +157,25 @@ function bodyExpression(body: RequestBody): string {
         .map((f) => `[v(${js(f.key)})]: v(${js(f.value)})`)
         .join(', ')} }`;
   }
+}
+
+/** A GraphQL request goes over HTTP as a JSON POST body. */
+function graphqlBody(request: ApiRequestSpec): RequestBody {
+  const graphql = request.graphql ?? { query: '' };
+  let variables: unknown;
+  try {
+    variables = graphql.variables?.trim() ? JSON.parse(graphql.variables) : undefined;
+  } catch {
+    // invalid variables are left out, as the runner does
+  }
+  return {
+    mode: 'json',
+    content: JSON.stringify({
+      query: graphql.query,
+      ...(variables !== undefined ? { variables } : {}),
+      ...(graphql.operationName ? { operationName: graphql.operationName } : {}),
+    }),
+  };
 }
 
 export function exportK6(
@@ -189,17 +216,24 @@ export function exportK6(
 
   const requestBlocks = chosen.map(({ flat, weight }) => {
     const request = flat!.request;
+    const kind = request.kind ?? 'http';
+    if (kind !== 'http' && kind !== 'graphql') {
+      return `  // ${request.name}: ${kind} requests are not exported to k6`;
+    }
     const enabled = (list: readonly { key: string; value: string; enabled?: boolean }[]) =>
       list.filter((entry) => entry.enabled !== false && entry.key.trim());
-    const body = request.body;
+    const body = kind === 'graphql' ? graphqlBody(request) : request.body;
+    const method = kind === 'graphql' ? 'POST' : request.method;
     const contentType =
       body.mode === 'json'
         ? 'application/json'
         : body.mode === 'xml'
           ? 'application/xml'
-          : body.mode === 'text'
-            ? 'text/plain'
-            : null;
+          : body.mode === 'sparql'
+            ? 'application/sparql-query'
+            : body.mode === 'text'
+              ? 'text/plain'
+              : null;
     const lines = [
       `  {`,
       `    name: ${js(request.name)},`,
@@ -220,7 +254,7 @@ export function exportK6(
         .join(', ')}];`,
       ...authLines(flat!.auth).map((line) => `      ${line}`),
       `      const url = v(${js(fillPathParams(request.url, request.pathParams))}) + (query.length ? '?' + query.join('&') : '');`,
-      `      const r = http.request(${js(request.method)}, url, ${bodyExpression(body)}, { headers, tags: { name: ${js(request.name)} }${scenario.timeoutMs ? `, timeout: '${scenario.timeoutMs}ms'` : ''} });`,
+      `      const r = http.request(${js(method)}, url, ${bodyExpression(body)}, { headers, tags: { name: ${js(request.name)} }${scenario.timeoutMs ? `, timeout: '${scenario.timeoutMs}ms'` : ''} });`,
       ...(request.assertions.length
         ? [
             `      check(r, {`,

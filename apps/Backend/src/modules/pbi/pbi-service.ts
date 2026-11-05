@@ -24,6 +24,7 @@ import {
   InMemoryFieldMappingStore,
   mergeImportedFields,
   resolveFieldMapping,
+  withFieldValues,
   type FieldMappingStore,
   type FieldValue,
 } from '../field-mapping/field-mapping.js';
@@ -82,6 +83,8 @@ export interface PushOptions {
   /** Values for the provider push contract (see `pushContract`). */
   fields?: Record<string, string>;
   templateId?: string;
+  /** Values filled in for the template fields when pushing, keyed by destination field id. */
+  fieldValues?: Record<string, FieldValue>;
 }
 export interface PbiItemSummary {
   id: string;
@@ -120,6 +123,7 @@ function summary(item: PbiItem): PbiItemSummary {
 /** Keys a provider may return after a push that ADK mirrors on the local item. */
 const pushedSourceKeys = [
   'type',
+  'descriptionFormat',
   'iterationPath',
   'areaPath',
   'assignedTo',
@@ -542,21 +546,23 @@ export class PbiService {
     templateId: string,
     scope = '',
     itemType = '',
+    values: Readonly<Record<string, FieldValue>> = {},
   ) {
     const item = await this.get(workspaceId, id);
-    const template = await this.fieldMappings.get(workspaceId, templateId);
+    const stored = await this.fieldMappings.get(workspaceId, templateId);
     if (
-      !template ||
-      template.entityType !== 'pbi' ||
-      template.providerId !== providerId ||
-      (template.scope && template.scope !== scope) ||
-      (template.itemType && template.itemType !== itemType)
+      !stored ||
+      stored.entityType !== 'pbi' ||
+      stored.providerId !== providerId ||
+      (stored.scope && stored.scope !== scope) ||
+      (stored.itemType && stored.itemType !== itemType)
     )
       throw new ApplicationError(
         'FIELD_MAPPING_INVALID',
         'Template does not match this destination.',
         400,
       );
+    const template = withFieldValues(stored, values);
     const definitions = await this.fieldCatalog(workspaceId, providerId, scope, itemType);
     return { definitions, values: resolveFieldMapping(item, template, definitions) };
   }
@@ -619,6 +625,7 @@ export class PbiService {
         options.templateId,
         scope,
         fields.workItemType ?? fields.issueType ?? '',
+        options.fieldValues ?? {},
       );
       customFields = preview.values;
       fieldDefinitions = preview.definitions;

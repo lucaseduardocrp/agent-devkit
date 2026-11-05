@@ -332,36 +332,6 @@ export function IntegrationConfigModal({
                   {t('connect.wikiWriteScope')}
                 </p>
               </div>
-              <div>
-                <label
-                  htmlFor="cfg-az-repository"
-                  className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
-                >
-                  {t('connect.designRepository')}
-                </label>
-                <Input
-                  id="cfg-az-repository"
-                  value={settings.repository ?? ''}
-                  onChange={(event) => updateSetting('repository', event.target.value)}
-                  placeholder={t('connect.repositoryPlaceholder')}
-                  autoComplete="off"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="cfg-az-branch"
-                  className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
-                >
-                  Branch
-                </label>
-                <Input
-                  id="cfg-az-branch"
-                  value={settings.branch ?? 'main'}
-                  onChange={(event) => updateSetting('branch', event.target.value)}
-                  placeholder="main"
-                  autoComplete="off"
-                />
-              </div>
             </>
           )}
 

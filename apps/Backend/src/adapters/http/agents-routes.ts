@@ -10,6 +10,7 @@ import {
   type AgentRole,
   type AgentSkill,
 } from '../../modules/agents/domain/agent-entity.js';
+import { AGENT_WORKFLOW_MAX_DELAY_MINUTES } from '../../modules/agents/domain/agent-workflow.js';
 import type { HubAgentService } from '../../modules/hub/application/hub-agent-service.js';
 import { registerHubAgentRoutes } from './hub-agents-routes.js';
 
@@ -70,6 +71,25 @@ const brainQuerySchema = z.object({
   history: z.string().trim().max(8000).optional(),
 });
 
+/** The modules a rule or an action node can cover. */
+const workflowToolsetSchema = z.enum([
+  'all',
+  'agents',
+  'integrations',
+  'brain',
+  'issues',
+  'pbi',
+  'spec',
+  'testplans',
+  'design',
+  'e2e',
+  'releasenotes',
+  'integrationtests',
+  'loadtests',
+  'audit',
+  'workspaces',
+]);
+
 const agentWorkflowSchema = z.object({
   enabled: z.boolean(),
   autonomy: z.enum(['supervised', 'balanced', 'autonomous']).default('balanced'),
@@ -82,23 +102,7 @@ const agentWorkflowSchema = z.object({
       z.object({
         id: z.string().trim().min(1).max(100),
         name: z.string().trim().min(1).max(100),
-        toolset: z.enum([
-          'all',
-          'agents',
-          'integrations',
-          'brain',
-          'issues',
-          'pbi',
-          'spec',
-          'testplans',
-          'design',
-          'e2e',
-          'releasenotes',
-          'integrationtests',
-          'loadtests',
-          'audit',
-          'workspaces',
-        ]),
+        toolset: workflowToolsetSchema,
         toolName: z
           .string()
           .trim()
@@ -123,6 +127,65 @@ const agentWorkflowSchema = z.object({
       }),
     )
     .max(20),
+  // The editor's flow: the layout, the trigger and the nodes the runner walks. `steps` stays
+  // beside it as the plain ordered list, so a reader that predates the canvas still works.
+  canvas: z
+    .object({
+      nodes: z
+        .array(
+          z.object({
+            id: z.string().trim().min(1).max(100),
+            // `start` is the name the trigger node had before triggers were configurable.
+            kind: z
+              .enum(['start', 'trigger', 'step', 'approval', 'action', 'condition', 'delay'])
+              .transform((kind) => (kind === 'start' ? ('trigger' as const) : kind)),
+            x: z.number().finite(),
+            y: z.number().finite(),
+            trigger: z
+              .object({
+                kind: z.enum(['issue-assigned', 'product-event', 'schedule']),
+                events: z
+                  .array(z.enum(['pbi.created', 'pbi.moved', 'spec.published', 'issue.commented']))
+                  .max(10)
+                  .optional(),
+                cron: z.string().trim().min(1).max(120).optional(),
+              })
+              .optional(),
+            action: z
+              .object({
+                toolset: workflowToolsetSchema,
+                toolName: z
+                  .string()
+                  .trim()
+                  .regex(/^[a-z][a-z0-9_]{2,63}$/)
+                  .optional(),
+                provider: z.string().trim().min(1).max(100).optional(),
+              })
+              .optional(),
+            condition: z
+              .object({
+                operator: z.enum(['contains', 'not-contains', 'matches']),
+                value: z.string().max(500),
+              })
+              .optional(),
+            delay: z
+              .object({ minutes: z.number().finite().min(0).max(AGENT_WORKFLOW_MAX_DELAY_MINUTES) })
+              .optional(),
+          }),
+        )
+        .max(100),
+      edges: z
+        .array(
+          z.object({
+            id: z.string().trim().min(1).max(100),
+            from: z.string().trim().min(1).max(100),
+            fromPort: z.enum(['true', 'false']).optional(),
+            to: z.string().trim().min(1).max(100),
+          }),
+        )
+        .max(400),
+    })
+    .optional(),
 });
 
 export function resolveWorkspaceId(request: Request): string {

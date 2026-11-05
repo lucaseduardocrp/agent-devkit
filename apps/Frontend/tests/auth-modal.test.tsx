@@ -209,3 +209,21 @@ describe('AuthModal', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+describe('AuthModal sign-in options', () => {
+  it('ignores the options of a request that fails after the modal is gone', async () => {
+    const client = new ApiClient();
+    let fail: (reason: Error) => void = () => undefined;
+    const pending = new Promise<never>((_resolve, reject) => {
+      fail = reject;
+    });
+    const getAuthOptions = vi.spyOn(client, 'getAuthOptions').mockReturnValue(pending);
+    const view = render(
+      <AuthModal isOpen={true} onClose={vi.fn()} onSuccess={vi.fn()} apiClient={client} />,
+    );
+    view.unmount();
+    fail(new Error('offline'));
+    await waitFor(() => expect(getAuthOptions).toHaveBeenCalledTimes(1));
+    await pending.catch(() => undefined);
+  });
+});

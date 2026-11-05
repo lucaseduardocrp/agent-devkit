@@ -5,10 +5,10 @@ import { useI18n } from '../../lib/i18n/index.js';
 import { Button } from '../../components/ui/button.js';
 import {
   createBrainGraphState,
+  DRAG_ALPHA_TARGET,
   GRAPH_HEIGHT,
   GRAPH_WIDTH,
-  shouldStopGraphRebound,
-  simulateBrainGraph,
+  stepBrainGraph,
   type BrainGraphNode,
   type BrainGraphEdge,
   type BrainGraphState,
@@ -33,9 +33,21 @@ interface GraphCamera {
   scale: number;
 }
 
-const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 2.5;
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 6;
+const MAX_FIT_ZOOM = 1.5;
 const ZOOM_STEP = 1.2;
+const WHEEL_ZOOM_SPEED = 0.0015;
+const DRAG_THRESHOLD = 3;
+
+// Obsidian dark-theme graph palette.
+const BACKGROUND = '#1e1e1e';
+const EDGE_COLOR = 'rgba(255, 255, 255, 0.16)';
+const EDGE_DIM_COLOR = 'rgba(255, 255, 255, 0.05)';
+const NODE_COLOR = '#b3b3b3';
+const NEIGHBOR_COLOR = '#e4e4e4';
+const ACCENT_COLOR = '#8b6cf6';
+const LABEL_COLOR = '#dadada';
 
 type GraphPointerInteraction =
   | {
@@ -45,10 +57,6 @@ type GraphPointerInteraction =
       readonly startX: number;
       readonly startY: number;
       moved: boolean;
-      lastX: number;
-      lastY: number;
-      velocityX: number;
-      velocityY: number;
     }
   | {
       readonly kind: 'camera';
@@ -59,11 +67,8 @@ type GraphPointerInteraction =
       readonly startCameraY: number;
     };
 
-interface GraphRebound {
-  readonly node: BrainGraphNode;
-  readonly anchorX: number;
-  readonly anchorY: number;
-  elapsedMs: number;
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function centeredCamera(nodes: readonly BrainGraphNode[], viewport: GraphViewport): GraphCamera {
@@ -73,9 +78,10 @@ function centeredCamera(nodes: readonly BrainGraphNode[], viewport: GraphViewpor
   const maxY = Math.max(...nodes.map((node) => node.y));
   const contentWidth = Math.max(maxX - minX, 1);
   const contentHeight = Math.max(maxY - minY, 1);
-  const scale = Math.max(
-    0.35,
-    Math.min(1, (viewport.width - 160) / contentWidth, (viewport.height - 140) / contentHeight),
+  const scale = clamp(
+    Math.min((viewport.width - 160) / contentWidth, (viewport.height - 140) / contentHeight),
+    MIN_ZOOM,
+    MAX_FIT_ZOOM,
   );
   return {
     x: viewport.width / 2 - ((minX + maxX) / 2) * scale,
@@ -92,46 +98,67 @@ function drawBrainGraph(
 ): void {
   context.setTransform(viewport.pixelRatio, 0, 0, viewport.pixelRatio, 0, 0);
   context.clearRect(0, 0, viewport.width, viewport.height);
-  context.fillStyle = '#141414';
+  context.fillStyle = BACKGROUND;
   context.fillRect(0, 0, viewport.width, viewport.height);
   context.save();
   context.translate(camera.x, camera.y);
   context.scale(camera.scale, camera.scale);
 
-  const highlightedIds = new Set<string>();
-  if (state.hoveredId) {
-    highlightedIds.add(state.hoveredId);
+  const { hoveredId } = state;
+  const hasFocus = hoveredId !== null;
+  const related = new Set<string>();
+  if (hasFocus) {
+    related.add(hoveredId);
     for (const edge of state.edges) {
-      if (edge.sourcePageId === state.hoveredId) highlightedIds.add(edge.targetPageId);
-      if (edge.targetPageId === state.hoveredId) highlightedIds.add(edge.sourcePageId);
+      if (edge.sourcePageId === hoveredId) related.add(edge.targetPageId);
+      if (edge.targetPageId === hoveredId) related.add(edge.sourcePageId);
     }
   }
 
-  for (const edge of state.edges) {
-    const source = state.nodes[edge.sourceIndex]!;
-    const target = state.nodes[edge.targetIndex]!;
-    const highlighted =
-      state.hoveredId === edge.sourcePageId || state.hoveredId === edge.targetPageId;
+  // Edges are batched into two paths: the regular ones (dimmed while hovering) and the focused ones.
+  const strokeEdges = (focused: boolean, color: string, width: number) => {
     context.beginPath();
-    context.moveTo(source.x, source.y);
-    context.lineTo(target.x, target.y);
-    context.strokeStyle = highlighted ? '#3b82f6' : '#4b5563';
-    context.lineWidth = (highlighted ? 2.5 : 1.5) / camera.scale;
+    for (const edge of state.edges) {
+      const touchesHover = edge.sourcePageId === hoveredId || edge.targetPageId === hoveredId;
+      if (touchesHover !== focused) continue;
+      const source = state.nodes[edge.sourceIndex]!;
+      const target = state.nodes[edge.targetIndex]!;
+      context.moveTo(source.x, source.y);
+      context.lineTo(target.x, target.y);
+    }
+    context.strokeStyle = color;
+    context.lineWidth = width / camera.scale;
     context.stroke();
-  }
+  };
+  context.globalAlpha = 1;
+  strokeEdges(false, hasFocus ? EDGE_DIM_COLOR : EDGE_COLOR, 1);
+  if (hasFocus) strokeEdges(true, ACCENT_COLOR, 1.5);
 
   for (const node of state.nodes) {
-    const highlighted = highlightedIds.has(node.id);
+    const isHovered = node.id === hoveredId;
+    const isRelated = !hasFocus || related.has(node.id);
+    context.globalAlpha = isRelated ? 1 : 0.25;
     context.beginPath();
-    context.arc(node.x, node.y, highlighted ? node.radius + 2 : node.radius, 0, Math.PI * 2);
-    context.fillStyle = highlighted ? '#3b82f6' : '#d0d0d0';
+    context.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+    context.fillStyle = isHovered ? ACCENT_COLOR : hasFocus ? NEIGHBOR_COLOR : NODE_COLOR;
     context.fill();
-    context.font = `${12 / camera.scale}px sans-serif`;
-    context.textAlign = 'center';
-    context.fillStyle = highlighted ? '#ffffff' : '#9e9e9e';
-    const label = node.label.length > 22 ? `${node.label.slice(0, 20)}...` : node.label;
-    context.fillText(label, node.x, node.y + node.radius + 14 / camera.scale);
   }
+
+  // Labels fade in with zoom (bigger nodes earlier) and stay pinned for the hovered neighbourhood.
+  context.font = `${12 / camera.scale}px Inter, system-ui, sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'top';
+  context.fillStyle = LABEL_COLOR;
+  for (const node of state.nodes) {
+    const zoomFade = clamp((camera.scale + node.radius * 0.02 - 0.55) / 0.6, 0, 1);
+    const emphasized = hasFocus && related.has(node.id);
+    const opacity = (emphasized ? 1 : zoomFade) * (!hasFocus || emphasized ? 1 : 0.25);
+    if (opacity < 0.02) continue;
+    context.globalAlpha = opacity * 0.9;
+    const label = node.label.length > 30 ? `${node.label.slice(0, 28)}…` : node.label;
+    context.fillText(label, node.x, node.y + node.radius + 3 / camera.scale);
+  }
+  context.globalAlpha = 1;
   context.restore();
 }
 
@@ -143,7 +170,7 @@ function findNode(
 ): BrainGraphNode | null {
   for (let index = nodes.length - 1; index >= 0; index -= 1) {
     const node = nodes[index]!;
-    if (Math.hypot(x - node.x, y - node.y) < node.radius + 6 / scale) return node;
+    if (Math.hypot(x - node.x, y - node.y) < node.radius + 4 / scale) return node;
   }
   return null;
 }
@@ -172,8 +199,6 @@ export function BrainGraph({
   const interactionRef = useRef<GraphPointerInteraction | null>(null);
   const physicsFrameRef = useRef<number | null>(null);
   const cameraFrameRef = useRef<number | null>(null);
-  const previousPhysicsTimeRef = useRef<number | null>(null);
-  const reboundRef = useRef<GraphRebound | null>(null);
   const [zoomPercent, setZoomPercent] = useState(() => Math.round(cameraRef.current.scale * 100));
 
   const updateZoomLabel = useCallback(() => {
@@ -190,8 +215,6 @@ export function BrainGraph({
       cancelAnimationFrame(physicsFrameRef.current);
       physicsFrameRef.current = null;
     }
-    previousPhysicsTimeRef.current = null;
-    reboundRef.current = null;
   }, []);
 
   const stopCameraAnimation = useCallback(() => {
@@ -201,58 +224,12 @@ export function BrainGraph({
     }
   }, []);
 
-  const animatePhysics = useCallback(
-    (timestamp: number) => {
-      const state = stateRef.current;
-      const rebound = reboundRef.current;
-      if (!state.dragging && !rebound) {
-        physicsFrameRef.current = null;
-        previousPhysicsTimeRef.current = null;
-        return;
-      }
-      const previousTime = previousPhysicsTimeRef.current;
-      const timeStep =
-        previousTime === null
-          ? 1
-          : Math.min(1.5, Math.max(0.5, (timestamp - previousTime) / 16.67));
-      previousPhysicsTimeRef.current = timestamp;
-      if (rebound) {
-        rebound.node.vx += (rebound.anchorX - rebound.node.x) * 0.12 * timeStep;
-        rebound.node.vy += (rebound.anchorY - rebound.node.y) * 0.12 * timeStep;
-        rebound.elapsedMs += 16.67 * timeStep;
-      }
-      simulateBrainGraph(
-        state.nodes,
-        state.edges,
-        state.dragging,
-        GRAPH_WIDTH,
-        GRAPH_HEIGHT,
-        timeStep,
-      );
-      if (rebound) {
-        const displacement = Math.hypot(
-          rebound.node.x - rebound.anchorX,
-          rebound.node.y - rebound.anchorY,
-        );
-        const speed = Math.hypot(rebound.node.vx, rebound.node.vy);
-        if (shouldStopGraphRebound(rebound.elapsedMs, displacement, speed)) {
-          rebound.node.x = rebound.anchorX;
-          rebound.node.y = rebound.anchorY;
-          rebound.node.vx = 0;
-          rebound.node.vy = 0;
-          reboundRef.current = null;
-        }
-      }
-      draw();
-      if (state.dragging || reboundRef.current) {
-        physicsFrameRef.current = requestAnimationFrame(animatePhysics);
-      } else {
-        physicsFrameRef.current = null;
-        previousPhysicsTimeRef.current = null;
-      }
-    },
-    [draw],
-  );
+  // The simulation keeps ticking until it cools down (or while a node is being dragged).
+  const animatePhysics = useCallback(() => {
+    const active = stepBrainGraph(stateRef.current);
+    draw();
+    physicsFrameRef.current = active ? requestAnimationFrame(animatePhysics) : null;
+  }, [draw]);
 
   const startPhysics = useCallback(() => {
     if (physicsFrameRef.current === null) {
@@ -295,7 +272,7 @@ export function BrainGraph({
     (factor: number, x = viewportRef.current.width / 2, y = viewportRef.current.height / 2) => {
       stopCameraAnimation();
       const camera = cameraRef.current;
-      const nextScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, camera.scale * factor));
+      const nextScale = clamp(camera.scale * factor, MIN_ZOOM, MAX_ZOOM);
       const worldX = (x - camera.x) / camera.scale;
       const worldY = (y - camera.y) / camera.scale;
       cameraRef.current = {
@@ -314,7 +291,8 @@ export function BrainGraph({
     interactionRef.current = null;
     stateRef.current = graphState;
     centerGraph(false);
-  }, [graphState, centerGraph, stopPhysics]);
+    startPhysics();
+  }, [graphState, centerGraph, startPhysics, stopPhysics]);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -361,8 +339,6 @@ export function BrainGraph({
   const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (event.button !== 0) return;
     stopCameraAnimation();
-    stopPhysics();
-    stateRef.current.dragging = null;
     const point = worldPoint(event);
     const node = findNode(stateRef.current.nodes, point.x, point.y, cameraRef.current.scale);
     if (node) {
@@ -374,12 +350,7 @@ export function BrainGraph({
         startX: point.x,
         startY: point.y,
         moved: false,
-        lastX: point.x,
-        lastY: point.y,
-        velocityX: 0,
-        velocityY: 0,
       };
-      startPhysics();
     } else {
       interactionRef.current = {
         kind: 'camera',
@@ -398,18 +369,20 @@ export function BrainGraph({
     if (interaction?.pointerId === event.pointerId) {
       if (interaction.kind === 'node') {
         const point = worldPoint(event);
-        const deltaX = point.x - interaction.lastX;
-        const deltaY = point.y - interaction.lastY;
-        interaction.velocityX = interaction.velocityX * 0.35 + deltaX * 0.65;
-        interaction.velocityY = interaction.velocityY * 0.35 + deltaY * 0.65;
-        interaction.lastX = point.x;
-        interaction.lastY = point.y;
-        interaction.node.x = point.x;
-        interaction.node.y = point.y;
-        interaction.node.vx = 0;
-        interaction.node.vy = 0;
-        if (Math.hypot(point.x - interaction.startX, point.y - interaction.startY) > 3) {
+        if (
+          !interaction.moved &&
+          Math.hypot(point.x - interaction.startX, point.y - interaction.startY) *
+            cameraRef.current.scale >
+            DRAG_THRESHOLD
+        ) {
+          // Obsidian reheats the layout as soon as a node is actually dragged.
           interaction.moved = true;
+          stateRef.current.alphaTarget = DRAG_ALPHA_TARGET;
+          startPhysics();
+        }
+        if (interaction.moved) {
+          interaction.node.x = point.x;
+          interaction.node.y = point.y;
         }
       } else {
         cameraRef.current.x = interaction.startCameraX + event.clientX - interaction.startClientX;
@@ -423,6 +396,7 @@ export function BrainGraph({
       findNode(stateRef.current.nodes, point.x, point.y, cameraRef.current.scale)?.id ?? null;
     if (hoveredId !== stateRef.current.hoveredId) {
       stateRef.current.hoveredId = hoveredId;
+      event.currentTarget.style.cursor = hoveredId ? 'pointer' : '';
       draw();
     }
   };
@@ -436,22 +410,13 @@ export function BrainGraph({
     interactionRef.current = null;
     if (interaction.kind === 'node') {
       stateRef.current.dragging = null;
+      stateRef.current.alphaTarget = 0;
       if (allowOpen && !interaction.moved) {
-        stopPhysics();
         if (interaction.node.document) onOpenDocument(interaction.node.document);
         else onOpenWelcome();
-      } else if (allowOpen && interaction.moved) {
-        interaction.node.vx = interaction.velocityX;
-        interaction.node.vy = interaction.velocityY;
-        reboundRef.current = {
-          node: interaction.node,
-          anchorX: interaction.node.x,
-          anchorY: interaction.node.y,
-          elapsedMs: 0,
-        };
-        startPhysics();
       } else {
-        stopPhysics();
+        // Released nodes are free again and the layout settles on its own.
+        startPhysics();
       }
     }
     draw();
@@ -461,7 +426,7 @@ export function BrainGraph({
   };
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[#141414]" data-testid="graph-view">
+    <div className="relative h-full w-full overflow-hidden bg-[#1e1e1e]" data-testid="graph-view">
       <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
         <div className="flex items-center rounded-md border border-[#303030] bg-[#1a1a1a]/90 p-0.5 backdrop-blur">
           <Button
@@ -506,7 +471,7 @@ export function BrainGraph({
         <button
           type="button"
           onClick={() => centerGraph(true)}
-          className="flex h-8 items-center gap-1.5 rounded-md border border-[#303030] bg-[#1a1a1a]/90 px-2.5 text-xs font-medium text-[#c8c8c8] backdrop-blur transition-colors hover:border-[#454545] hover:bg-[#242424] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6]"
+          className="flex h-8 items-center gap-1.5 rounded-md border border-[#303030] bg-[#1a1a1a]/90 px-2.5 text-xs font-medium text-[#c8c8c8] backdrop-blur transition-colors hover:border-[#454545] hover:bg-[#242424] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b6cf6]"
           data-testid="center-graph"
           aria-label={t('brain.centerGraph')}
           title={t('brain.centerGraph')}
@@ -535,7 +500,7 @@ export function BrainGraph({
         onWheel={(event) => {
           event.preventDefault();
           const point = screenPoint(event);
-          zoomAt(event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, point.x, point.y);
+          zoomAt(Math.exp(-event.deltaY * WHEEL_ZOOM_SPEED), point.x, point.y);
         }}
       />
       <div className="sr-only">

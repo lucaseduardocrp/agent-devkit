@@ -477,4 +477,49 @@ describe('ApiClient remaining paths', () => {
     await expect(client.getDocumentAttachments('p 1')).resolves.toEqual([]);
     expect(last().url).toBe('http://api/knowledge/documents/p%201/attachments');
   });
+
+  it('reads design branches, previews PBI fields with values and saves hook instructions', async () => {
+    const { client, last } = setup({
+      json: { branches: [{ name: 'main' }], test: { id: 't' }, definitions: [], values: {} },
+    });
+    await expect(client.getDesignBranches('github', 'a/b c')).resolves.toEqual([{ name: 'main' }]);
+    expect(last().url).toBe(
+      'http://api/design/repositories/branches?provider=github&repositoryId=a%2Fb%20c',
+    );
+    await client.previewPbiFields('i', 'azure' as never, 'tpl', 'scope', 'bug', {
+      f: 'v',
+    } as never);
+    expect(last().body).toMatchObject({ fieldValues: { f: 'v' } });
+    await client.previewPbiFields('i', 'azure' as never, 'tpl');
+    expect(last().body).not.toHaveProperty('fieldValues');
+    await expect(
+      client.saveE2eHookInstructions('t 1', 'beforeAll' as never, 'do it'),
+    ).resolves.toEqual({ id: 't' });
+    expect(last()).toMatchObject({
+      url: 'http://api/e2e/tests/t%201/hook-instructions',
+      method: 'PUT',
+    });
+  });
+
+  it('keeps the personal secrets and the runtime of an API collection', async () => {
+    const runtime = { variables: [{ name: 'a', value: '1' }], cookies: [] };
+    const { client, last } = setup({ json: { runtime } });
+    await client.clearPersonalSecret({ scope: 'collection', scopeId: 'c', ref: 'r' });
+    expect(last()).toMatchObject({
+      url: 'http://api/integration-tests/personal-secrets',
+      method: 'DELETE',
+      body: { scope: 'collection', scopeId: 'c', ref: 'r' },
+    });
+    await expect(client.getApiRuntime('c 1')).resolves.toEqual(runtime);
+    expect(last().url).toBe('http://api/integration-tests/collections/c%201/runtime');
+    await expect(client.setApiRuntime('c', runtime as never)).resolves.toEqual(runtime);
+    expect(last().method).toBe('PUT');
+    await expect(client.clearApiRuntime('c')).resolves.toEqual(runtime);
+    expect(last().method).toBe('DELETE');
+    const empty = setup({ status: 204 });
+    await expect(empty.client.clearApiRuntime('c')).resolves.toEqual({
+      variables: [],
+      cookies: [],
+    });
+  });
 });

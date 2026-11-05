@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ApiClient } from '../../lib/api-client.js';
 import { cn } from '../../lib/utils.js';
 import { useI18n } from '../../lib/i18n/index.js';
@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/button.js';
 import { FormattedContent } from '../../components/ui/formatted-content.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
+import { E2ePlannedSteps, E2eSection } from './E2ePlannedSteps.js';
 import { E2eScriptPanel } from './E2eScriptPanel.js';
 import { E2eTestStatusLabel } from './E2eStatus.js';
 import { E2eExecutedSteps, E2eLinkedCase } from './E2eTestEvidence.js';
@@ -33,11 +34,13 @@ const verdictKeys: Record<E2eVerdict, TranslationKey> = {
   test_issue: 'e2e.verdictTestIssue',
   environment: 'e2e.verdictEnvironment',
 };
-type DetailTab = 'preview' | 'testCase' | 'code';
+type DetailTab = 'preview' | 'testCase' | 'code' | 'beforeRun' | 'afterRun';
 const detailTabs: readonly { id: DetailTab; label: TranslationKey; icon: string }[] = [
   { id: 'preview', label: 'e2e.preview', icon: 'ti-player-play' },
   { id: 'testCase', label: 'e2e.testCaseTab', icon: 'ti-clipboard-list' },
   { id: 'code', label: 'e2e.code', icon: 'ti-code' },
+  { id: 'beforeRun', label: 'e2e.beforeRun', icon: 'ti-database-plus' },
+  { id: 'afterRun', label: 'e2e.afterRun', icon: 'ti-eraser' },
 ];
 
 export interface E2eTestDetailProps {
@@ -114,6 +117,8 @@ export function E2eTestDetail({
   }
 
   const plannedSteps = testStepTexts(test);
+  // The outcome of the run belongs to the run tabs; the script tabs are about the code alone.
+  const showsRun = tab === 'preview' || tab === 'testCase';
 
   return (
     <div
@@ -170,7 +175,7 @@ export function E2eTestDetail({
         )}
 
       <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
-        <div className="flex gap-1 border-b border-[var(--border)] p-1.5" role="tablist">
+        <div className="flex flex-wrap gap-1 border-b border-[var(--border)] p-1.5" role="tablist">
           {detailTabs.map((item) => (
             <Button
               key={item.id}
@@ -204,47 +209,19 @@ export function E2eTestDetail({
           {tab === 'testCase' && (
             <div className="grid min-w-0 gap-6 p-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]">
               <div className="flex min-w-0 flex-col gap-6">
-                <TestCaseSection icon="ti-notes" title={t('e2e.description')}>
+                <E2eSection icon="ti-notes" title={t('e2e.description')}>
                   <TestDescription content={test.description || test.title} />
-                </TestCaseSection>
-                <TestCaseSection icon="ti-list-numbers" title={t('e2e.steps')}>
+                </E2eSection>
+                <E2eSection icon="ti-list-numbers" title={t('e2e.steps')}>
                   {plannedSteps.length > 0 ? (
-                    <ol className="space-y-2" data-testid="e2e-planned-steps">
-                      {plannedSteps.map((step, index) => (
-                        <li
-                          key={index}
-                          className="flex items-start rounded-md border border-[var(--border)] bg-[var(--surface-0)] p-2.5 text-xs"
-                        >
-                          <dl className="min-w-0 flex-1 space-y-1 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
-                            <div>
-                              <dt className="inline font-semibold text-[var(--text-primary)]">
-                                {t('testplans.actionLabel')}
-                              </dt>{' '}
-                              <dd className="inline">
-                                <FormattedContent content={step.action} inline />
-                              </dd>
-                            </div>
-                            {step.expectedResult.trim() && (
-                              <div>
-                                <dt className="inline font-semibold text-emerald-400">
-                                  {t('testplans.expectedResultLabel')}
-                                </dt>{' '}
-                                <dd className="inline">
-                                  <FormattedContent content={step.expectedResult} inline />
-                                </dd>
-                              </div>
-                            )}
-                          </dl>
-                        </li>
-                      ))}
-                    </ol>
+                    <E2ePlannedSteps steps={plannedSteps} />
                   ) : (
                     <p className="text-sm text-[var(--text-muted)]">{t('e2e.noSteps')}</p>
                   )}
-                </TestCaseSection>
+                </E2eSection>
               </div>
               <div className="flex min-w-0 flex-col gap-6">
-                <TestCaseSection icon="ti-link" title={t('e2e.tmLinkedCase')}>
+                <E2eSection icon="ti-link" title={t('e2e.tmLinkedCase')}>
                   <E2eLinkedCase
                     apiClient={apiClient}
                     test={test}
@@ -253,8 +230,8 @@ export function E2eTestDetail({
                     disabled={active}
                     onChanged={setTest}
                   />
-                </TestCaseSection>
-                <TestCaseSection icon="ti-info-circle" title={t('e2e.details')}>
+                </E2eSection>
+                <E2eSection icon="ti-info-circle" title={t('e2e.details')}>
                   <dl className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-y-2 text-sm">
                     <dt className="text-[var(--text-muted)]">{t('e2e.columnType')}</dt>
                     <dd className="text-[var(--text-primary)]">
@@ -297,14 +274,20 @@ export function E2eTestDetail({
                       </>
                     )}
                   </dl>
-                </TestCaseSection>
+                </E2eSection>
               </div>
             </div>
           )}
-          {tab === 'code' && (
+          {(tab === 'code' || tab === 'beforeRun' || tab === 'afterRun') && (
             <E2eScriptPanel
+              key={tab}
               apiClient={apiClient}
               testId={test.id}
+              kind={tab === 'code' ? 'spec' : tab}
+              mode={test.creation.mode}
+              instructions={
+                tab === 'beforeRun' ? test.beforeRunInstructions : test.afterRunInstructions
+              }
               isReadOnly={isReadOnly}
               disabled={active}
             />
@@ -312,11 +295,11 @@ export function E2eTestDetail({
         </div>
       </div>
 
-      {!active && test.stepResults.length > 0 && (
+      {showsRun && !active && test.stepResults.length > 0 && (
         <E2eExecutedSteps apiClient={apiClient} test={test} />
       )}
 
-      {test.error && !active && (
+      {showsRun && test.error && !active && (
         <section className="rounded-lg border border-red-500/30 bg-red-950/40">
           <h3 className="border-b border-red-500/20 px-4 py-2 text-sm font-semibold text-red-300">
             {t('e2e.errorTitle')}
@@ -327,7 +310,7 @@ export function E2eTestDetail({
         </section>
       )}
 
-      {test.analysis && !active && (
+      {showsRun && test.analysis && !active && (
         <section className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
           <h3 className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-2 text-sm font-semibold text-[var(--text-primary)]">
             <i className="ti ti-sparkles text-[var(--text-accent)]" aria-hidden="true" />
@@ -351,7 +334,7 @@ export function E2eTestDetail({
         </section>
       )}
 
-      {test.logs && (
+      {showsRun && test.logs && (
         <section className="rounded-lg border border-[var(--border)]">
           <Button
             variant="ghost"
@@ -459,26 +442,6 @@ const TEST_CASE_TEMPLATE =
   /<br\s*\/?>|<b>\s*#|[┌└│▼]|^\s*#{1,6}\s*(caso de uso|pré-condi|dados de entrada|resultado esperado|pós-condi|fluxo|use case|precondition|input data|expected result)/im;
 
 /** Test case descriptions use the template layout; other text renders as Markdown, HTML or Mermaid. */
-function TestCaseSection({
-  icon,
-  title,
-  children,
-}: {
-  readonly icon: string;
-  readonly title: string;
-  readonly children: ReactNode;
-}) {
-  return (
-    <section className="flex min-w-0 flex-col gap-2">
-      <h3 className="flex items-center gap-2 border-b border-[var(--border)] pb-1.5 text-sm font-semibold text-[var(--text-primary)]">
-        <i className={cn('ti text-[var(--text-accent)]', icon)} aria-hidden="true" />
-        {title}
-      </h3>
-      {children}
-    </section>
-  );
-}
-
 function TestDescription({ content }: { readonly content: string }) {
   return TEST_CASE_TEMPLATE.test(content) ? (
     <FormattedContent content={content} className="[overflow-wrap:anywhere]" />

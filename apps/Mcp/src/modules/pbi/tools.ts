@@ -4,6 +4,7 @@ import type { McpModule } from '../../core/registry.js';
 import { defineTool, json } from '../../core/tool.js';
 import { issueMutationResult, type IssueMutationResponse } from '../issues/host-run.js';
 import { id, page, pageSize } from '../shared.js';
+import { templateFieldValues } from '../field-mappings/tools.js';
 
 const itemId = id(
   'Internal PBI/card UUID, Azure DevOps work item number (e.g. 50086), or provider:externalId (e.g. azure_devops:50086).',
@@ -240,7 +241,7 @@ export const pbiModule: McpModule = {
       name: 'pbi_push',
       title: 'Push PBI item to board',
       description:
-        'Creates or updates the item on a selected external board following the provider push contract: call pbi_push_contract first, confirm the values with the user and send them in `fields`. Push its parent first when needed. ADK links whose other item is already on the board are published too.',
+        'Creates or updates the item on a selected external board following the provider push contract: call pbi_push_contract first, confirm the values with the user and send them in `fields`. Push its parent first when needed. ADK links whose other item is already on the board are published too. To also fill custom fields, pass a `templateId` (see field_mappings_list) and, for the fields you want to set in this push, `fieldValues`; check the result with pbi_field_preview first.',
       toolset: 'pbi',
       access: 'destructive',
       routes: ['POST /pbi/items/:id/push'],
@@ -251,6 +252,12 @@ export const pbiModule: McpModule = {
         boardId: z.string().optional(),
         listId: z.string().optional(),
         issueType: z.string().optional(),
+        templateId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe('Field mapping template filling the custom fields (see field_mappings_list).'),
+        fieldValues: templateFieldValues,
       },
       run: async ({ itemId: target, ...body }, { api }) =>
         json(

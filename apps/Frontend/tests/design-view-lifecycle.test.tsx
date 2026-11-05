@@ -44,6 +44,8 @@ function client(options: { projects?: readonly DesignProjectDto[] } = {}) {
   vi.spyOn(api, 'getDesignProjects').mockResolvedValue([...(options.projects ?? [PROJECT])]);
   vi.spyOn(api, 'getDesignSystems').mockResolvedValue([]);
   vi.spyOn(api, 'getAgents').mockResolvedValue([agent()]);
+  vi.spyOn(api, 'getDesignRepositories').mockResolvedValue({ repositories: [], warnings: [] });
+  vi.spyOn(api, 'getDesignSettings').mockResolvedValue(null);
   return api;
 }
 

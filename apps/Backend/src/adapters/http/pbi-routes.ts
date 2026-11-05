@@ -49,14 +49,19 @@ const updateFields = itemFields
   .refine((data) => Object.keys(data).length > 0);
 const providerIds = z.enum(['azure_devops', 'trello', 'github_projects', 'jira']);
 const contractValues = z.record(z.string().max(100), z.string().max(500));
-const pushFields = z.object({
-  providerId: providerIds,
-  boardId: z.string().trim().max(200).optional(),
-  listId: z.string().trim().max(200).optional(),
-  issueType: z.string().trim().max(100).optional(),
-  fields: contractValues.optional(),
-  templateId: z.string().uuid().optional(),
-});
+/** Values filled in for the template fields when pushing, keyed by destination field id. */
+const templateFieldValues = z.record(z.string().min(1).max(200), customValue).optional();
+const pushFields = z
+  .object({
+    providerId: providerIds,
+    boardId: z.string().trim().max(200).optional(),
+    listId: z.string().trim().max(200).optional(),
+    issueType: z.string().trim().max(100).optional(),
+    fields: contractValues.optional(),
+    templateId: z.string().uuid().optional(),
+    fieldValues: templateFieldValues,
+  })
+  .refine((body) => !body.fieldValues || Boolean(body.templateId), { path: ['templateId'] });
 const contractFields = z.object({ providerId: providerIds, values: contractValues.optional() });
 const relationFields = z.object({
   type: z.enum(pbiLinkTypes),
@@ -332,6 +337,7 @@ export function createPbiRouter(
           templateId: z.string().uuid(),
           scope: z.string().max(200).default(''),
           itemType: z.string().max(100).default(''),
+          fieldValues: templateFieldValues,
         }),
         request,
       );
@@ -343,6 +349,7 @@ export function createPbiRouter(
           body.templateId,
           body.scope,
           body.itemType,
+          body.fieldValues ?? {},
         ),
       );
     } catch (error) {

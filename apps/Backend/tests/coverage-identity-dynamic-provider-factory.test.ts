@@ -443,6 +443,11 @@ describe('DynamicProviderFactory.testConnectivity', () => {
       }
       expect((await probe('openai', { model: 'gpt' }, ' k ', respond(200), locale)).ok).toBe(true);
       expect((await probe('groq', { model: 'llama' }, 'k', respond(200), locale)).ok).toBe(true);
+      const groqNamespaced = respond(200);
+      await probe('groq', { model: 'openai/gpt-oss-120b' }, 'k', groqNamespaced, locale);
+      expect(groqNamespaced.mock.calls[0]![0]).toBe(
+        'https://api.groq.com/openai/v1/models/openai/gpt-oss-120b',
+      );
       expect((await probe('openai', { model: 'gpt' }, 'k', respond(401), locale)).message).toEqual(
         expect.stringContaining('401'),
       );

@@ -30,11 +30,11 @@ describe('knowledge synchronization', () => {
     const context = { requestId: 'request-1', ownerId: 'owner-1' };
     await expect(synchronizeKnowledge(provider, repository, context)).resolves.toEqual({
       chunksCount: 1,
-      archived: [],
+      removed: [],
     });
     await expect(synchronizeKnowledge(provider, repository, context)).resolves.toEqual({
       chunksCount: 1,
-      archived: [],
+      removed: [],
     });
     await expect(repository.all(context)).resolves.toHaveLength(1);
   });
@@ -70,7 +70,7 @@ describe('knowledge synchronization', () => {
     await expect(repository.listRelations(context)).resolves.toEqual([]);
   });
 
-  it('moves provider-owned pages missing remotely to application notes', async () => {
+  it('drops provider-owned pages missing remotely instead of moving them to application notes', async () => {
     const repository = new InMemoryKnowledgeChunkRepository();
     const context = { requestId: 'deletion-sync', ownerId: 'owner-1' };
     await repository.replacePage(
@@ -170,48 +170,21 @@ describe('knowledge synchronization', () => {
       context,
     );
 
-    expect(result.archived).toEqual(
+    expect(result.removed).toEqual(
       expect.arrayContaining([
-        {
-          pageId: 'deleted',
-          oldSource: 'https://dev.azure.com/wiki?pagePath=%2FDeleted',
-          newSource: 'app://local?title=Preserved',
-        },
+        { pageId: 'deleted', source: 'https://dev.azure.com/wiki?pagePath=%2FDeleted' },
+        { pageId: 'path-title', source: 'https://dev.azure.com/wiki?pagePath=%2FFrom%20Path' },
+        { pageId: 'fallback-id', source: 'azure-owned' },
+        { pageId: 'no-path', source: 'https://dev.azure.com/wiki' },
       ]),
     );
 
     const synchronized = await repository.all(context);
-    expect(synchronized).toHaveLength(6);
-    expect(synchronized).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pageId: 'deleted',
-          source: 'app://local?title=Preserved',
-          content: '# Preserved\n\nold',
-        }),
-        expect.objectContaining({
-          pageId: 'path-title',
-          source: 'app://local?title=From%20Path',
-        }),
-        expect.objectContaining({
-          pageId: 'fallback-id',
-          source: 'app://local?title=fallback-id',
-        }),
-        expect.objectContaining({
-          pageId: 'no-path',
-          source: 'app://local?title=no-path',
-        }),
-        expect.objectContaining({
-          pageId: 'remote-kept',
-          source: 'https://dev.azure.com/wiki?pagePath=%2FKept',
-          content: 'current',
-        }),
-        expect.objectContaining({ pageId: 'local' }),
-      ]),
+    expect(synchronized.map((chunk) => chunk.pageId).sort()).toEqual(['local', 'remote-kept']);
+    expect(synchronized.find((chunk) => chunk.pageId === 'local')?.source).toBe(
+      'app://local?title=Local',
     );
-    await expect(repository.listRelations(context)).resolves.toMatchObject([
-      { sourcePageId: 'deleted', targetPageId: 'local' },
-    ]);
+    await expect(repository.listRelations(context)).resolves.toEqual([]);
   });
 
   it('reconciles a published local page with the Azure page ID on pull', async () => {
@@ -233,7 +206,7 @@ describe('knowledge synchronization', () => {
     const reconciled = await synchronizeKnowledge(
       {
         name: 'azure',
-        ownsSource: (source) => source.includes('dev.azure.com'),
+        ownsSource: (source) => new URL(source).hostname === 'dev.azure.com',
         listPages: async () => [
           {
             id: '42',
@@ -246,7 +219,7 @@ describe('knowledge synchronization', () => {
       repository,
       context,
     );
-    expect(reconciled.archived).toEqual([]);
+    expect(reconciled.removed).toEqual([]);
     expect((await repository.all(context)).map((chunk) => chunk.pageId)).toEqual(['42']);
   });
 
@@ -269,7 +242,7 @@ describe('knowledge synchronization', () => {
     const reconciled = await synchronizeKnowledge(
       {
         name: 'azure',
-        ownsSource: (source) => source.includes('dev.azure.com'),
+        ownsSource: (source) => new URL(source).hostname === 'dev.azure.com',
         listPages: async () => [
           {
             id: '42',
@@ -282,14 +255,14 @@ describe('knowledge synchronization', () => {
       repository,
       context,
     );
-    expect(reconciled.archived).toEqual([]);
+    expect(reconciled.removed).toEqual([]);
 
     const chunks = await repository.all(context);
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.source).toContain('pagePath=%2FParent%2FChild');
   });
 
-  it('archives missing pages and retains every remote page when a legacy Azure source is shared', async () => {
+  it('drops missing pages and retains every remote page when a legacy Azure source is shared', async () => {
     const repository = new InMemoryKnowledgeChunkRepository();
     const context = { requestId: 'shared-legacy-source', ownerId: 'owner-1' };
     const legacySource = 'azure-devops:dev.azure.com';
@@ -332,8 +305,8 @@ describe('knowledge synchronization', () => {
       context,
     );
 
-    expect(reconciled.archived).toHaveLength(2);
-    expect(reconciled.archived.map((item) => item.pageId).sort()).toEqual([
+    expect(reconciled.removed).toHaveLength(2);
+    expect(reconciled.removed.map((item) => item.pageId).sort()).toEqual([
       'removed-1',
       'removed-2',
     ]);
@@ -344,12 +317,7 @@ describe('knowledge synchronization', () => {
         .map((chunk) => chunk.pageId)
         .sort(),
     ).toEqual(['remote-1', 'remote-2']);
-    expect(
-      chunks
-        .filter((chunk) => chunk.source.startsWith('app://local'))
-        .map((chunk) => chunk.pageId)
-        .sort(),
-    ).toEqual(['removed-1', 'removed-2']);
+    expect(chunks.filter((chunk) => chunk.source.startsWith('app://local'))).toEqual([]);
   });
 
   it('atomically replaces a page and isolates owners', async () => {
@@ -549,7 +517,7 @@ describe('knowledge synchronization', () => {
 });
 
 describe('sync identity transitions', () => {
-  it('preserves correlations across canonical identity migration and archival', async () => {
+  it('preserves correlations across canonical identity migration and drops removed pages', async () => {
     const repository = new InMemoryKnowledgeChunkRepository();
     const context = { ownerId: 'sync-owner', requestId: 'sync' };
     const old = {
@@ -570,7 +538,7 @@ describe('sync identity transitions', () => {
     const remote = { ...old, id: 'new', content: '# Updated' };
     const provider = {
       name: 'wiki',
-      ownsSource: (source: string) => source.startsWith('https://example.com'),
+      ownsSource: (source: string) => new URL(source).origin === 'https://example.com',
       listPages: async () => [remote],
     };
     const before = await repository.all(context);
@@ -584,19 +552,15 @@ describe('sync identity transitions', () => {
       { sourcePageId: 'local', targetPageId: 'new' },
     ]);
     expect((await repository.all(context)).some((chunk) => chunk.pageId === 'old')).toBe(false);
-    const beforeArchive = await repository.all(context);
-    vi.spyOn(repository, 'movePages').mockRejectedValueOnce(new Error('Archive failure'));
+    const beforeRemoval = await repository.all(context);
+    vi.spyOn(repository, 'deletePage').mockRejectedValueOnce(new Error('Removal failure'));
     const empty = { ...provider, listPages: async () => [] };
     await expect(synchronizeKnowledge(empty, repository, context)).rejects.toThrow(
-      'Archive failure',
+      'Removal failure',
     );
-    expect(await repository.all(context)).toEqual(beforeArchive);
+    expect(await repository.all(context)).toEqual(beforeRemoval);
     await synchronizeKnowledge(empty, repository, context);
-    expect(await repository.listRelations(context)).toMatchObject([
-      { sourcePageId: 'local', targetPageId: 'new' },
-    ]);
-    expect((await repository.all(context)).find((chunk) => chunk.pageId === 'new')?.source).toBe(
-      'app://local?title=Updated',
-    );
+    expect(await repository.listRelations(context)).toEqual([]);
+    expect((await repository.all(context)).map((chunk) => chunk.pageId)).toEqual(['local']);
   });
 });

@@ -1,7 +1,20 @@
 import { ApplicationError } from '../../shared/errors.js';
 import type { RequestContext } from '../../shared/context.js';
 import type { AgentService } from '../agents/application/agent-service.js';
-import { AGENT_WORKFLOW_QUESTION_MARKER } from '../agents/domain/agent-workflow.js';
+import {
+  AGENT_WORKFLOW_QUESTION_MARKER,
+  type AgentWorkflowCanvas,
+  type AgentWorkflowCanvasNode,
+  type AgentWorkflowStep,
+} from '../agents/domain/agent-workflow.js';
+import {
+  canvasNeedsFlowRunner,
+  delayMinutes,
+  flowNext,
+  flowNode,
+  flowStart,
+  matchesCondition,
+} from '../agents/domain/workflow-flow.js';
 import type { IssueComment, IssueStore } from './issue-store.js';
 import type {
   AgentRun,
@@ -23,6 +36,9 @@ import { InMemoryUsageStore, type LlmUsageEvent, type UsageStore } from './usage
 
 const MAX_MICROS = 2_147_483_647;
 
+/** How many nodes one walk may visit, so a flow wired into a cycle fails instead of running on. */
+const MAX_FLOW_NODES = 200;
+
 function workflowOutput(results: readonly WorkflowRunStepResult[]): string {
   return results
     .map((result) => {
@@ -31,7 +47,9 @@ function workflowOutput(results: readonly WorkflowRunStepResult[]): string {
           ? ' · Pergunta'
           : result.kind === 'answer'
             ? ' · Resposta do usuário'
-            : '';
+            : result.kind === 'event'
+              ? ' · Fluxo'
+              : '';
       return `## ${result.name}${label}\n\n${result.output}`;
     })
     .join('\n\n');
@@ -59,6 +77,14 @@ function workflowUsage(results: readonly WorkflowRunStepResult[]) {
     inputTokens: usage.reduce((sum, item) => sum + item.input, 0),
     outputTokens: usage.reduce((sum, item) => sum + item.output, 0),
   };
+}
+
+/** What the node before this one produced, which is what a condition compares and an action sends. */
+function lastResultOutput(results: readonly WorkflowRunStepResult[]): string {
+  return (
+    [...results].reverse().find((result) => result.kind === undefined || result.kind === 'result')
+      ?.output ?? ''
+  );
 }
 
 export interface UsageInput {
@@ -311,7 +337,17 @@ export class RunService {
       ? `\n\nThe latest user comment [${responseTo.id}] is a new request. Consider the issue, previous work and the full conversation. Carry out the requested work when possible. If clarification or a decision is needed, ask a specific question. Write a concise, direct reply to the user; the application will publish your answer as an issue comment. Do not claim changes you did not make.`
       : '\n\nProvide the work performed, result, and any remaining blockers. Do not claim external changes you did not make.';
     const prompt = `Work on issue #${issue.number}: ${issue.title}\n\n${issue.description}${pbiContext}${imageContext}${conversation}${instruction}`;
-    const useWorkflow = configuredWorkflow.enabled && configuredWorkflow.steps.length > 0;
+    // A flow is walked only when it has nodes the step list cannot express and a trigger wired to
+    // them; anything else still runs as the plain ordered list of steps.
+    const canvas = configuredWorkflow.canvas;
+    const flowStartNodeId =
+      configuredWorkflow.enabled && canvas && canvasNeedsFlowRunner(canvas)
+        ? flowStart(canvas)
+        : undefined;
+    const flowCanvas = flowStartNodeId ? canvas : undefined;
+    const useWorkflow =
+      configuredWorkflow.enabled &&
+      (configuredWorkflow.steps.length > 0 || flowCanvas !== undefined);
     const workflowState: WorkflowRunState = {
       enabled: useWorkflow,
       autonomy: configuredWorkflow.autonomy,
@@ -332,6 +368,7 @@ export class RunService {
       results: [],
       totalCostMicros: 0,
       allStepsPriced: true,
+      ...(flowCanvas ? { canvas: flowCanvas, currentNodeId: flowStartNodeId } : {}),
     };
     const run = await this.store.claim({
       workspaceId,
@@ -421,9 +458,23 @@ export class RunService {
     images: readonly LlmImage[],
   ): Promise<void> {
     let state = initialState;
-    while (state.currentStepIndex < state.steps.length) {
+    const canvas = state.canvas;
+    for (let visited = 0; ; visited += 1) {
       if (signal.aborted) return;
-      const step = state.steps[state.currentStepIndex]!;
+      let step: AgentWorkflowStep;
+      if (canvas) {
+        if (visited > MAX_FLOW_NODES)
+          throw new Error('The flow visited too many nodes. Check it for a loop.');
+        // Runs the action, condition and delay nodes standing between here and the next agent step.
+        const walked = await this.walkToStep(run, state, canvas, signal);
+        state = walked.state;
+        if (walked.paused || signal.aborted) return;
+        if (!walked.step) break;
+        step = walked.step;
+      } else {
+        if (state.currentStepIndex >= state.steps.length) break;
+        step = state.steps[state.currentStepIndex]!;
+      }
       const previous = priorStepContext(state.results);
       const answerContext = state.answer
         ? `\n\n<user-response>\n${state.answer}\n</user-response>\n\nUse this response to continue the current workflow step.`
@@ -437,11 +488,14 @@ export class RunService {
       ]
         .filter(Boolean)
         .join('\n\n');
+      const stepNumber = canvas
+        ? state.steps.findIndex((candidate) => candidate.id === step.id) + 1
+        : state.currentStepIndex + 1;
       const result = await this.agents.executeWorkflowStep(
         run.workspaceId,
         run.agentId,
         step,
-        state.currentStepIndex + 1,
+        stepNumber,
         state.steps.length,
         { prompt, includeKnowledge: true, ...(images.length ? { images } : {}) },
         state.uncertaintyBehavior,
@@ -502,13 +556,24 @@ export class RunService {
         return;
       }
 
+      // An approval node is the canvas form of `reviewRequired`, so the walk owns that pause there.
+      const mustReview = canvas
+        ? state.autonomy === 'supervised'
+        : step.reviewRequired === true || state.autonomy === 'supervised';
+      const afterStep = canvas ? flowNext(canvas, step.id) : undefined;
+      // Pausing here already satisfies an approval wired right after this step.
+      const resumeNodeId =
+        canvas && mustReview && afterStep && flowNode(canvas, afterStep)?.kind === 'approval'
+          ? flowNext(canvas, afterStep)
+          : afterStep;
       state = {
         ...state,
         ...costState,
         results: [...state.results, { ...resultMetrics, kind: 'result' }],
-        currentStepIndex: state.currentStepIndex + 1,
+        currentStepIndex: canvas ? stepNumber : state.currentStepIndex + 1,
         question: undefined,
         answer: undefined,
+        ...(canvas ? { currentNodeId: resumeNodeId } : {}),
       };
       await this.store.progress(run.workspaceId, run.id, state, workflowOutput(state.results), {
         provider: result.provider,
@@ -516,7 +581,6 @@ export class RunService {
         ...workflowUsage(state.results),
         costMicros: state.allStepsPriced ? state.totalCostMicros : null,
       });
-      const mustReview = step.reviewRequired === true || state.autonomy === 'supervised';
       if (mustReview) {
         await this.pauseForUser(run, state, 'waiting_review');
         return;
@@ -528,6 +592,178 @@ export class RunService {
       return;
     }
     await this.finishWorkflow(run, state);
+  }
+
+  /**
+   * Runs the flow from the node the state points at until it reaches the next agent step, stops at
+   * an approval, or runs out of nodes: a condition picks the branch, a delay is waited out and an
+   * action node carries out the module action it names.
+   */
+  private async walkToStep(
+    run: AgentRun,
+    state: WorkflowRunState,
+    canvas: AgentWorkflowCanvas,
+    signal: AbortSignal,
+  ): Promise<{ state: WorkflowRunState; step?: AgentWorkflowStep; paused?: boolean }> {
+    let next = state;
+    let nodeId = next.currentNodeId;
+    for (let visited = 0; nodeId !== undefined; visited += 1) {
+      if (visited > MAX_FLOW_NODES)
+        throw new Error('The flow visited too many nodes. Check it for a loop.');
+      // An edge into nothing ends the flow, the way an output left unwired does.
+      const node = flowNode(canvas, nodeId);
+      if (!node) break;
+
+      if (node.kind === 'step') {
+        const step = next.steps.find((candidate) => candidate.id === node.id);
+        if (step) return { state: { ...next, currentNodeId: node.id }, step };
+        // A step node whose step was deleted is nothing to run.
+        nodeId = flowNext(canvas, node.id);
+        continue;
+      }
+
+      if (node.kind === 'approval') {
+        // The gate resumes past itself, so approving it does not stop the run here again.
+        next = { ...next, currentNodeId: flowNext(canvas, node.id) };
+        await this.pauseForUser(run, next, 'waiting_review');
+        return { state: next, paused: true };
+      }
+
+      if (node.kind === 'condition') {
+        const held = this.evaluateCondition(node, lastResultOutput(next.results));
+        nodeId = flowNext(canvas, node.id, held ? 'true' : 'false');
+        next = await this.recordFlowEvent(
+          run,
+          next,
+          node.id,
+          nodeId,
+          'Condição',
+          held ? 'A comparação foi atendida.' : 'A comparação não foi atendida.',
+        );
+        continue;
+      }
+
+      if (node.kind === 'delay') {
+        const minutes = delayMinutes(node);
+        nodeId = flowNext(canvas, node.id);
+        next = await this.recordFlowEvent(
+          run,
+          next,
+          node.id,
+          nodeId,
+          'Espera',
+          `Aguardando ${minutes} min antes de continuar.`,
+        );
+        await this.wait(minutes * 60_000, signal);
+        if (signal.aborted) return { state: next, paused: true };
+        continue;
+      }
+
+      if (node.kind === 'action') {
+        next = await this.runActionNode(run, next, node, flowNext(canvas, node.id));
+        nodeId = next.currentNodeId;
+        continue;
+      }
+
+      // A trigger only hands the run on to whatever it is wired to.
+      nodeId = flowNext(canvas, node.id);
+    }
+    return { state: { ...next, currentNodeId: undefined } };
+  }
+
+  private evaluateCondition(node: AgentWorkflowCanvasNode, output: string): boolean {
+    const condition = node.condition;
+    if (!condition) throw new Error('A condition node has no comparison configured.');
+    try {
+      return matchesCondition(condition, output);
+    } catch {
+      throw new Error(`The condition '${condition.operator} ${condition.value}' is not valid.`);
+    }
+  }
+
+  /** Records what the flow itself did, so the run output shows the branch it took. */
+  private async recordFlowEvent(
+    run: AgentRun,
+    state: WorkflowRunState,
+    nodeId: string,
+    nextNodeId: string | undefined,
+    name: string,
+    output: string,
+  ): Promise<WorkflowRunState> {
+    const next: WorkflowRunState = {
+      ...state,
+      currentNodeId: nextNodeId,
+      results: [
+        ...state.results,
+        { stepId: nodeId, name, agentId: run.agentId, output, provider: 'flow', kind: 'event' },
+      ],
+    };
+    await this.store.progress(run.workspaceId, run.id, next, workflowOutput(next.results), {});
+    return next;
+  }
+
+  private async runActionNode(
+    run: AgentRun,
+    state: WorkflowRunState,
+    node: AgentWorkflowCanvasNode,
+    nextNodeId: string | undefined,
+  ): Promise<WorkflowRunState> {
+    const action = node.action;
+    if (!action?.toolName) throw new Error('An action node has no module action configured.');
+    const output = await this.runModuleAction(
+      run,
+      action.toolName,
+      lastResultOutput(state.results),
+    );
+    const next: WorkflowRunState = {
+      ...state,
+      currentNodeId: nextNodeId,
+      results: [
+        ...state.results,
+        {
+          stepId: node.id,
+          name: action.toolName,
+          agentId: run.agentId,
+          output,
+          provider: 'flow',
+          kind: 'result',
+        },
+      ],
+    };
+    await this.store.progress(run.workspaceId, run.id, next, workflowOutput(next.results), {});
+    return next;
+  }
+
+  /**
+   * The module actions a server run performs itself. Every other tool belongs to the MCP server,
+   * which the backend cannot call, so naming one fails the run instead of quietly skipping it.
+   */
+  private async runModuleAction(run: AgentRun, toolName: string, input: string): Promise<string> {
+    if (toolName === 'issues_comment') {
+      await this.issues.addComment(
+        run.issueId,
+        run.agentId,
+        input.trim() || 'A etapa anterior não produziu resultado.',
+      );
+      return 'Comentário publicado na issue.';
+    }
+    throw new Error(
+      `A server run cannot call '${toolName}'. Run this flow from an MCP client, or replace the action node with a step.`,
+    );
+  }
+
+  /** Waits out a delay node, giving the wait up as soon as the run is cancelled. */
+  private wait(ms: number, signal: AbortSignal): Promise<void> {
+    if (ms <= 0 || signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      signal.addEventListener('abort', done, { once: true });
+    });
   }
 
   private async imagesForIssue(workspaceId: string, issueId: string): Promise<LlmImage[]> {
@@ -618,41 +854,58 @@ export class RunService {
     if (input.action === 'revise' && run.status !== 'waiting_review')
       throw new ApplicationError('INVALID_RUN_STATE', 'This run is not waiting for review.', 409);
 
-    if (input.action === 'approve' && state.currentStepIndex >= state.steps.length) {
+    const complete = state.canvas
+      ? state.currentNodeId === undefined
+      : state.currentStepIndex >= state.steps.length;
+    if (input.action === 'approve' && complete) {
       const finished = await this.finishWorkflow(run, state);
       if (!finished) throw new ApplicationError('INVALID_RUN_STATE', 'Run already finished.', 409);
       await this.followUpOnNewComments(run);
       return finished;
     }
 
-    let nextState = state;
-    if (input.action !== 'approve') {
-      const answer = input.answer?.trim();
-      if (!answer)
-        throw new ApplicationError('WORKFLOW_ANSWER_REQUIRED', 'A response is required.', 400);
-      // A revision reruns the step under review; an answer reruns the step that asked.
-      const stepIndex =
-        input.action === 'revise'
-          ? Math.max(0, state.currentStepIndex - 1)
-          : state.currentStepIndex;
-      nextState = {
-        ...state,
-        answer,
-        question: undefined,
-        currentStepIndex: stepIndex,
-        results: [
-          ...state.results,
-          {
-            stepId: state.steps[stepIndex]!.id,
-            name: input.action === 'revise' ? 'Pedido de revisão' : 'Resposta do usuário',
-            agentId: run.actorId,
-            output: answer,
-            provider: 'user',
-            kind: 'answer',
-          },
-        ],
-      };
-    }
+    if (input.action !== 'approve' && !input.answer?.trim())
+      throw new ApplicationError('WORKFLOW_ANSWER_REQUIRED', 'A response is required.', 400);
+    const answer = input.answer?.trim() ?? '';
+    // A revision re-runs the agent step that produced the result under review.
+    const reviseNodeId = [...state.results]
+      .reverse()
+      .find(
+        (result) =>
+          (result.kind === undefined || result.kind === 'result') &&
+          state.steps.some((step) => step.id === result.stepId),
+      )?.stepId;
+    const legacyIndex =
+      input.action === 'revise' ? Math.max(0, state.currentStepIndex - 1) : state.currentStepIndex;
+    // A run always carries at least one step, so the placeholder only satisfies the index type.
+    /* v8 ignore next */
+    const legacyStepId = state.steps[legacyIndex]?.id ?? 'workflow';
+    const answerEvent = (): WorkflowRunStepResult => ({
+      stepId: state.canvas
+        ? ((input.action === 'revise' ? reviseNodeId : state.currentNodeId) ?? 'workflow')
+        : legacyStepId,
+      name: input.action === 'revise' ? 'Pedido de revisão' : 'Resposta do usuário',
+      agentId: run.actorId,
+      output: answer,
+      provider: 'user',
+      kind: 'answer',
+    });
+    const nextState: WorkflowRunState =
+      input.action !== 'approve'
+        ? {
+            ...state,
+            answer,
+            question: undefined,
+            currentStepIndex:
+              input.action === 'revise'
+                ? Math.max(0, state.currentStepIndex - 1)
+                : state.currentStepIndex,
+            ...(state.canvas && input.action === 'revise' && reviseNodeId
+              ? { currentNodeId: reviseNodeId }
+              : {}),
+            results: [...state.results, answerEvent()],
+          }
+        : state;
     const resumed = await this.store.resume(
       workspaceId,
       runId,

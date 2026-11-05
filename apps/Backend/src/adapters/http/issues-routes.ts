@@ -292,10 +292,14 @@ export function createIssuesRouter(
     try {
       requireWrite(request);
       const issue = await findIssue(store, request);
-      if ((await runs.list(workspaceId(request), issue.id)).length)
+      // The store keeps the run and cost history of an issue with runs; only an active run blocks.
+      const active = (await runs.list(workspaceId(request), issue.id)).some((run) =>
+        ['queued', 'running', 'waiting_review', 'waiting_input'].includes(run.status),
+      );
+      if (active)
         throw new ApplicationError(
-          'ISSUE_HAS_RUNS',
-          'Issues with agent runs retain their execution and cost history.',
+          'ISSUE_ALREADY_RUNNING',
+          'Cancel the active run before deleting the issue.',
           409,
         );
       await store.remove(workspaceId(request), issue.id);

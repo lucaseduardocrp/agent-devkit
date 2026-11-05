@@ -33,4 +33,25 @@ describe('Modal stacking', () => {
     expect(closeOuter).toHaveBeenCalledOnce();
     expect(closeInner).toHaveBeenCalledOnce();
   });
+
+  it('locks every scrollable element behind the backdrop, and restores it on close', () => {
+    const scroller = document.createElement('div');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'scrollHeight', { value: 400, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { value: 100, configurable: true });
+    scroller.style.overflow = 'visible';
+    document.body.appendChild(scroller);
+    try {
+      const view = render(
+        <Modal open>
+          <p>content</p>
+        </Modal>,
+      );
+      expect(scroller.style.overflow).toBe('hidden');
+      view.unmount();
+      expect(scroller.style.overflow).toBe('visible');
+    } finally {
+      scroller.remove();
+    }
+  });
 });

@@ -257,6 +257,26 @@ describe('LocalRunnerAgent', () => {
       outcome: { kind: 'error', code: 'E2E_SCRIPT_REJECTED' },
     });
 
+    // A hook is checked as a hook module, and its violations say which hook they came from.
+    const badHook = fakeApi({
+      'POST /e2e/runner/claim': {
+        task: runTask({ hooks: { beforeRun: 'await page.goto("/");', afterRun: null } }),
+      },
+      'POST /e2e/runner/tasks/task-1/complete': undefined,
+    });
+    const hookBrowser = browser();
+    const hookRun = agentWith(badHook.api, hookBrowser);
+    await hookRun.agent.poll();
+    expect(hookBrowser.run).not.toHaveBeenCalled();
+    expect(badHook.calls.at(-1)?.body).toMatchObject({
+      outcome: {
+        kind: 'error',
+        code: 'E2E_SCRIPT_REJECTED',
+        message: 'beforeRun: hook must export default async function',
+      },
+    });
+    expect(hookRun.events.at(-1)?.type).toBe('failed');
+
     for (const [error, code] of [
       [
         new E2eRunnerError('E2E_BROWSER_NOT_INSTALLED', 'Run devkit e2e setup.'),

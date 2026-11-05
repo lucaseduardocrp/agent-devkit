@@ -226,10 +226,10 @@ describe.each([
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('formats with Shift+Alt+F', () => {
+  it('formats with Ctrl+B', () => {
     render(<Harness />);
     put('{"a":1}', 1);
-    expect(press({ key: 'F', code: 'KeyF', altKey: true, shiftKey: true })).toBe(false);
+    expect(press({ key: 'b', code: 'KeyB', ctrlKey: true })).toBe(false);
     expect(state().value).toBe('{\n  "a": 1\n}');
   });
 
@@ -617,7 +617,7 @@ describe('the Mocks and Shortcuts menus', () => {
     render(<Harness />);
     fireEvent.click(screen.getByTestId('shortcuts'));
     const panel = await screen.findByTestId('shortcuts-panel');
-    for (const keys of ['Shift+Alt+F', 'Shift+Alt+↓', 'Shift+Alt+↑', 'Ctrl+D', 'Ctrl+Shift+K']) {
+    for (const keys of ['Ctrl+B', 'Shift+Alt+↓', 'Shift+Alt+↑', 'Ctrl+D', 'Ctrl+Shift+K']) {
       expect(panel.textContent).toContain(keys);
     }
     expect(panel.textContent).toContain('Copiar linha para baixo');

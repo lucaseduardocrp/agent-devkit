@@ -325,14 +325,15 @@ describe('issue routes: update and delete', () => {
     expect(unassigned.body).not.toHaveProperty('run');
   });
 
-  it('keeps issues that have run history and reports missing issues', async () => {
+  it('deletes issues with finished runs, blocks active runs and reports missing issues', async () => {
     const issue = await store.create('ws', 'user-a', { title: 'History' });
-    runs.list.mockResolvedValueOnce([{ status: 'succeeded' }]);
+    runs.list.mockResolvedValueOnce([{ status: 'succeeded' }, { status: 'running' }]);
     const app = build();
     expect((await request(app).delete(`/issues/${issue.id}`).expect(409)).body.code).toBe(
-      'ISSUE_HAS_RUNS',
+      'ISSUE_ALREADY_RUNNING',
     );
     await request(app).delete('/issues/missing').expect(404);
+    runs.list.mockResolvedValueOnce([{ status: 'succeeded' }]);
     await request(app).delete(`/issues/${issue.id}`).expect(204);
     expect(await store.get('ws', issue.id)).toBeNull();
   });

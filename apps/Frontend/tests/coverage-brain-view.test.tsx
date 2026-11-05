@@ -215,6 +215,8 @@ describe('BrainView research sidebar', () => {
       .mockRejectedValueOnce(new Error('Brain offline'))
       .mockRejectedValueOnce('down');
     const view = render(<BrainView apiClient={client} initialDocuments={[appDoc]} />);
+    // The research sidebar starts collapsed.
+    fireEvent.click(view.getByRole('button', { name: 'Abrir pesquisa no Brain' }));
     const sidebar = view.getByTestId('brain-research-sidebar');
     const prompt = within(sidebar).getByLabelText('Pergunte algo sobre o Brain…');
 

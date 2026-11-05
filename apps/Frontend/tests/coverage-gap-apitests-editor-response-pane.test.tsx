@@ -157,9 +157,9 @@ describe('ResponsePane', () => {
     expect(screen.getByText('content-type')).toBeTruthy();
     expect(screen.getByText('application/json')).toBeTruthy();
 
-    tab(/Linha do tempo/);
-    const timeline = screen.getByTestId('response-timeline');
-    const rows = within(timeline).getAllByRole('listitem');
+    tab(/Histórico/);
+    const history = screen.getByTestId('response-history');
+    const rows = within(history).getAllByRole('listitem');
     expect(rows).toHaveLength(4);
     expect(rows[1]!.textContent).toContain('404');
     expect(rows[2]!.textContent).toContain('—');
@@ -177,6 +177,24 @@ describe('ResponsePane', () => {
     expect(screen.getByRole('alert').textContent).toBe('Boom');
     tab(/Testes/);
     expect(screen.getByText('Sem asserções.')).toBeTruthy();
+  });
+
+  it('treats a response missing its headers object as having none, for the HTML check', () => {
+    render(
+      <ResponsePane
+        entries={[
+          entry({
+            result: result({
+              response: { bodyPreview: 'plain' } as unknown as RequestResult['response'],
+            }),
+          }),
+        ]}
+        target="remote"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Código' }));
+    expect(screen.queryByTestId('html-preview')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('response-body')).getByText('plain')).toBeTruthy();
   });
 
   it('shows when there was no response, with the error the run recorded', () => {

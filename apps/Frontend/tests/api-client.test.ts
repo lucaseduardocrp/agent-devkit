@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AgentWorkflowCanvasDto } from '../src/features/agents/agent-types.js';
 import { ApiClient, ApiClientError } from '../src/lib/api-client.js';
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
@@ -1601,5 +1602,93 @@ describe('ApiClient', () => {
     await expect(failing.deleteSpecTemplate('t1')).rejects.toThrow('no');
     await expect(failing.exportSpecification('s1')).rejects.toThrow('no');
     await expect(failing.deleteSpecification('s1')).rejects.toThrow('no');
+  });
+
+  describe('agent workflow canvas', () => {
+    const canvas = {
+      nodes: [
+        {
+          id: 'start',
+          kind: 'trigger',
+          x: 48,
+          y: 160,
+          trigger: { kind: 'schedule', cron: '0 9 * *' },
+        },
+        { id: 'step-a', kind: 'step', x: 352, y: 160 },
+        {
+          id: 'cond',
+          kind: 'condition',
+          x: 700,
+          y: 160,
+          condition: { operator: 'contains', value: 'ok' },
+        },
+      ],
+      edges: [
+        { id: 'e1', from: 'start', to: 'step-a' },
+        { id: 'e2', from: 'cond', fromPort: 'false', to: 'step-a' },
+      ],
+    } as AgentWorkflowCanvasDto;
+
+    const workflow = {
+      enabled: true,
+      autonomy: 'balanced' as const,
+      finalReview: true,
+      uncertaintyBehavior: 'ask' as const,
+      issueCreationBehavior: 'ask' as const,
+      defaultAction: 'allow' as const,
+      steps: [{ id: 'step-a', name: 'Plan', instructions: 'plan it' }],
+      rules: [],
+    };
+
+    it('reads the saved canvas back instead of dropping it', async () => {
+      const client = new ApiClient({
+        fetcher: vi.fn().mockResolvedValue(jsonResponse({ workflow: { ...workflow, canvas } })),
+      });
+      expect((await client.getAgentWorkflow()).canvas).toEqual(canvas);
+    });
+
+    it('sends the canvas when the workflow is saved', async () => {
+      const fetcher = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ workflow: { ...workflow, canvas } }));
+      const client = new ApiClient({ fetcher });
+      const saved = await client.saveAgentWorkflow({ ...workflow, canvas });
+
+      const body = JSON.parse(String(fetcher.mock.lastCall![1].body)) as { canvas?: unknown };
+      expect(body.canvas).toEqual(canvas);
+      expect(saved.canvas).toEqual(canvas);
+    });
+
+    it('keeps the canvas it sent when the server answers without one', async () => {
+      const fetcher = vi.fn().mockResolvedValue(jsonResponse({ workflow }));
+      const client = new ApiClient({ fetcher });
+      expect((await client.saveAgentWorkflow({ ...workflow, canvas })).canvas).toEqual(canvas);
+    });
+
+    it('leaves the canvas out when the workflow has none', async () => {
+      const fetcher = vi.fn().mockResolvedValue(jsonResponse({ workflow }));
+      const client = new ApiClient({ fetcher });
+      const saved = await client.saveAgentWorkflow(workflow);
+
+      const body = JSON.parse(String(fetcher.mock.lastCall![1].body)) as { canvas?: unknown };
+      expect(body.canvas).toBeUndefined();
+      expect(saved.canvas).toBeUndefined();
+    });
+
+    it('reads a canvas whose nodes and edges are missing as an empty one', async () => {
+      const client = new ApiClient({
+        fetcher: vi.fn().mockResolvedValue(jsonResponse({ workflow: { ...workflow, canvas: {} } })),
+      });
+      expect((await client.getAgentWorkflow()).canvas).toEqual({ nodes: [], edges: [] });
+    });
+
+    it('ignores a canvas that is not an object', async () => {
+      const client = new ApiClient({
+        fetcher: vi
+          .fn()
+          .mockResolvedValue(jsonResponse({ workflow: { ...workflow, canvas: 'nope' } })),
+      });
+      expect((await client.getAgentWorkflow()).canvas).toBeUndefined();
+    });
   });
 });

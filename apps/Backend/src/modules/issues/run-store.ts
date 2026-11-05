@@ -1,5 +1,9 @@
 import { Prisma, type PrismaClient } from '../../generated/prisma/client.js';
-import type { AgentWorkflow, AgentWorkflowStep } from '../agents/domain/agent-workflow.js';
+import type {
+  AgentWorkflow,
+  AgentWorkflowCanvas,
+  AgentWorkflowStep,
+} from '../agents/domain/agent-workflow.js';
 
 export type RunStatus =
   'queued' | 'running' | 'waiting_review' | 'waiting_input' | 'succeeded' | 'failed' | 'cancelled';
@@ -10,7 +14,8 @@ export interface WorkflowRunStepResult {
   readonly name: string;
   readonly agentId: string;
   readonly output: string;
-  readonly kind?: 'result' | 'question' | 'answer';
+  /** `event` is what the flow itself did — a condition, a delay — and never feeds an agent prompt. */
+  readonly kind?: 'result' | 'question' | 'answer' | 'event';
   readonly provider: string;
   readonly model?: string;
   readonly inputTokens?: number;
@@ -30,6 +35,10 @@ export interface WorkflowRunState {
   readonly allStepsPriced: boolean;
   readonly question?: string;
   readonly answer?: string;
+  /** Set only when the flow has nodes the ordered step list cannot express, and is walked instead. */
+  readonly canvas?: AgentWorkflowCanvas;
+  /** The node the walk runs next; absent once the flow has ended. */
+  readonly currentNodeId?: string;
 }
 
 export interface AgentRun {

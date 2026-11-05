@@ -17,6 +17,8 @@ export interface E2eRepositorySelection {
   readonly id: string;
   readonly branch: string;
   readonly path: string;
+  /** "owner/repo" or "Project/Repo", set when a repository is picked. */
+  readonly name?: string;
 }
 
 const providerLabels: Record<E2eRepositoryProvider, string> = {
@@ -29,6 +31,13 @@ const warningKeys: Record<E2eRepositoryWarning['code'], TranslationKey> = {
   PROVIDER_UNAVAILABLE: 'e2e.repoWarningUnavailable',
 };
 
+/** The folder field reads as the place of E2E scripts unless the caller names it otherwise. */
+export interface RepositoryPathLabels {
+  readonly label: string;
+  readonly placeholder: string;
+  readonly hint: string;
+}
+
 export function E2eRepositoryPicker({
   apiClient,
   value,
@@ -36,6 +45,9 @@ export function E2eRepositoryPicker({
   onChange,
   onPathChange,
   onOpenIntegrations,
+  source = 'e2e',
+  pathLabels,
+  disabled = false,
 }: {
   readonly apiClient: ApiClient;
   readonly value: E2eRepositorySelection;
@@ -43,6 +55,10 @@ export function E2eRepositoryPicker({
   readonly onChange: (value: E2eRepositorySelection) => void;
   readonly onPathChange: (path: string) => void;
   readonly onOpenIntegrations?: () => void;
+  /** Which module's routes list the repositories (each checks its own permission). */
+  readonly source?: 'e2e' | 'integrationTests';
+  readonly pathLabels?: RepositoryPathLabels;
+  readonly disabled?: boolean;
 }) {
   const { t } = useI18n();
   const [repositories, setRepositories] = useState<readonly E2eRepository[] | null>(null);
@@ -53,8 +69,7 @@ export function E2eRepositoryPicker({
 
   useEffect(() => {
     let active = true;
-    apiClient
-      .getE2eRepositories()
+    (source === 'e2e' ? apiClient.getE2eRepositories() : apiClient.listApiTestRepositories())
       .then((result) => {
         if (!active) return;
         setRepositories(result.repositories);
@@ -68,7 +83,7 @@ export function E2eRepositoryPicker({
     return () => {
       active = false;
     };
-  }, [apiClient, t]);
+  }, [apiClient, source, t]);
 
   const { provider, id } = value;
   useEffect(() => {
@@ -79,8 +94,10 @@ export function E2eRepositoryPicker({
     let active = true;
     setBranches(null);
     setBranchError(null);
-    apiClient
-      .getE2eBranches(provider, id)
+    (source === 'e2e'
+      ? apiClient.getE2eBranches(provider, id)
+      : apiClient.listApiTestBranches(provider, id)
+    )
       .then((list) => {
         if (active) setBranches(list);
       })
@@ -92,7 +109,7 @@ export function E2eRepositoryPicker({
     return () => {
       active = false;
     };
-  }, [apiClient, provider, id, t]);
+  }, [apiClient, provider, id, source, t]);
 
   // Default to the repository's default branch once its branches are known.
   const selected = repositories?.find((repo) => repo.provider === provider && repo.id === id);
@@ -125,6 +142,7 @@ export function E2eRepositoryPicker({
       provider: nextProvider as E2eRepositoryProvider | '',
       id: nextId,
       branch: repository?.defaultBranch ?? '',
+      name: repository?.name ?? '',
     });
   };
 
@@ -152,7 +170,7 @@ export function E2eRepositoryPicker({
           aria-label={t('e2e.repository')}
           value={provider && id ? `${provider}:${id}` : ''}
           onChange={(event) => selectRepository(event.target.value)}
-          disabled={!repositories?.length}
+          disabled={disabled || !repositories?.length}
           variant={invalid ? 'error' : 'default'}
         >
           <option value="">
@@ -208,7 +226,7 @@ export function E2eRepositoryPicker({
           aria-label={t('e2e.baseBranch')}
           value={value.branch}
           onChange={(event) => onChange({ ...value, branch: event.target.value })}
-          disabled={!selected || branches === null}
+          disabled={disabled || !selected || branches === null}
         >
           {selected && branches === null && <option value="">{t('e2e.branchLoading')}</option>}
           {branchOptions.map((branch) => (
@@ -221,14 +239,17 @@ export function E2eRepositoryPicker({
       {branchError && <p className="-mt-2 text-xs text-red-400">{branchError}</p>}
 
       <label className="flex flex-col gap-1.5 text-sm text-[var(--text-secondary)]">
-        {t('e2e.scriptPath')}
+        {pathLabels?.label ?? t('e2e.scriptPath')}
         <Input
-          aria-label={t('e2e.scriptPath')}
+          aria-label={pathLabels?.label ?? t('e2e.scriptPath')}
           value={value.path}
-          placeholder={t('e2e.scriptPathPlaceholder')}
+          placeholder={pathLabels?.placeholder ?? t('e2e.scriptPathPlaceholder')}
+          disabled={disabled}
           onChange={(event) => onPathChange(event.target.value)}
         />
-        <span className="text-xs text-[var(--text-muted)]">{t('e2e.scriptPathHint')}</span>
+        <span className="text-xs text-[var(--text-muted)]">
+          {pathLabels?.hint ?? t('e2e.scriptPathHint')}
+        </span>
       </label>
     </div>
   );

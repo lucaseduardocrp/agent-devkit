@@ -500,7 +500,7 @@ describe('VariablesEditor', () => {
     );
     const value = screen.getByLabelText<HTMLInputElement>('token');
     expect(value.type).toBe('password');
-    expect(value.placeholder).toBe('•••••• (salvo)');
+    expect(value.placeholder).toBe('•••••• (pessoal)');
     fireEvent.change(view.getByLabelText('Chave'), { target: { value: 'jwt' } });
     expect(onChange.mock.lastCall![0][0]).toMatchObject({ key: 'jwt' });
     fireEvent.change(value, { target: { value: 's3cr3t' } });
@@ -552,7 +552,7 @@ describe('GenerateDialog', () => {
 
     fireEvent.click(view.getByRole('button', { name: 'Suítes' }));
     expect(await view.findByLabelText('Smoke suite')).toBeInTheDocument();
-    fireEvent.click(view.getByRole('button', { name: 'Brain' }));
+    fireEvent.click(view.getByRole('button', { name: 'Cérebro' }));
     expect(await view.findByLabelText('Orders doc')).toBeInTheDocument();
     fireEvent.click(view.getByRole('button', { name: 'Specs' }));
     fireEvent.click(await view.findByLabelText('Orders spec'));

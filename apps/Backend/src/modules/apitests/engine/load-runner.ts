@@ -73,6 +73,7 @@ export interface LoadRunOptions {
   readonly signal?: AbortSignal;
   readonly fetch?: typeof fetch;
   readonly guard?: (url: URL) => Promise<void>;
+  readonly connectHost?: (hostname: string) => string;
   /** Hard limit on virtual users, whatever the stages say. */
   readonly maxVus?: number;
   /** Called once a second with the last second and the summary so far. */
@@ -162,6 +163,11 @@ export async function runLoad(plan: LoadPlan, options: LoadRunOptions = {}): Pro
         ...(plan.timeoutMs ? { timeoutMs: plan.timeoutMs } : {}),
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(options.guard ? { guard: options.guard } : {}),
+        ...(options.connectHost ? { connectHost: options.connectHost } : {}),
+        ...(plan.settings ? { settings: plan.settings } : {}),
+        ...(entry.inheritedHeaders ? { inheritedHeaders: entry.inheritedHeaders } : {}),
+        // Keep-alive connections, as k6 does, unless a proxy or certificates need the node transport.
+        preferFetch: true,
       });
       // A request cut by the end of the test is not a result.
       if (signal.aborted && result.status === null) break;
@@ -276,6 +282,11 @@ export async function runLoad(plan: LoadPlan, options: LoadRunOptions = {}): Pro
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
+    // A virtual user only reaches its think time right after a request that was not itself
+    // cut short by the abort (the caller already bails out on that case), so this can only be
+    // true in the narrow window where the signal fires between that check and this call —
+    // not a race a test can land on reliably.
+    /* v8 ignore next */
     if (signal.aborted) return resolve();
     const timer = setTimeout(done, ms);
     function done() {

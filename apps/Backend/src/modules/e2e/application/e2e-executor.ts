@@ -5,11 +5,15 @@ import { resolveLocale, translateErrorMessage } from '../../../shared/i18n.js';
 import {
   ACTIVE_CREATION_STATUSES,
   ACTIVE_TEST_STATUSES,
+  HOOK_KINDS,
+  HOOK_LABELS,
+  hookFilePath,
   scriptFilePath,
   snapshotKey,
   stepEvidencePrefix,
   targetUrl,
   type E2eCreation,
+  type E2eHookKind,
   type E2eRepositoryRef,
   type E2eStepResult,
   type E2eTestCase,
@@ -21,6 +25,7 @@ import type { E2eJob } from './e2e-queue.js';
 import {
   E2eRunnerError,
   type E2eCredentials,
+  type E2eRunHooks,
   type E2eRunResult,
   type E2eRunner,
   type E2eSnapshot,
@@ -260,29 +265,39 @@ export class E2eExecutor {
     let script = test.scriptPath
       ? await this.options.scripts.readFile(creation.workspaceId, repository, test.scriptPath)
       : null;
+    let hooks: E2eRunHooks;
     if (script === null) {
-      script = await this.authorScript(creation, test, snapshot, undefined, signal);
+      // A new or regenerated spec comes with the Before Run and After Run of its test case.
+      hooks = await this.authorHooks(creation, test, snapshot, signal);
+      script = await this.authorScript(creation, test, snapshot, undefined, signal, hooks);
       test = { ...test, scriptPath: scriptFilePath(repository.path, test) };
     } else {
       const check = checkScript(script);
       if (!check.ok)
         throw new ApplicationError('E2E_SCRIPT_REJECTED', check.violations.join('; '), 422);
+      hooks = await this.readHooks(creation, test);
     }
-    let result = await this.runOnce(creation, job, test, script, signal);
+    let result = await this.runOnce(creation, job, test, script, hooks, signal);
     test = { ...test, attempts: test.attempts + 1 };
-    let analysis = await this.analyze(creation, test, script, result, signal);
+    let analysis = await this.analyze(creation, test, script, hooks, result, signal);
 
-    for (let heal = 0; heal < this.healAttempts && analysis?.verdict === 'test_issue'; heal++) {
+    // Rewriting the spec cannot fix a failing Before Run or After Run.
+    for (
+      let heal = 0;
+      heal < this.healAttempts && analysis?.verdict === 'test_issue' && !isHookFailure(result);
+      heal++
+    ) {
       script = await this.authorScript(
         creation,
         test,
         snapshot,
         { script, problem: `${result.error ?? ''}\n\n${analysis.summary}` },
         signal,
+        hooks,
       );
-      result = await this.runOnce(creation, job, test, script, signal);
+      result = await this.runOnce(creation, job, test, script, hooks, signal);
       test = { ...test, attempts: test.attempts + 1 };
-      analysis = await this.analyze(creation, test, script, result, signal);
+      analysis = await this.analyze(creation, test, script, hooks, result, signal);
     }
 
     ensureActive(signal);
@@ -349,11 +364,19 @@ export class E2eExecutor {
     snapshot: SnapshotProvider,
     previous: { script: string; problem: string } | undefined,
     signal: AbortSignal,
+    hooks: E2eRunHooks,
   ): Promise<string> {
     const { store, author } = this.options;
     await this.updateTest(creation, test.id, { status: 'generating' }, signal);
     const context = await snapshot();
-    let script = await author.writeScript({ creation, test, snapshot: context, previous, signal });
+    let script = await author.writeScript({
+      creation,
+      test,
+      snapshot: context,
+      previous,
+      hooks,
+      signal,
+    });
     let check = checkScript(script);
     if (!check.ok) {
       script = await author.writeScript({
@@ -364,6 +387,7 @@ export class E2eExecutor {
           script,
           problem: `The script was rejected by the security checks: ${check.violations.join('; ')}.`,
         },
+        hooks,
         signal,
       });
       check = checkScript(script);
@@ -384,11 +408,100 @@ export class E2eExecutor {
     return script;
   }
 
+  /** The Before Run and After Run committed next to the test's spec; blank files count as none. */
+  private async readHooks(creation: E2eCreation, test: E2eTestCase): Promise<E2eRunHooks> {
+    const repository = requireRepository(creation);
+    const specPath = test.scriptPath ?? scriptFilePath(repository.path, test);
+    const [beforeRun, afterRun] = await Promise.all(
+      HOOK_KINDS.map(async (kind) => {
+        const content = await this.options.scripts.readFile(
+          creation.workspaceId,
+          repository,
+          hookFilePath(specPath, kind),
+        );
+        if (!content?.trim()) return null;
+        const check = checkScript(content, 'hook');
+        if (!check.ok)
+          throw new ApplicationError(
+            'E2E_SCRIPT_REJECTED',
+            `${HOOK_LABELS[kind]}: ${check.violations.join('; ')}`,
+            422,
+          );
+        return content;
+      }),
+    );
+    return { beforeRun: beforeRun ?? null, afterRun: afterRun ?? null };
+  }
+
+  /**
+   * Writes the Before Run and After Run of a test from its test case and commits them next to
+   * the spec. When the author finds nothing to prepare or clean up, what the repository already
+   * holds is kept.
+   */
+  private async authorHooks(
+    creation: E2eCreation,
+    test: E2eTestCase,
+    snapshot: SnapshotProvider,
+    signal: AbortSignal,
+  ): Promise<E2eRunHooks> {
+    const { author, scripts } = this.options;
+    if (!author.writeHook) return this.readHooks(creation, test);
+    await this.updateTest(creation, test.id, { status: 'generating' }, signal);
+    const repository = requireRepository(creation);
+    const specPath = test.scriptPath ?? scriptFilePath(repository.path, test);
+    const context = await snapshot();
+    const written: Record<E2eHookKind, string | null> = { beforeRun: null, afterRun: null };
+    for (const kind of HOOK_KINDS) {
+      const request = {
+        creation,
+        test,
+        kind,
+        snapshot: context,
+        beforeRun: written.beforeRun,
+        signal,
+      };
+      let hook = await author.writeHook(request);
+      let check = hook ? checkScript(hook, 'hook') : null;
+      if (hook && check && !check.ok) {
+        hook = await author.writeHook({
+          ...request,
+          previous: {
+            script: hook,
+            problem: `The script was rejected by the security checks: ${check.violations.join('; ')}.`,
+          },
+        });
+        check = hook ? checkScript(hook, 'hook') : null;
+      }
+      ensureActive(signal);
+      if (!hook) continue;
+      if (check && !check.ok)
+        throw new ApplicationError(
+          'E2E_SCRIPT_REJECTED',
+          `${HOOK_LABELS[kind]}: ${check.violations.join('; ')}`,
+          422,
+        );
+      await scripts.writeFile(
+        creation.workspaceId,
+        repository,
+        hookFilePath(specPath, kind),
+        hook,
+        `test(e2e): add ${HOOK_LABELS[kind]} of ${test.code} - ${test.title}`,
+      );
+      written[kind] = hook;
+    }
+    const stored = await this.readHooks(creation, test);
+    return {
+      beforeRun: written.beforeRun ?? stored.beforeRun,
+      afterRun: written.afterRun ?? stored.afterRun,
+    };
+  }
+
   private async runOnce(
     creation: E2eCreation,
     job: E2eJob,
     test: E2eTestCase,
     script: string,
+    hooks: E2eRunHooks,
     signal: AbortSignal,
   ): Promise<E2eRunResult> {
     await this.updateTest(
@@ -399,6 +512,7 @@ export class E2eExecutor {
     );
     const result = await this.runnerFor(creation, job, test.id).run({
       script,
+      hooks,
       mode: creation.mode,
       baseUrl: creation.baseUrl,
       localOrigin: creation.localOrigin,
@@ -415,6 +529,7 @@ export class E2eExecutor {
     creation: E2eCreation,
     test: E2eTestCase,
     script: string,
+    hooks: E2eRunHooks,
     result: E2eRunResult,
     signal: AbortSignal,
   ): Promise<E2eAnalysis | null> {
@@ -424,6 +539,7 @@ export class E2eExecutor {
         creation,
         test,
         script,
+        hooks,
         error: result.error ?? '',
         logs: result.logs,
         signal,
@@ -502,6 +618,11 @@ const STOPS_RUN = new Set<E2eRunnerError['code']>([
 
 function ensureActive(signal: AbortSignal): void {
   if (signal.aborted) throw new Cancelled();
+}
+
+/** The runner prefixes errors of Before Run and After Run with their name. */
+function isHookFailure(result: E2eRunResult): boolean {
+  return Object.values(HOOK_LABELS).some((label) => result.error?.includes(`${label}: `));
 }
 
 function credentialsOf(creation: E2eCreation): E2eCredentials {

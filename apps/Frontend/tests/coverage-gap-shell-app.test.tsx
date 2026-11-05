@@ -13,6 +13,7 @@ const { stub } = await vi.hoisted(async () => {
     onWorkspaceRenamed: { id: 'ws-1', name: 'Renamed Corp' },
     onSelectWorkspace: 'ws-2',
     onAutomate: { source: 'saved', suiteId: 's1' },
+    onSelectSection: 'workflow',
   };
   const stub =
     (name: string) =>
@@ -217,6 +218,9 @@ describe('App shell wiring', () => {
 
     render(<App apiClient={client} initialTab="e2e" />);
     fireEvent.click(await screen.findByRole('button', { name: 'E2eView.onOpenAgents' }));
+    expect(screen.getByTestId('stub-AgentsView')).toBeInTheDocument();
+    // Selecting a section in Agents switches the shell's own nav tab to match.
+    fireEvent.click(screen.getByRole('button', { name: 'AgentsView.onSelectSection' }));
     expect(screen.getByTestId('stub-AgentsView')).toBeInTheDocument();
   });
 

@@ -113,6 +113,10 @@ export interface E2eTestCase {
   priority: E2ePriority;
   /** File path of the spec inside the creation's repository; the content is never stored here. */
   scriptPath: string | null;
+  /** What the user tells the AI about how to write the Before Run (e.g. screens to go through). */
+  beforeRunInstructions: string | null;
+  /** What the user tells the AI about how to write the After Run. */
+  afterRunInstructions: string | null;
   /** Test case on a test management platform that this test automates. */
   externalCase: ExternalTestCase | null;
   /** Steps of the latest execution, with their evidence. */
@@ -255,4 +259,31 @@ export function slugify(value: string, max = 60): string {
 export function scriptFilePath(folder: string, test: Pick<E2eTestCase, 'code' | 'title'>): string {
   const file = `${test.code.toLowerCase()}-${slugify(test.title)}.spec.ts`;
   return folder ? `${folder}/${file}` : file;
+}
+
+/**
+ * The scripts of a test: its spec, the Before Run that prepares the preconditions and the
+ * After Run that removes what the test left behind.
+ */
+export const E2E_SCRIPT_KINDS = ['spec', 'beforeRun', 'afterRun'] as const;
+export type E2eScriptKind = (typeof E2E_SCRIPT_KINDS)[number];
+export type E2eHookKind = Exclude<E2eScriptKind, 'spec'>;
+export const HOOK_KINDS: readonly E2eHookKind[] = ['beforeRun', 'afterRun'];
+export const HOOK_LABELS: Readonly<Record<E2eHookKind, string>> = {
+  beforeRun: 'Before Run',
+  afterRun: 'After Run',
+};
+export const HOOK_INSTRUCTION_FIELDS = {
+  beforeRun: 'beforeRunInstructions',
+  afterRun: 'afterRunInstructions',
+} as const satisfies Record<E2eHookKind, keyof E2eTestCase>;
+export const MAX_HOOK_INSTRUCTIONS_LENGTH = 20_000;
+
+/**
+ * Before Run and After Run live next to the spec (`tc001-x.before.ts`, `tc001-x.after.ts`);
+ * without the `.spec` suffix Playwright never collects them as tests.
+ */
+export function hookFilePath(specPath: string, kind: E2eHookKind): string {
+  const suffix = kind === 'beforeRun' ? '.before.ts' : '.after.ts';
+  return `${specPath.replace(/\.spec\.(ts|js|mjs)$/, '')}${suffix}`;
 }

@@ -10,6 +10,7 @@ import {
   flattenItems,
   isActiveRun,
   newRequest,
+  secretRef,
   type ApiCollection,
   type ApiCollectionSummary,
   type ApiEnvironment,
@@ -20,19 +21,28 @@ import {
   type ApiRunTarget,
   type CollectionRunResult,
   type ExportFormat,
+  type GrpcServiceList,
+  type RequestKind,
+  type RequestResult,
+  type RuntimeState,
 } from './api-test-types.js';
 import { GenerateDialog } from './ApiTestShared.js';
 import { IntegrationTestsSkeleton } from './ApiTestSkeletons.js';
 import { VariablesContext, variableSuggestions } from './variables-context.js';
 import { EnvironmentsPane } from './integration/EnvironmentsPane.js';
 import { downloadBlob } from './api-test-ui.js';
-import { CollectionRunner } from './integration/CollectionRunner.js';
+import { CollectionRunner, type RunnerOptions } from './integration/CollectionRunner.js';
 import { CollectionSettingsPane } from './integration/CollectionSettingsPane.js';
 import { CollectionsSidebar, type SidebarActions } from './integration/CollectionsSidebar.js';
+import { FolderSettingsPane } from './integration/FolderSettingsPane.js';
+import { NewRequestDialog } from './integration/NewRequestDialog.js';
+import type { RequestActions } from './integration/request-actions.js';
+import { RuntimeDialog } from './integration/RuntimePane.js';
 import {
   HISTORY_LIMIT,
   addItem,
   cloneItem,
+  findItem,
   findRequest,
   insertAfter,
   mapItems,
@@ -50,12 +60,33 @@ import {
 import { EmptyPane, MethodLabel, NameDialog } from './integration/integration-parts.js';
 import { RequestPane, UrlBar } from './integration/RequestPane.js';
 import { ResponsePane } from './integration/ResponsePane.js';
+import { errorText } from './integration/file-read.js';
 
 const defaultApiClient = new ApiClient();
+
+/** The tabs of the workbench, plus the settings of a folder. */
+type ViewTab =
+  | WorkbenchTab
+  | { readonly kind: 'folder'; readonly collectionId: string; readonly folderId: string };
+const viewTabKey = (tab: ViewTab) =>
+  tab.kind === 'folder' ? `folder:${tab.folderId}` : tabKey(tab);
+const viewTabCollection = (tab: ViewTab) =>
+  tab.kind === 'folder' ? tab.collectionId : tabCollection(tab);
+
+/** The new request the dialog describes, with the defaults of its kind. */
+function buildRequest(
+  input: { name: string; kind: RequestKind; url: string },
+  baseUrl: string,
+): ApiRequestSpec {
+  const request = newRequest(input.name, input.kind, baseUrl || '{{baseUrl}}');
+  return input.url.trim() ? { ...request, url: input.url.trim() } : request;
+}
 
 export interface IntegrationTestsViewProps {
   readonly apiClient?: ApiClient;
   readonly isReadOnly?: boolean;
+  /** Opens the integrations, where GitHub or Azure DevOps is connected for pipelines. */
+  readonly onOpenIntegrations?: () => void;
 }
 
 interface NamePrompt {
@@ -164,6 +195,7 @@ function SplitPane({
 export function IntegrationTestsView({
   apiClient = defaultApiClient,
   isReadOnly = false,
+  onOpenIntegrations,
 }: IntegrationTestsViewProps): React.JSX.Element {
   const { t } = useI18n();
   const [summaries, setSummaries] = useState<ApiCollectionSummary[]>([]);
@@ -173,7 +205,7 @@ export function IntegrationTestsView({
   // changes to the collection itself: name, variables, auth, tree).
   const [dirty, setDirty] = useState<Record<string, ReadonlySet<string>>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [tabs, setTabs] = useState<WorkbenchTab[]>([]);
+  const [tabs, setTabs] = useState<ViewTab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [environmentId, setEnvironmentId] = useState('');
@@ -193,13 +225,21 @@ export function IntegrationTestsView({
   // The mock values requests can use; they load on the side and the editor works without them.
   const [mocks, setMocks] = useState<ApiMockValue[] | null>(null);
   const [mocksFailed, setMocksFailed] = useState(false);
+  // The current user's runtime variables and cookies, per collection (never shared).
+  const [runtime, setRuntime] = useState<Record<string, RuntimeState>>({});
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [showRuntime, setShowRuntime] = useState(false);
+  const [newRequestFor, setNewRequestFor] = useState<{
+    readonly collectionId: string;
+    readonly folderId: string | null;
+  } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const loadedRef = useRef(loaded);
   loadedRef.current = loaded;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
 
-  const fail = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
+  const fail = (err: unknown) => setError(errorText(err));
 
   // ---------- loading ----------
 
@@ -233,10 +273,10 @@ export function IntegrationTestsView({
     [apiClient],
   );
 
-  const openTab = useCallback((tab: WorkbenchTab) => {
-    const key = tabKey(tab);
+  const openTab = useCallback((tab: ViewTab) => {
+    const key = viewTabKey(tab);
     setTabs((current) =>
-      current.some((item) => tabKey(item) === key) ? current : [...current, tab],
+      current.some((item) => viewTabKey(item) === key) ? current : [...current, tab],
     );
     setActiveKey(key);
   }, []);
@@ -264,6 +304,19 @@ export function IntegrationTestsView({
   useEffect(() => {
     void loadMocks();
   }, [loadMocks]);
+
+  /** Reads the user's runtime state; a server without it leaves the workbench working. */
+  const loadRuntime = useCallback(
+    (collectionId: string) =>
+      Promise.resolve()
+        .then(() => apiClient.getApiRuntime(collectionId))
+        .then((state) => {
+          setRuntime((all) => ({ ...all, [collectionId]: state }));
+          setRuntimeError(null);
+        })
+        .catch((err: unknown) => setRuntimeError(errorText(err))),
+    [apiClient],
+  );
 
   useEffect(() => {
     void loadLists()
@@ -346,12 +399,15 @@ export function IntegrationTestsView({
       [requestId]: [...entries, ...(all[requestId] ?? [])].slice(0, HISTORY_LIMIT),
     }));
 
+  /** Sends the request as it is in the editor: unsaved changes go along and stay unsaved. */
   const send = useCallback(
     async (collectionId: string, requestId: string) => {
-      if (isReadOnly || pending[requestId]) return;
+      // Both callers (the Send button and the Ctrl+Enter shortcut) only ever name a request
+      // tab that is already open, which only happens once its collection has loaded.
+      /* v8 ignore next */
+      const request = findRequest(loadedRef.current[collectionId]?.items ?? [], requestId);
+      if (isReadOnly || pending[requestId] || !request) return;
       setError(null);
-      const saved = await saveIfDirty(collectionId);
-      if (!saved) return;
       try {
         const run = await apiClient.startIntegrationRun({
           collectionId,
@@ -359,6 +415,8 @@ export function IntegrationTestsView({
           itemIds: [requestId],
           target,
           bail: false,
+          useRuntime: true,
+          request,
         });
         const startedAt = Date.now();
         const done = await follow(run, (current) =>
@@ -380,24 +438,46 @@ export function IntegrationTestsView({
           ],
           requestId,
         );
+        void loadRuntime(collectionId);
       } catch (err) {
         setPending(({ [requestId]: _failed, ...rest }) => rest);
         fail(err);
       }
     },
 
-    [apiClient, environmentId, follow, isReadOnly, pending, saveIfDirty, t, target],
+    [apiClient, environmentId, follow, isReadOnly, loadRuntime, pending, t, target],
+  );
+
+  /** One run of an unsaved copy of a request, for the request editors (see RequestActions). */
+  const runOnce = useCallback(
+    async (collectionId: string, request: ApiRequestSpec, mode: 'run' | 'grpc-reflect') => {
+      const run = await apiClient.startIntegrationRun({
+        collectionId,
+        environmentId: environmentId || null,
+        itemIds: [request.id],
+        target,
+        bail: false,
+        mode,
+        useRuntime: true,
+        request,
+      });
+      const done = await follow(run, () => undefined);
+      const result = done.result?.results?.[0];
+      if (!result) throw new Error(done.error ?? t(`apiTests.status.${done.status}`));
+      return result;
+    },
+    [apiClient, environmentId, follow, t, target],
   );
 
   /** Offered only while the request is being sent. */
   const cancelSend = (requestId: string) =>
     void apiClient.cancelApiRun('integration', pending[requestId]!.runId).catch(fail);
 
-  const runCollection = async (
-    collectionId: string,
-    options: { itemIds: string[]; bail: boolean },
-  ) => {
-    // Read-only members get no run buttons (runner and sidebar hide them).
+  const runCollection = async (collectionId: string, options: RunnerOptions) => {
+    // Its only callers are the Runner pane's Run button and the sidebar's Run menu item, both
+    // of which the read-only member never sees.
+    /* v8 ignore next */
+    if (isReadOnly) return;
     setError(null);
     openTab({ kind: 'runner', collectionId });
     const saved = await saveIfDirty(collectionId);
@@ -409,6 +489,10 @@ export function IntegrationTestsView({
         itemIds: options.itemIds,
         target,
         bail: options.bail,
+        iterations: options.iterations,
+        delayMs: options.delayMs,
+        useRuntime: true,
+        ...(options.data ? { data: options.data } : {}),
       });
       const done = await follow(run, (current) =>
         setRuns((all) => ({ ...all, [collectionId]: current })),
@@ -416,6 +500,7 @@ export function IntegrationTestsView({
       // Each request of the run also gets the response in its own tab.
       for (const result of done.result?.results ?? [])
         remember([{ runId: done.id, at: Date.now(), result, error: null }], result.requestId);
+      void loadRuntime(collectionId);
     } catch (err) {
       fail(err);
     }
@@ -423,8 +508,8 @@ export function IntegrationTestsView({
 
   // ---------- tabs ----------
 
-  const activeTab = tabs.find((tab) => tabKey(tab) === activeKey) ?? null;
-  const activeCollectionId = activeTab ? tabCollection(activeTab) : null;
+  const activeTab = tabs.find((tab) => viewTabKey(tab) === activeKey) ?? null;
+  const activeCollectionId = activeTab ? viewTabCollection(activeTab) : null;
   const activeCollection = activeCollectionId ? (loaded[activeCollectionId] ?? null) : null;
   const activeRequest =
     activeTab?.kind === 'request' && activeCollection
@@ -433,11 +518,11 @@ export function IntegrationTestsView({
 
   const closeTabs = (keys: readonly string[]) => {
     setTabs((current) => {
-      const next = current.filter((tab) => !keys.includes(tabKey(tab)));
+      const next = current.filter((tab) => !keys.includes(viewTabKey(tab)));
       if (activeKey && keys.includes(activeKey)) {
-        const index = current.findIndex((tab) => tabKey(tab) === activeKey);
+        const index = current.findIndex((tab) => viewTabKey(tab) === activeKey);
         const neighbour = next[Math.min(index, next.length - 1)];
-        setActiveKey(neighbour ? tabKey(neighbour) : null);
+        setActiveKey(neighbour ? viewTabKey(neighbour) : null);
       }
       return next;
     });
@@ -446,11 +531,17 @@ export function IntegrationTestsView({
   // Tabs whose request was deleted go away.
   useEffect(() => {
     const gone = tabs.filter((tab) => {
-      if (tab.kind !== 'request') return false;
-      // Request tabs open from a loaded collection, and deleting a collection closes its tabs.
-      return !findRequest(loaded[tab.collectionId]!.items, tab.requestId);
+      if (tab.kind !== 'request' && tab.kind !== 'folder') return false;
+      const collection = loaded[tab.collectionId];
+      // Every opener of a request or folder tab only runs once its collection has loaded, so
+      // this is never actually missing - it only narrows the type below.
+      /* v8 ignore next */
+      if (!collection) return false;
+      return tab.kind === 'request'
+        ? !findRequest(collection.items, tab.requestId)
+        : findItem(collection.items, tab.folderId)?.type !== 'folder';
     });
-    if (gone.length) closeTabs(gone.map(tabKey));
+    if (gone.length) closeTabs(gone.map(viewTabKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
 
@@ -461,7 +552,7 @@ export function IntegrationTestsView({
         event.preventDefault();
         void send(activeTab.collectionId, activeTab.requestId);
       } else if (event.key.toLowerCase() === 's') {
-        const collectionId = tabCollection(activeTab);
+        const collectionId = viewTabCollection(activeTab);
         if (!collectionId) return;
         event.preventDefault();
         if (dirtyRef.current[collectionId]?.size) void save(collectionId);
@@ -542,7 +633,7 @@ export function IntegrationTestsView({
       description: t('apiTests.deleteCollectionConfirm', { name }),
       confirm: async () => {
         await apiClient.deleteApiCollection(collectionId);
-        closeTabs(tabs.filter((tab) => tabCollection(tab) === collectionId).map(tabKey));
+        closeTabs(tabs.filter((tab) => viewTabCollection(tab) === collectionId).map(viewTabKey));
         setLoaded(({ [collectionId]: _deleted, ...rest }) => rest);
         await loadLists();
       },
@@ -585,19 +676,14 @@ export function IntegrationTestsView({
     },
     onOpenRequest: (collectionId, requestId) =>
       openTab({ kind: 'request', collectionId, requestId }),
-    onNewRequest: (collectionId, folderId) => {
-      const request = newRequest(t('apiTests.newRequestName'));
-      void loadCollection(collectionId).then((collection) => {
-        if (!collection) return;
-        edit(
-          collectionId,
-          (current) => ({ ...current, items: addItem(current.items, folderId, request) }),
-          request.id,
-        );
-        setExpanded((current) => new Set(current).add(collectionId).add(folderId ?? collectionId));
-        openTab({ kind: 'request', collectionId, requestId: request.id });
-      });
-    },
+    onNewRequest: (collectionId, folderId) =>
+      void loadCollection(collectionId).then(
+        (collection) => collection && setNewRequestFor({ collectionId, folderId }),
+      ),
+    onFolderSettings: (collectionId, folderId) =>
+      void loadCollection(collectionId).then(() =>
+        openTab({ kind: 'folder', collectionId, folderId }),
+      ),
     onNewFolder: (collectionId, folderId) =>
       setNaming({
         title: t('apiTests.ui.newFolder'),
@@ -621,7 +707,13 @@ export function IntegrationTestsView({
       }),
     onRun: (collectionId, itemId) => {
       void loadCollection(collectionId).then(() => {
-        if (itemId) void runCollection(collectionId, { itemIds: [itemId], bail: false });
+        if (itemId)
+          void runCollection(collectionId, {
+            itemIds: [itemId],
+            bail: false,
+            iterations: 1,
+            delayMs: 0,
+          });
         else openTab({ kind: 'runner', collectionId });
       });
     },
@@ -675,12 +767,51 @@ export function IntegrationTestsView({
             collectionId,
           );
           closeTabs(
-            removed.map((requestId) => tabKey({ kind: 'request', collectionId, requestId })),
+            removed.map((requestId) => viewTabKey({ kind: 'request', collectionId, requestId })),
           );
         },
       });
     },
   };
+
+  const createRequest = (input: { name: string; kind: RequestKind; url: string }) => {
+    const target = newRequestFor!;
+    setNewRequestFor(null);
+    const { collectionId, folderId } = target;
+    const presets = loadedRef.current[collectionId]?.settings?.presets;
+    const request = buildRequest(input, presets?.baseUrl ?? '');
+    edit(
+      collectionId,
+      (current) => ({ ...current, items: addItem(current.items, folderId, request) }),
+      request.id,
+    );
+    setExpanded((current) => new Set(current).add(collectionId).add(folderId ?? collectionId));
+    openTab({ kind: 'request', collectionId, requestId: request.id });
+  };
+
+  /** Forgets the current user's value of a personal secret; the others keep theirs. */
+  const clearPersonal = (collectionId: string, ref: string) =>
+    void apiClient
+      .clearPersonalSecret({ scope: 'collection', scopeId: collectionId, ref })
+      .then(() => {
+        setLoaded((all) => {
+          const collection = all[collectionId]!;
+          return {
+            ...all,
+            [collectionId]: {
+              ...collection,
+              personalSecrets: collection.personalSecrets?.filter((item) => item !== ref),
+              variables: collection.variables.map((variable) =>
+                secretRef.variable(variable.key) === ref
+                  ? { ...variable, hasValue: false }
+                  : variable,
+              ),
+            },
+          };
+        });
+        setNotice(t('apiTests.workbench.personalCleared'));
+      })
+      .catch(fail);
 
   const suggestions = useMemo(
     () =>
@@ -688,9 +819,32 @@ export function IntegrationTestsView({
         activeCollection,
         environments.find((environment) => environment.id === environmentId) ?? null,
         mocks,
+        activeCollectionId ? runtime[activeCollectionId]?.variables : undefined,
       ),
-    [activeCollection, environmentId, environments, mocks],
+    [activeCollection, activeCollectionId, environmentId, environments, mocks, runtime],
   );
+  useEffect(() => {
+    if (activeCollectionId) void loadRuntime(activeCollectionId);
+  }, [activeCollectionId, loadRuntime]);
+
+  const requestActions = useMemo<RequestActions | undefined>(
+    () =>
+      activeCollectionId
+        ? {
+            runAdHoc: (request: ApiRequestSpec): Promise<RequestResult> =>
+              runOnce(activeCollectionId, request, 'run'),
+            listGrpcServices: async (request: ApiRequestSpec): Promise<GrpcServiceList> => {
+              const result = await runOnce(activeCollectionId, request, 'grpc-reflect');
+              if (result.error) throw new Error(result.error);
+              return JSON.parse(
+                result.response?.bodyPreview ?? '{"services":[]}',
+              ) as GrpcServiceList;
+            },
+          }
+        : undefined,
+    [activeCollectionId, runOnce],
+  );
+
   const dirtyIds = useMemo(() => new Set(Object.values(dirty).flatMap((ids) => [...ids])), [dirty]);
   const headerCollection =
     activeCollection ?? (summaries[0] ? (loaded[summaries[0].id] ?? null) : null);
@@ -698,7 +852,7 @@ export function IntegrationTestsView({
   // ---------- rendering ----------
 
   const tabLabel = (
-    tab: WorkbenchTab,
+    tab: ViewTab,
   ): { icon: React.ReactNode; label: string; dirty: boolean } | null => {
     if (tab.kind === 'environments')
       return {
@@ -708,11 +862,23 @@ export function IntegrationTestsView({
       };
     const collection = loaded[tab.collectionId];
     if (!collection) return null;
+    if (tab.kind === 'folder') {
+      const folder = findItem(collection.items, tab.folderId);
+      return folder
+        ? {
+            icon: (
+              <i className="ti ti-folder text-sm text-[var(--text-muted)]" aria-hidden="true" />
+            ),
+            label: `${t('apiTests.ui.settings')} · ${folder.name}`,
+            dirty: false,
+          }
+        : null;
+    }
     if (tab.kind === 'request') {
       const request = findRequest(collection.items, tab.requestId);
       return request
         ? {
-            icon: <MethodLabel method={request.method} />,
+            icon: <MethodLabel method={request.method} kind={request.kind} />,
             label: request.name,
             dirty: dirtyIds.has(request.id),
           }
@@ -784,6 +950,34 @@ export function IntegrationTestsView({
           onChange={(next) => edit(collectionId, () => next, collectionId)}
           onExport={(format) => void exportAs(collectionId, format)}
           onDelete={() => deleteCollection(collectionId)}
+          onClearPersonal={(ref) => clearPersonal(collectionId, ref)}
+          onError={setError}
+          pipeline={{
+            apiClient,
+            environments,
+            onSave: () => saveIfDirty(collectionId),
+            onOpenIntegrations,
+          }}
+        />
+      );
+    }
+    if (activeTab.kind === 'folder') {
+      const folder = findItem(activeCollection.items, activeTab.folderId);
+      if (folder?.type !== 'folder') return null;
+      return (
+        <FolderSettingsPane
+          key={folder.id}
+          folder={folder}
+          collection={activeCollection}
+          readOnly={isReadOnly}
+          onClearPersonal={(ref) => clearPersonal(collectionId, ref)}
+          onChange={(next) =>
+            edit(
+              collectionId,
+              (current) => ({ ...current, items: mapItems(current.items, folder.id, () => next) }),
+              collectionId,
+            )
+          }
         />
       );
     }
@@ -825,6 +1019,7 @@ export function IntegrationTestsView({
           onSend={() => void send(collectionId, requestId)}
           onCancel={() => cancelSend(requestId)}
           onSave={() => void save(collectionId)}
+          actions={requestActions}
         />
         <SplitPane
           layout={layout}
@@ -834,6 +1029,8 @@ export function IntegrationTestsView({
             <RequestPane
               key={requestId}
               request={activeRequest}
+              collection={activeCollection}
+              actions={requestActions}
               readOnly={isReadOnly}
               mocks={mocks}
               mocksFailed={mocksFailed}
@@ -924,6 +1121,19 @@ export function IntegrationTestsView({
               data-testid="environment-select"
             />
           </div>
+          {headerCollection && (
+            <IconButton
+              variant="subtle"
+              icon={<i className="ti ti-variable" aria-hidden="true" />}
+              label={t('apiTests.workbench.runtime')}
+              title={t('apiTests.workbench.runtimeTitle')}
+              onClick={() => {
+                setShowRuntime(true);
+                void loadRuntime(headerCollection.id);
+              }}
+              data-testid="open-runtime"
+            />
+          )}
           <IconButton
             variant="subtle"
             icon={<i className="ti ti-world-cog" aria-hidden="true" />}
@@ -961,7 +1171,7 @@ export function IntegrationTestsView({
           aria-label={t('apiTests.openRequests')}
         >
           {tabs.map((tab) => {
-            const key = tabKey(tab);
+            const key = viewTabKey(tab);
             const info = tabLabel(tab);
             if (!info) return null;
             const active = key === activeKey;
@@ -1101,6 +1311,35 @@ export function IntegrationTestsView({
           void loadLists().then(() => (collectionId ? reveal(collectionId, true) : undefined));
         }}
       />
+      {newRequestFor && (
+        <NewRequestDialog
+          defaultKind={loaded[newRequestFor.collectionId]?.settings?.presets?.kind ?? 'http'}
+          defaultName={t('apiTests.newRequestName')}
+          onSubmit={createRequest}
+          onClose={() => setNewRequestFor(null)}
+        />
+      )}
+      {headerCollection && (
+        <RuntimeDialog
+          open={showRuntime}
+          collectionName={headerCollection.name}
+          runtime={runtime[headerCollection.id] ?? null}
+          error={runtimeError}
+          onSave={(state) =>
+            apiClient
+              .setApiRuntime(headerCollection.id, state)
+              .then((saved) => setRuntime((all) => ({ ...all, [headerCollection.id]: saved })))
+              .catch((err: unknown) => setRuntimeError(errorText(err)))
+          }
+          onClear={() =>
+            apiClient
+              .clearApiRuntime(headerCollection.id)
+              .then((cleared) => setRuntime((all) => ({ ...all, [headerCollection.id]: cleared })))
+              .catch((err: unknown) => setRuntimeError(errorText(err)))
+          }
+          onClose={() => setShowRuntime(false)}
+        />
+      )}
       <NameDialog
         open={Boolean(naming)}
         title={naming?.title ?? ''}

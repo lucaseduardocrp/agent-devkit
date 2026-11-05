@@ -147,7 +147,13 @@ describe('importPostman edge cases', () => {
     });
     expect(imported.name).toBe('Postman collection');
     expect(imported.description).toBe('Described');
-    expect(imported.auth).toEqual({ type: 'none' });
+    expect(imported.auth).toEqual({
+      type: 'oauth1',
+      consumerKey: '',
+      consumerSecret: '',
+      signatureMethod: 'HMAC-SHA1',
+      addTo: 'header',
+    });
     expect(imported.variables).toEqual([{ key: 'v', value: '1', enabled: false }]);
     const [folder, plain, odd, query, rawOnly, noAuth] = imported.items as [
       ApiFolder,
@@ -165,8 +171,11 @@ describe('importPostman edge cases', () => {
       description: 'Object doc',
       body: { mode: 'json', content: '{}' },
       auth: { type: 'apikey', key: 'X-API-Key', value: 'v', in: 'query' },
-      assertions: [{ source: 'status', operator: 'eq', expected: '201' }],
-      captures: [{ variable: 't', source: 'json', path: 'token' }],
+      assertions: [],
+      captures: [],
+      scripts: {
+        postResponse: expect.stringContaining('adk.response.to.have.status(201)'),
+      },
     });
     expect(named('Ct json').body.mode).toBe('json');
     expect(named('Ct json').auth).toEqual({ type: 'apikey', key: 'K', value: 'v', in: 'header' });
@@ -180,13 +189,20 @@ describe('importPostman edge cases', () => {
       mode: 'urlencoded',
       fields: [{ key: 'a', value: 'b' }],
     });
-    expect(named('Form').body).toEqual({ mode: 'form', fields: [{ key: 'f', value: 'v' }] });
-    expect(named('Graphql').body).toEqual({
-      mode: 'json',
-      content: '{"query":"{ a }","variables":"{\\"x\\":1}"}',
+    expect(named('Form').body).toEqual({
+      mode: 'form',
+      fields: [
+        { key: 'f', value: 'v', type: 'text' },
+        { key: 'file', value: '', type: 'text' },
+      ],
     });
-    expect(named('Graphql bare').body).toEqual({ mode: 'json', content: '{"query":""}' });
-    expect(named('Binary').body).toEqual({ mode: 'none' });
+    expect(named('Graphql')).toMatchObject({
+      kind: 'graphql',
+      body: { mode: 'none' },
+      graphql: { query: '{ a }', variables: '{"x":1}' },
+    });
+    expect(named('Graphql bare')).toMatchObject({ kind: 'graphql', graphql: { query: '' } });
+    expect(named('Binary').body).toEqual({ mode: 'binary', file: null });
     expect(plain).toMatchObject({ method: 'GET', url: 'http://plain.test', query: [] });
     expect(plain).not.toHaveProperty('description');
     expect(odd).toMatchObject({

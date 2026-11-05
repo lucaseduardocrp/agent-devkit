@@ -3,7 +3,6 @@ import {
   assertionLabel,
   executeRequest,
   maskSecrets,
-  prepareRequest,
   scopeOf,
 } from '../src/modules/apitests/engine/http-request.js';
 import type { ApiRequestSpec, Assertion } from '../src/modules/apitests/engine/types.js';
@@ -28,93 +27,7 @@ const fetchReturning =
   async () =>
     new Response(body, init);
 
-describe('prepareRequest', () => {
-  it('applies basic and api key auth, headers and every body mode', () => {
-    const scope = scopeOf([
-      { key: 'user', value: 'ana' },
-      { key: 'pass', value: 'pw' },
-      { key: 'k', value: 'x-key' },
-    ]);
-    const basic = prepareRequest(
-      request({
-        id: 'b',
-        url: 'http://api.test/',
-        method: 'POST',
-        headers: [
-          { key: 'X-Who', value: '{{user}}' },
-          { key: 'off', value: '1', enabled: false },
-        ],
-        body: { mode: 'text', content: 'hi {{user}}' },
-      }),
-      { type: 'basic', username: '{{user}}', password: '{{pass}}' },
-      scope,
-    );
-    expect(basic.init.headers.get('authorization')).toBe(
-      `Basic ${Buffer.from('ana:pw').toString('base64')}`,
-    );
-    expect(basic.init.headers.get('x-who')).toBe('ana');
-    expect(basic.init.headers.has('off')).toBe(false);
-    expect(basic.init.headers.get('content-type')).toBe('text/plain');
-    expect(basic.init.body).toBe('hi ana');
-
-    const query = prepareRequest(
-      request({ id: 'q', url: 'http://api.test/', body: { mode: 'xml', content: '<a/>' } }),
-      { type: 'apikey', key: '{{k}}', value: 'v', in: 'query' },
-      scope,
-    );
-    expect(query.url.searchParams.get('x-key')).toBe('v');
-    // GET never sends a body, but the content type is still set.
-    expect(query.init.body).toBeUndefined();
-    expect(query.init.headers.get('content-type')).toBe('application/xml');
-
-    const header = prepareRequest(
-      request({
-        id: 'h',
-        url: 'http://api.test/',
-        method: 'PUT',
-        headers: [{ key: 'content-type', value: 'application/vnd+json' }],
-        body: { mode: 'json', content: '{}' },
-      }),
-      { type: 'apikey', key: 'X-Api', value: '{{pass}}', in: 'header' },
-      scope,
-    );
-    expect(header.init.headers.get('x-api')).toBe('pw');
-    expect(header.init.headers.get('content-type')).toBe('application/vnd+json');
-
-    const form = prepareRequest(
-      request({
-        id: 'f',
-        url: 'http://api.test/',
-        method: 'POST',
-        body: {
-          mode: 'urlencoded',
-          fields: [
-            { key: 'name', value: '{{user}}' },
-            { key: 'skip', value: 'x', enabled: false },
-          ],
-        },
-      }),
-      { type: 'none' },
-      scope,
-    );
-    expect(form.init.body).toBe('name=ana');
-    expect(form.init.headers.get('content-type')).toBe('application/x-www-form-urlencoded');
-
-    const formTyped = prepareRequest(
-      request({
-        id: 'f2',
-        url: 'http://api.test/',
-        method: 'HEAD',
-        headers: [{ key: 'Content-Type', value: 'multipart/x' }],
-        body: { mode: 'form', fields: [] },
-      }),
-      { type: 'none' },
-      scope,
-    );
-    expect(formTyped.init.headers.get('content-type')).toBe('multipart/x');
-    expect(formTyped.init.body).toBeUndefined();
-  });
-
+describe('secret masking and assertion labels', () => {
   it('masks only secrets of four characters or more', () => {
     const scope = scopeOf([
       { key: 'a', value: 'abc', secret: true },
@@ -221,9 +134,9 @@ describe('assertions and captures', () => {
       true,
       true,
       true,
-      false,
+      true,
     ]);
-    // The failing assertion compared against a secret, which never shows up as is.
+    // The last check read {{tok}} after the capture wrote it, so it saw the captured value.
     expect(result.assertions.at(-1)!.actual).toBe('ana');
     expect(scope.get('code')?.value).toBe('201');
     expect(scope.get('rid')?.value).toBe('r-9');
@@ -319,11 +232,11 @@ describe('request errors', () => {
     expect(odd).toMatchObject({ status: null, passed: false, error: 'refused target' });
   });
 
-  const hanging: typeof fetch = (_input, init) =>
+  const hanging: typeof fetch = (input) =>
     new Promise((_resolve, reject) => {
-      const signal = init!.signal!;
+      const { signal } = input as Request;
       if (signal.aborted) reject(signal.reason as Error);
-      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason as Error));
+      signal.addEventListener('abort', () => reject(signal.reason as Error));
     });
 
   it('names the timeout from the options or the default', async () => {
@@ -337,17 +250,11 @@ describe('request errors', () => {
 
   it('reports a cancel, not a timeout, when the caller also aborted', async () => {
     const controller = new AbortController();
-    // The caller cancels as the timeout fires: the cancel wins.
-    const cancelling: typeof fetch = (_input, init) =>
-      new Promise((_resolve, reject) => {
-        init!.signal!.addEventListener('abort', () => {
-          controller.abort();
-          reject(new Error('cancelled'));
-        });
-      });
+    // The caller cancelled before the request went out: the cancel wins over the timeout.
+    controller.abort(new Error('cancelled'));
     const result = await executeRequest(request({ id: 'x', url: 'http://api.test/' }), scopeOf(), {
       auth: { type: 'none' },
-      fetch: cancelling,
+      fetch: hanging,
       signal: controller.signal,
       timeoutMs: 1,
     });

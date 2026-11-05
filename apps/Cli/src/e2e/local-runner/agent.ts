@@ -1,5 +1,6 @@
 import {
   E2eRunnerError,
+  type E2eRunHooks,
   type E2eRunInput,
   type E2eRunResult,
   type E2eSnapshot,
@@ -58,6 +59,8 @@ export type RunnerTaskInput =
   | {
       readonly kind: 'run';
       readonly script: string;
+      /** Absent from servers older than Before Run and After Run. */
+      readonly hooks?: E2eRunHooks | null;
       readonly mode: E2eMode;
       readonly baseUrl: string;
       readonly locale: string;
@@ -252,9 +255,17 @@ export class LocalRunnerAgent {
     signal: AbortSignal,
   ): Promise<void> {
     // Same rules as the ADK workers: the spec stays inside the browser-automation surface.
-    const check = checkScript(input.script);
-    if (!check.ok) {
-      const message = check.violations.join('; ');
+    const violations = [
+      ...checkScript(input.script).violations,
+      ...(['beforeRun', 'afterRun'] as const).flatMap((kind) => {
+        const hook = input.hooks?.[kind];
+        return hook?.trim()
+          ? checkScript(hook, 'hook').violations.map((violation) => `${kind}: ${violation}`)
+          : [];
+      }),
+    ];
+    if (violations.length) {
+      const message = violations.join('; ');
       await this.complete(task, {
         kind: 'error',
         code: 'E2E_SCRIPT_REJECTED',
@@ -267,6 +278,7 @@ export class LocalRunnerAgent {
     const target = this.target(input.baseUrl, input.accessToken);
     const result = await this.options.browser.run({
       script: input.script,
+      hooks: input.hooks ?? null,
       mode: input.mode,
       baseUrl: new URL(target.url).origin,
       localOrigin: null,

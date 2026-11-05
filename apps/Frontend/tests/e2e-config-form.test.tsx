@@ -768,7 +768,7 @@ describe('E2eConfigForm', () => {
     expect(
       await view.findByText(/Crie um agente em Agents antes de iniciar uma execução./),
     ).toBeInTheDocument();
-    fireEvent.click(view.getByRole('button', { name: 'Agents' }));
+    fireEvent.click(view.getByRole('button', { name: 'Agentes' }));
     expect(onOpenAgents).toHaveBeenCalled();
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
     expect(view.getByText('Selecione um agente.')).toBeInTheDocument();
@@ -785,7 +785,7 @@ describe('E2eConfigForm', () => {
     first.view.unmount();
     const none = setup({ agents: [] });
     expect(await none.view.findByText(/Crie um agente/)).toBeInTheDocument();
-    expect(none.view.queryByRole('button', { name: 'Agents' })).toBeNull();
+    expect(none.view.queryByRole('button', { name: 'Agentes' })).toBeNull();
   });
 
   it('ignores agents that arrive after unmount', async () => {

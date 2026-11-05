@@ -47,6 +47,8 @@ function client(
   vi.spyOn(api, 'getDesignProjects').mockResolvedValue(options.projects ?? [project]);
   vi.spyOn(api, 'getDesignSystems').mockResolvedValue([]);
   vi.spyOn(api, 'getAgents').mockResolvedValue(options.agents ?? [agent]);
+  vi.spyOn(api, 'getDesignRepositories').mockResolvedValue({ repositories: [], warnings: [] });
+  vi.spyOn(api, 'getDesignSettings').mockResolvedValue(null);
   return api;
 }
 
@@ -285,6 +287,17 @@ describe('DesignView coverage gaps', () => {
 
   it('switches repository and agents and opens the Design System preview', async () => {
     const api = client({ providers: ['github', 'azure'] });
+    vi.mocked(api.getDesignRepositories).mockResolvedValue({
+      repositories: [{ id: 'repo-1', provider: 'azure', name: 'Design', defaultBranch: 'main' }],
+      warnings: [],
+    });
+    vi.spyOn(api, 'getDesignBranches').mockResolvedValue([{ name: 'main', isDefault: true }]);
+    vi.spyOn(api, 'saveDesignSettings').mockResolvedValue({
+      provider: 'azure',
+      repositoryId: 'repo-1',
+      repositoryName: 'Design',
+      branch: 'main',
+    });
     const second = { ...agent, id: '22222222-2222-4222-8222-222222222222', name: 'Second' };
     vi.mocked(api.getAgents).mockResolvedValue([agent, second]);
     const save = vi
@@ -296,9 +309,10 @@ describe('DesignView coverage gaps', () => {
     const open = vi.spyOn(window, 'open').mockReturnValue({} as Window);
     render(<DesignView apiClient={api} activeWorkspaceId="ws" />);
     await screen.findAllByRole('button', { name: /Landing/ });
-    const providerSelect = document.getElementById('design-provider') as HTMLSelectElement;
-    fireEvent.change(providerSelect, { target: { value: 'azure' } });
-    expect(providerSelect.value).toBe('azure');
+    const repository = screen.getByLabelText('Repositório');
+    fireEvent.change(repository, { target: { value: 'azure:repo-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /Salvar repositório/ }));
+    await waitFor(() => expect(api.saveDesignSettings).toHaveBeenCalled());
     const agentSelect = document.getElementById('design-agent') as HTMLSelectElement;
     fireEvent.change(agentSelect, { target: { value: second.id } });
     expect(agentSelect.value).toBe(second.id);

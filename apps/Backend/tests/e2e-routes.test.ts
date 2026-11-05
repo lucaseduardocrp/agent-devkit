@@ -176,6 +176,34 @@ describe('E2E routes', () => {
       .put('/e2e/tests/' + tests[0]!.id + '/script')
       .send({})
       .expect(400);
+    const cleanup = `export default async function afterRun() {}`;
+    const hook = await request(app)
+      .put('/e2e/tests/' + tests[0]!.id + '/script')
+      .send({ content: cleanup, kind: 'afterRun' })
+      .expect(200);
+    expect(hook.body.script).toMatchObject({
+      kind: 'afterRun',
+      path: 'tests/e2e/tc001-open-page.after.ts',
+      content: cleanup,
+    });
+    const before = await request(app)
+      .get('/e2e/tests/' + tests[0]!.id + '/script?kind=beforeRun')
+      .expect(200);
+    expect(before.body.script).toMatchObject({ kind: 'beforeRun', content: null });
+    await request(app)
+      .get('/e2e/tests/' + tests[0]!.id + '/script?kind=other')
+      .expect(400);
+    const instructions = await request(app)
+      .put('/e2e/tests/' + tests[0]!.id + '/hook-instructions')
+      .send({ kind: 'beforeRun', instructions: '<p>Abrir /eventos</p>' })
+      .expect(200);
+    expect(instructions.body.test).toMatchObject({
+      beforeRunInstructions: '<p>Abrir /eventos</p>',
+    });
+    await request(app)
+      .put('/e2e/tests/' + tests[0]!.id + '/hook-instructions')
+      .send({ kind: 'spec', instructions: 'x' })
+      .expect(400);
     const pulled = await request(app)
       .post('/e2e/creations/' + id + '/pull')
       .expect(200);

@@ -6,11 +6,8 @@ import type {
   ApiRequestSpec,
   RequestAuth,
 } from '../src/features/apitests/api-test-types.js';
-import {
-  AuthEditor,
-  RequestPane,
-  UrlBar,
-} from '../src/features/apitests/integration/RequestPane.js';
+import { RequestPane, UrlBar } from '../src/features/apitests/integration/RequestPane.js';
+import { AuthEditor } from '../src/features/apitests/integration/AuthEditor.js';
 
 function request(patch: Partial<ApiRequestSpec> = {}): ApiRequestSpec {
   return {
@@ -132,6 +129,7 @@ describe('AuthEditor', () => {
         auth={auth}
         allowInherit
         readOnly={false}
+        owner="request"
         onChange={(next) => {
           spy(next);
           setAuth(next);
@@ -181,11 +179,17 @@ describe('RequestPane', () => {
 
     fireEvent.change(mode, { target: { value: 'form' } });
     expect(last(spy).body).toEqual({ mode: 'form', fields: [] });
-    fireEvent.click(screen.getByRole('button', { name: /Adicionar/ }));
-    expect(last(spy).body).toEqual({ mode: 'form', fields: [{ key: '', value: '' }] });
+    fireEvent.click(screen.getAllByRole('button', { name: /Adicionar/ })[0]!);
+    expect(last(spy).body).toEqual({
+      mode: 'form',
+      fields: [{ key: '', value: '', type: 'text' }],
+    });
 
     fireEvent.change(mode, { target: { value: 'urlencoded' } });
-    expect(last(spy).body).toEqual({ mode: 'urlencoded', fields: [{ key: '', value: '' }] });
+    expect(last(spy).body).toMatchObject({
+      mode: 'urlencoded',
+      fields: [{ key: '', value: '' }],
+    });
     fireEvent.change(mode, { target: { value: 'text' } });
     expect(last(spy).body).toEqual({ mode: 'text', content: '' });
 
@@ -339,6 +343,6 @@ describe('RequestPane', () => {
     expect(screen.queryByRole('button', { name: 'Adicionar captura' })).toBeNull();
     expect(screen.getByLabelText<HTMLInputElement>('Caminho').value).toBe('');
     tab(/Descrição/);
-    expect(screen.getByLabelText<HTMLTextAreaElement>('Descrição').value).toBe('doc');
+    expect(screen.getByTestId('request-docs-preview').textContent).toContain('doc');
   });
 });

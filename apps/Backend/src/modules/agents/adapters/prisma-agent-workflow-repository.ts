@@ -1,7 +1,17 @@
 import {
   EMPTY_AGENT_WORKFLOW,
   type AgentWorkflow,
+  type AgentWorkflowActionConfig,
+  type AgentWorkflowCanvas,
+  type AgentWorkflowCanvasEdge,
+  type AgentWorkflowCanvasNode,
+  type AgentWorkflowConditionConfig,
+  type AgentWorkflowConditionOperator,
+  type AgentWorkflowDelayConfig,
+  type AgentWorkflowNodeKind,
+  type AgentWorkflowProductEvent,
   type AgentWorkflowRule,
+  type AgentWorkflowTriggerConfig,
   type AgentWorkflowToolset,
 } from '../domain/agent-workflow.js';
 import type { AgentWorkflowRepository } from '../application/agent-workflow-repository.js';
@@ -66,7 +76,7 @@ function parseRules(raw: unknown): AgentWorkflowRule[] {
         toolset: value['toolset'] as AgentWorkflowToolset,
         effect: value['effect'],
         ...(value['toolName'] ? { toolName: value['toolName'] } : {}),
-        ...(allowedProviders !== undefined ? { allowedProviders } : {}),
+        ...(allowedProviders !== undefined ? { allowedProviders: allowedProviders } : {}),
         ...(value['createIssueForAction'] !== undefined
           ? { createIssueForAction: value['createIssueForAction'] }
           : {}),
@@ -78,6 +88,141 @@ function parseRules(raw: unknown): AgentWorkflowRule[] {
   });
 }
 
+const nodeKinds = new Set<AgentWorkflowNodeKind>([
+  'trigger',
+  'step',
+  'approval',
+  'action',
+  'condition',
+  'delay',
+]);
+
+const conditionOperators = new Set<AgentWorkflowConditionOperator>([
+  'contains',
+  'not-contains',
+  'matches',
+]);
+
+const productEvents = new Set<AgentWorkflowProductEvent>([
+  'pbi.created',
+  'pbi.moved',
+  'spec.published',
+  'issue.commented',
+]);
+
+/**
+ * A node's configuration bag, kept only when it matches the node's kind. A bag that does not is
+ * dropped rather than failing the whole canvas: the editor fills it with its defaults again.
+ */
+function parseTrigger(raw: unknown): AgentWorkflowTriggerConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  const kind = value['kind'];
+  if (kind !== 'issue-assigned' && kind !== 'product-event' && kind !== 'schedule')
+    return undefined;
+  const events = Array.isArray(value['events'])
+    ? value['events'].filter((event): event is AgentWorkflowProductEvent =>
+        productEvents.has(event as AgentWorkflowProductEvent),
+      )
+    : undefined;
+  return {
+    kind,
+    ...(events ? { events } : {}),
+    ...(typeof value['cron'] === 'string' ? { cron: value['cron'] } : {}),
+  };
+}
+
+function parseAction(raw: unknown): AgentWorkflowActionConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  if (!workflowToolsets.has(value['toolset'] as AgentWorkflowToolset)) return undefined;
+  return {
+    toolset: value['toolset'] as AgentWorkflowToolset,
+    ...(typeof value['toolName'] === 'string' ? { toolName: value['toolName'] } : {}),
+    ...(typeof value['provider'] === 'string' ? { provider: value['provider'] } : {}),
+  };
+}
+
+function parseCondition(raw: unknown): AgentWorkflowConditionConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  if (
+    !conditionOperators.has(value['operator'] as AgentWorkflowConditionOperator) ||
+    typeof value['value'] !== 'string'
+  )
+    return undefined;
+  return {
+    operator: value['operator'] as AgentWorkflowConditionOperator,
+    value: value['value'],
+  };
+}
+
+function parseDelay(raw: unknown): AgentWorkflowDelayConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const minutes = (raw as Record<string, unknown>)['minutes'];
+  if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes < 0) return undefined;
+  return { minutes };
+}
+
+/** The saved canvas, dropped whole when anything about it is malformed: the editor re-lays it out. */
+function parseCanvas(raw: unknown): AgentWorkflowCanvas | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  if (!Array.isArray(value['nodes']) || !Array.isArray(value['edges'])) return undefined;
+
+  const nodes: AgentWorkflowCanvasNode[] = [];
+  for (const entry of value['nodes']) {
+    if (!entry || typeof entry !== 'object') return undefined;
+    const node = entry as Record<string, unknown>;
+    // `start` is the name the trigger node had before triggers were configurable.
+    const kind = node['kind'] === 'start' ? 'trigger' : node['kind'];
+    if (
+      typeof node['id'] !== 'string' ||
+      !nodeKinds.has(kind as AgentWorkflowNodeKind) ||
+      typeof node['x'] !== 'number' ||
+      !Number.isFinite(node['x']) ||
+      typeof node['y'] !== 'number' ||
+      !Number.isFinite(node['y'])
+    )
+      return undefined;
+    const trigger = parseTrigger(node['trigger']);
+    const action = parseAction(node['action']);
+    const condition = parseCondition(node['condition']);
+    const delay = parseDelay(node['delay']);
+    nodes.push({
+      id: node['id'],
+      kind: kind as AgentWorkflowNodeKind,
+      x: node['x'],
+      y: node['y'],
+      ...(trigger ? { trigger } : {}),
+      ...(action ? { action } : {}),
+      ...(condition ? { condition } : {}),
+      ...(delay ? { delay } : {}),
+    });
+  }
+
+  const edges: AgentWorkflowCanvasEdge[] = [];
+  for (const entry of value['edges']) {
+    if (!entry || typeof entry !== 'object') return undefined;
+    const edge = entry as Record<string, unknown>;
+    if (
+      typeof edge['id'] !== 'string' ||
+      typeof edge['from'] !== 'string' ||
+      typeof edge['to'] !== 'string'
+    )
+      return undefined;
+    const port = edge['fromPort'];
+    edges.push({
+      id: edge['id'],
+      from: edge['from'],
+      to: edge['to'],
+      ...(port === 'true' || port === 'false' ? { fromPort: port } : {}),
+    });
+  }
+
+  return { nodes, edges };
+}
+
 export interface PrismaAgentWorkflowClient {
   readonly agentWorkflowRecord: AgentWorkflowDelegate;
 }
@@ -87,6 +232,7 @@ function parseWorkflow(raw: unknown): AgentWorkflow {
   const value = raw as Record<string, unknown>;
   if (typeof value['enabled'] !== 'boolean' || !Array.isArray(value['steps']))
     return EMPTY_AGENT_WORKFLOW;
+  const canvas = parseCanvas(value['canvas']);
   return {
     enabled: value['enabled'],
     autonomy:
@@ -98,6 +244,7 @@ function parseWorkflow(raw: unknown): AgentWorkflow {
     issueCreationBehavior: value['issueCreationBehavior'] === 'allow' ? 'allow' : 'ask',
     defaultAction: value['defaultAction'] === 'deny' ? 'deny' : 'allow',
     rules: parseRules(value['rules']),
+    ...(canvas ? { canvas } : {}),
     steps: value['steps'].filter(
       (step): step is AgentWorkflow['steps'][number] =>
         Boolean(step) &&

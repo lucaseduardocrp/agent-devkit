@@ -52,7 +52,9 @@ export function VariableSuggestionList({
             {item.secret ? '••••••' : (item.value ?? '')}
           </span>
           <span className="shrink-0 rounded bg-[var(--surface-2)] px-1.5 py-px text-[10px] text-[var(--text-secondary)]">
-            {t(`apiTests.ui.variableSources.${item.source}`)}
+            {item.source === 'runtime'
+              ? t('apiTests.workbench.runtimeSource')
+              : t(`apiTests.ui.variableSources.${item.source}`)}
           </span>
         </div>
       ))}

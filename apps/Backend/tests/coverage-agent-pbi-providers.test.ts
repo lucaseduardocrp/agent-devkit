@@ -227,7 +227,7 @@ describe('Azure DevOps provider (custom fields)', () => {
     expect(remote.externalId).toBe('8');
     expect(calls[0]!.body).toEqual([
       { op: 'add', path: '/fields/System.Title', value: 'T' },
-      { op: 'add', path: '/fields/System.Description', value: 'D' },
+      { op: 'add', path: '/fields/System.Description', value: '<p>D</p>' },
       { op: 'add', path: '/fields/Custom.Score', value: 3 },
       { op: 'add', path: '/fields/Custom.Tags', value: ['a', 'b'] },
     ]);

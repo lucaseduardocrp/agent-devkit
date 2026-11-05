@@ -8,12 +8,12 @@ import {
   type EnvironmentInput,
 } from '../domain/api-test.js';
 import type { Variable } from '../engine/types.js';
-import { exportBruno, type BrunoFile } from './bruno.js';
+import { exportBruno, importBruno, type BrunoFile } from './bruno.js';
 import { exportInsomnia, importInsomnia, isInsomniaExport } from './insomnia.js';
 import { importOpenApi, isOpenApi } from './openapi.js';
 import { exportPostman, importPostman, isPostmanCollection } from './postman.js';
 
-export { exportBruno, exportInsomnia, exportPostman };
+export { exportBruno, exportInsomnia, exportPostman, importBruno };
 export type { BrunoFile };
 
 /**
@@ -23,7 +23,7 @@ export type { BrunoFile };
 export const ADK_FORMAT = 'adk-api-collection';
 export const ADK_FORMAT_VERSION = 1;
 
-export const IMPORT_FORMATS = ['adk', 'postman', 'insomnia', 'openapi'] as const;
+export const IMPORT_FORMATS = ['adk', 'postman', 'insomnia', 'openapi', 'bruno'] as const;
 export type ImportFormat = (typeof IMPORT_FORMATS)[number];
 export const EXPORT_FORMATS = ['adk', 'postman', 'insomnia', 'bruno'] as const;
 export type ExportFormat = (typeof EXPORT_FORMATS)[number];
@@ -58,8 +58,25 @@ function invalid(message: string, details: Record<string, unknown>[] = []) {
   });
 }
 
+/**
+ * Bruno collections are folders of files: they arrive as `{ files: [{ path, content }] }` (the
+ * shape of the Bruno export `as=files`), or as a single .bru request file.
+ */
+function brunoFiles(document: unknown): BrunoFile[] | null {
+  if (!isObject(document) || !Array.isArray(document['files'])) return null;
+  const files = document['files'].filter(
+    (file): file is BrunoFile =>
+      isObject(file) && typeof file['path'] === 'string' && typeof file['content'] === 'string',
+  );
+  return files.some((file) => /\.bru$|(^|\/)bruno\.json$/.test(file.path)) ? files : null;
+}
+
+/** A .bru file starts with a block such as `meta {` (JSON starts with `{` or `[`). */
+const isBruText = (text: string) => /^\s*[\w:-]+\s*\{\s*\r?\n/.test(text);
+
 export function detectFormat(document: unknown): ImportFormat | null {
   if (isObject(document) && document['format'] === ADK_FORMAT) return 'adk';
+  if (brunoFiles(document)) return 'bruno';
   if (isPostmanCollection(document)) return 'postman';
   if (isInsomniaExport(document)) return 'insomnia';
   if (isOpenApi(document)) return 'openapi';
@@ -68,11 +85,15 @@ export function detectFormat(document: unknown): ImportFormat | null {
 
 /** Reads a collection file (JSON or YAML); `format` is detected when not given. */
 export function importCollection(content: string, format?: ImportFormat): ImportedCollection {
-  const document = parseDocument(content);
+  const text = content.replace(/^\uFEFF/, '');
+  const document: unknown =
+    (format === undefined || format === 'bruno') && isBruText(text)
+      ? { files: [{ path: 'request.bru', content: text }] }
+      : parseDocument(content);
   const detected = format ?? detectFormat(document);
   if (!detected || !isObject(document)) {
     throw invalid(
-      'Unrecognised file. Import an ADK collection, a Postman v2.1 collection, an Insomnia export or an OpenAPI 3 / Swagger 2 document.',
+      'Unrecognised file. Import an ADK collection, a Postman v2.1 collection, an Insomnia export, an OpenAPI 3 / Swagger 2 document or Bruno files.',
     );
   }
   let collection: unknown;
@@ -91,6 +112,12 @@ export function importCollection(content: string, format?: ImportFormat): Import
     case 'openapi':
       collection = importOpenApi(document);
       break;
+    case 'bruno': {
+      const imported = importBruno(brunoFiles(document) ?? []);
+      collection = imported.collection;
+      environments = imported.environments;
+      break;
+    }
   }
   const parsed = collectionInputSchema.safeParse(collection);
   if (!parsed.success) {
@@ -111,7 +138,9 @@ export function importCollection(content: string, format?: ImportFormat): Import
   };
 }
 
-export const sourceKindOf = (format: ImportFormat): CollectionSourceKind => format;
+// CollectionSourceKind has no `bruno` yet: Bruno imports are recorded as manual collections.
+export const sourceKindOf = (format: ImportFormat): CollectionSourceKind =>
+  format === 'bruno' ? 'manual' : format;
 
 /** The ADK file of a collection; secret values are left empty. */
 export function exportAdk(

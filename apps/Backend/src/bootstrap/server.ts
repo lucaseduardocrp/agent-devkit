@@ -53,6 +53,7 @@ import { InMemoryTestSuiteStore } from '../modules/testplans/application/test-su
 import { PrismaTestSuiteStore } from '../modules/testplans/adapters/prisma-test-suites.js';
 import { InMemorySpecRepository } from '../modules/spec/application/spec-service.js';
 import { PrismaSpecRepository } from '../modules/spec/adapters/prisma-spec-repository.js';
+import { PrismaDesignSettingsStore } from '../modules/design/adapters/prisma-design-settings-store.js';
 import { PrismaE2eStore } from '../modules/e2e/adapters/prisma-e2e-store.js';
 import { PrismaE2eJobQueue } from '../modules/e2e/adapters/prisma-e2e-queue.js';
 import { PrismaE2eRunnerTaskStore } from '../modules/e2e/adapters/prisma-runner-task-store.js';
@@ -234,6 +235,7 @@ const app = createApp({
   savedTestPlans,
   testSuites,
   specRepository,
+  designSettings: database ? new PrismaDesignSettingsStore(database.client) : undefined,
   e2eStore: database ? new PrismaE2eStore(database.client) : undefined,
   e2eQueue: database ? new PrismaE2eJobQueue(database.client) : undefined,
   e2eRunnerTasks: database ? new PrismaE2eRunnerTaskStore(database.client) : undefined,

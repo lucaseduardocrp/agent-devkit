@@ -102,7 +102,7 @@ export interface AgentRun {
       readonly stepId: string;
       readonly name: string;
       readonly output: string;
-      readonly kind?: 'result' | 'question' | 'answer';
+      readonly kind?: 'result' | 'question' | 'answer' | 'event';
     }[];
     readonly question?: string;
   } | null;

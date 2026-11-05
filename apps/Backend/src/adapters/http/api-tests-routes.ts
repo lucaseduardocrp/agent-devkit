@@ -4,9 +4,11 @@ import type { RequestContext } from '../../shared/context.js';
 import { ApplicationError } from '../../shared/errors.js';
 import {
   ApiTestService,
+  integrationRunInputSchema,
   SOURCE_TYPES,
   type GenerationInput,
 } from '../../modules/apitests/application/api-test-service.js';
+import { runtimeStateSchema } from '../../modules/apitests/application/personal-secrets.js';
 import {
   environmentInputSchema,
   type ApiCollection,
@@ -15,14 +17,14 @@ import {
 } from '../../modules/apitests/domain/api-test.js';
 import { flattenRequests } from '../../modules/apitests/engine/collection-runner.js';
 import { listDynamicValues } from '../../modules/apitests/engine/dynamic-values.js';
-import { LOAD_PROFILE_TYPES } from '../../modules/apitests/engine/types.js';
+import { LOAD_PROFILE_TYPES, type RuntimeState } from '../../modules/apitests/engine/types.js';
 import {
   EXPORT_FORMATS,
   IMPORT_FORMATS,
   exportBruno,
 } from '../../modules/apitests/formats/index.js';
 import { requireAuth, requireModulePermission } from './auth-middleware.js';
-import { parseBody, parseParams } from './validation.js';
+import { parseBody, parseParams, parseQuery } from './validation.js';
 
 const idParams = z.object({ id: z.string().trim().min(1).max(100) });
 const target = z.enum(['remote', 'local']).default('remote');
@@ -142,7 +144,7 @@ export function createApiTestsRouter(service: ApiTestService): Router {
       const { workspaceId, actorId } = context(request);
       const input = ApiTestService.parseCollection(request.body);
       const collection = await service.saveCollection(workspaceId, actorId, input);
-      send(response, 201, { collection: ApiTestService.view(collection) });
+      send(response, 201, { collection: await service.collectionView(collection, actorId) });
     }),
   );
 
@@ -163,8 +165,10 @@ export function createApiTestsRouter(service: ApiTestService): Router {
       const imported = await service.importCollection(workspaceId, actorId, input);
       send(response, 201, {
         format: imported.format,
-        collection: ApiTestService.view(imported.collection),
-        environments: imported.environments.map((environment) => ApiTestService.view(environment)),
+        collection: await service.collectionView(imported.collection, actorId),
+        environments: await Promise.all(
+          imported.environments.map((environment) => service.environmentView(environment, actorId)),
+        ),
       });
     }),
   );
@@ -174,11 +178,13 @@ export function createApiTestsRouter(service: ApiTestService): Router {
     requireAuth,
     it('view'),
     wrap(async (request, response) => {
-      const collection = await service.getCollection(
-        context(request).workspaceId,
+      const { workspaceId, actorId } = context(request);
+      const collection = await service.getCollectionView(
+        workspaceId,
+        actorId,
         parseParams(idParams, request).id,
       );
-      send(response, 200, { collection: ApiTestService.view(collection) });
+      send(response, 200, { collection });
     }),
   );
 
@@ -195,7 +201,7 @@ export function createApiTestsRouter(service: ApiTestService): Router {
         input,
         parseParams(idParams, request).id,
       );
-      send(response, 200, { collection: ApiTestService.view(collection) });
+      send(response, 200, { collection: await service.collectionView(collection, actorId) });
     }),
   );
 
@@ -250,6 +256,67 @@ export function createApiTestsRouter(service: ApiTestService): Router {
     }),
   );
 
+  // ---------- Integration tests: pipelines in the team's repository ----------
+
+  router.get(
+    '/integration-tests/repositories',
+    requireAuth,
+    it('view'),
+    wrap(async (request, response) => {
+      send(response, 200, await service.ciRepositories(context(request).workspaceId));
+    }),
+  );
+
+  router.get(
+    '/integration-tests/repositories/branches',
+    requireAuth,
+    it('view'),
+    wrap(async (request, response) => {
+      const query = parseQuery(
+        z.object({
+          provider: z.enum(['github', 'azure_devops']),
+          repositoryId: z.string().trim().min(1).max(200),
+        }),
+        request,
+      );
+      send(response, 200, {
+        branches: await service.ciBranches(
+          context(request).workspaceId,
+          query.provider,
+          query.repositoryId,
+        ),
+      });
+    }),
+  );
+
+  // The files the pipeline would commit, from the saved collection; nothing is written.
+  router.get(
+    '/integration-tests/collections/:id/ci',
+    requireAuth,
+    it('view'),
+    wrap(async (request, response) => {
+      const {
+        ci: _ci,
+        name: _name,
+        ...preview
+      } = await service.previewCi(context(request).workspaceId, parseParams(idParams, request).id);
+      send(response, 200, preview);
+    }),
+  );
+
+  router.post(
+    '/integration-tests/collections/:id/ci',
+    requireAuth,
+    it('edit'),
+    wrap(async (request, response) => {
+      send(
+        response,
+        200,
+        await service.publishCi(context(request).workspaceId, parseParams(idParams, request).id),
+      );
+    }),
+  );
+
   // ---------- Integration tests: environments ----------
 
   router.get(
@@ -257,9 +324,9 @@ export function createApiTestsRouter(service: ApiTestService): Router {
     requireAuth,
     it('view'),
     wrap(async (request, response) => {
-      const environments = await service.listEnvironments(context(request).workspaceId);
+      const { workspaceId, actorId } = context(request);
       send(response, 200, {
-        environments: environments.map((environment) => ApiTestService.view(environment)),
+        environments: await service.listEnvironmentViews(workspaceId, actorId),
       });
     }),
   );
@@ -269,11 +336,13 @@ export function createApiTestsRouter(service: ApiTestService): Router {
     requireAuth,
     it('edit'),
     wrap(async (request, response) => {
+      const { workspaceId, actorId } = context(request);
       const environment = await service.saveEnvironment(
-        context(request).workspaceId,
+        workspaceId,
+        actorId,
         parseBody(environmentInputSchema, request),
       );
-      send(response, 201, { environment: ApiTestService.view(environment) });
+      send(response, 201, { environment: await service.environmentView(environment, actorId) });
     }),
   );
 
@@ -282,12 +351,14 @@ export function createApiTestsRouter(service: ApiTestService): Router {
     requireAuth,
     it('edit'),
     wrap(async (request, response) => {
+      const { workspaceId, actorId } = context(request);
       const environment = await service.saveEnvironment(
-        context(request).workspaceId,
+        workspaceId,
+        actorId,
         parseBody(environmentInputSchema, request),
         parseParams(idParams, request).id,
       );
-      send(response, 200, { environment: ApiTestService.view(environment) });
+      send(response, 200, { environment: await service.environmentView(environment, actorId) });
     }),
   );
 
@@ -304,6 +375,70 @@ export function createApiTestsRouter(service: ApiTestService): Router {
     }),
   );
 
+  // ---------- Integration tests: personal values ----------
+
+  // Credentials are personal: a member may always clear their own value, so view is enough.
+  router.delete(
+    '/integration-tests/personal-secrets',
+    requireAuth,
+    it('view'),
+    wrap(async (request, response) => {
+      const { workspaceId, actorId } = context(request);
+      const body = parseBody(
+        z.object({
+          scope: z.enum(['collection', 'environment']),
+          scopeId: z.string().trim().min(1).max(100),
+          ref: z.string().trim().min(1).max(500),
+        }),
+        request,
+      );
+      await service.clearPersonalValue(workspaceId, actorId, body.scope, body.scopeId, body.ref);
+      send(response, 200, { success: true });
+    }),
+  );
+
+  // The caller's runtime variables and cookies of a collection (left by previous sends).
+  router.get(
+    '/integration-tests/collections/:id/runtime',
+    requireAuth,
+    it('view'),
+    wrap(async (request, response) => {
+      const { workspaceId, actorId } = context(request);
+      send(response, 200, {
+        runtime: await service.getRuntime(workspaceId, actorId, parseParams(idParams, request).id),
+      });
+    }),
+  );
+
+  router.put(
+    '/integration-tests/collections/:id/runtime',
+    requireAuth,
+    it('view'),
+    wrap(async (request, response) => {
+      const { workspaceId, actorId } = context(request);
+      const state = parseBody(runtimeStateSchema, request);
+      send(response, 200, {
+        runtime: await service.setRuntime(
+          workspaceId,
+          actorId,
+          parseParams(idParams, request).id,
+          state,
+        ),
+      });
+    }),
+  );
+
+  router.delete(
+    '/integration-tests/collections/:id/runtime',
+    requireAuth,
+    it('view'),
+    wrap(async (request, response) => {
+      const { workspaceId, actorId } = context(request);
+      await service.clearRuntime(workspaceId, actorId, parseParams(idParams, request).id);
+      send(response, 200, { success: true });
+    }),
+  );
+
   // ---------- Integration tests: runs and generation ----------
 
   router.post(
@@ -312,16 +447,7 @@ export function createApiTestsRouter(service: ApiTestService): Router {
     it('edit'),
     wrap(async (request, response) => {
       const { workspaceId, actorId } = context(request);
-      const input = parseBody(
-        z.object({
-          collectionId: z.string().trim().min(1).max(100),
-          environmentId: z.string().trim().min(1).max(100).nullable().optional(),
-          itemIds: z.array(z.string().trim().min(1).max(100)).max(500).default([]),
-          target,
-          bail: z.boolean().default(false),
-        }),
-        request,
-      );
+      const input = parseBody(integrationRunInputSchema, request);
       send(response, 201, { run: await service.startIntegrationRun(workspaceId, actorId, input) });
     }),
   );
@@ -414,7 +540,9 @@ export function createApiTestsRouter(service: ApiTestService): Router {
         generationInput(request, 'integration'),
       );
       send(response, 201, {
-        collection: ApiTestService.view(result.collection!),
+        collection: result.collection
+          ? await service.collectionView(result.collection, value.actorId)
+          : null,
         sources: result.sources,
       });
     }),
@@ -688,14 +816,17 @@ export function createApiTestsRouter(service: ApiTestService): Router {
           status: z.enum(['passed', 'failed', 'error']),
           result: z.unknown().nullable(),
           error: z.string().max(20_000).nullable(),
+          // The user's runtime variables and cookies: kept in their vault, never in the run.
+          runtime: z.unknown().optional(),
         }),
         request,
       );
       const run = await service.ownedRun(workspaceId, actorId, parseParams(idParams, request).id);
-      const saved = await service.finish(run.id, body.runnerId, {
+      const saved = await service.finish(run, body.runnerId, {
         status: body.status,
         result: body.result as ApiRun['result'],
         error: body.error,
+        ...(body.runtime ? { runtime: body.runtime as RuntimeState } : {}),
       });
       send(response, 200, { saved });
     }),

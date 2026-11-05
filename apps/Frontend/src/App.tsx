@@ -4,7 +4,7 @@ import { cn } from './lib/utils.js';
 import { WorkspaceLayout } from './components/layout/WorkspaceLayout.js';
 import type { NavTab } from './components/layout/Sidebar.js';
 import { BrainView } from './features/brain/BrainView.js';
-import { AgentsView } from './features/agents/AgentsView.js';
+import { AgentsView, type AgentsSection } from './features/agents/AgentsView.js';
 import { TestPlansView } from './features/testplans/TestPlansView.js';
 import type { AutomateSelection } from './features/testplans/TestSuiteTree.js';
 import { SpecView } from './features/spec/SpecView.js';
@@ -47,6 +47,21 @@ type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 // (Railway), since the frontend and backend are served from different origins
 // there. Left unset, ApiClient falls back to http://localhost:3000 for local dev.
 const defaultApiClient = new ApiClient({ baseUrl: import.meta.env.VITE_API_BASE_URL });
+
+/** The Agents submodules, as navigation tabs and as the section the view renders. */
+const AGENTS_SECTION_BY_TAB: Readonly<Record<string, AgentsSection>> = {
+  agents: 'agents',
+  agentsPlayground: 'playground',
+  agentsMap: 'map',
+  agentsWorkflow: 'workflow',
+};
+
+const AGENTS_TAB_BY_SECTION: Readonly<Record<AgentsSection, NavTab>> = {
+  agents: 'agents',
+  playground: 'agentsPlayground',
+  map: 'agentsMap',
+  workflow: 'agentsWorkflow',
+};
 
 export function App({
   apiClient = defaultApiClient,
@@ -212,6 +227,7 @@ function AppContent({
   const can = (module: PermissionModule, operation: ModuleOperation = 'view') =>
     allows(access.modules[module], operation);
   const readOnly = (module: PermissionModule) => !can(module, 'edit');
+  const openIntegrations = () => setActiveTab('connect');
   // A tab the member may not view (e.g. after switching workspace) falls back to the first
   // visible one, so hidden modules are never rendered. Settings closes the order and is always
   // visible, so a tab is always found.
@@ -316,11 +332,16 @@ function AppContent({
             isReadOnly={readOnly('brain')}
           />
         )}
-        {currentTab === 'agents' && (
+        {(currentTab === 'agents' ||
+          currentTab === 'agentsPlayground' ||
+          currentTab === 'agentsMap' ||
+          currentTab === 'agentsWorkflow') && (
           <AgentsView
             apiClient={apiClient}
             activeWorkspaceId={activeWorkspaceId}
             isReadOnly={readOnly('agents')}
+            section={AGENTS_SECTION_BY_TAB[currentTab]}
+            onSelectSection={(section) => setActiveTab(AGENTS_TAB_BY_SECTION[section])}
           />
         )}
         {currentTab === 'testplans' && (
@@ -339,7 +360,7 @@ function AppContent({
                   }
                 : undefined
             }
-            onOpenIntegrations={can('integrations') ? () => setActiveTab('connect') : undefined}
+            onOpenIntegrations={can('integrations') ? openIntegrations : undefined}
           />
         )}
         {currentTab === 'e2e' && (
@@ -349,7 +370,7 @@ function AppContent({
             isReadOnly={readOnly('e2e')}
             initialSavedCases={e2eSeed?.selection}
             onOpenAgents={() => setActiveTab('agents')}
-            onOpenIntegrations={() => setActiveTab('connect')}
+            onOpenIntegrations={openIntegrations}
           />
         )}
         {currentTab === 'integrationTests' && (
@@ -357,6 +378,7 @@ function AppContent({
             key={activeWorkspaceId ?? 'no-workspace'}
             apiClient={apiClient}
             isReadOnly={readOnly('integrationTests')}
+            onOpenIntegrations={openIntegrations}
           />
         )}
         {currentTab === 'loadTests' && (

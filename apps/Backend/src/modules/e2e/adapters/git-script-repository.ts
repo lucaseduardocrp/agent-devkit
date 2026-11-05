@@ -205,18 +205,7 @@ export class GitScriptRepository implements E2eScriptRepository {
       return;
     }
     const repositoryUrl = this.azureRepositoryUrl(connection, ref);
-    const refs = await this.json<{ value?: { name: string; objectId: string }[] }>(
-      connection,
-      `${repositoryUrl}/refs?filter=heads/${encodeURIComponent(ref.branch)}&api-version=7.1`,
-      'reading the branch',
-    );
-    const head = refs.value?.find((item) => item.name === `refs/heads/${ref.branch}`);
-    if (!head)
-      throw new ApplicationError(
-        'E2E_REPOSITORY_ERROR',
-        `Branch "${ref.branch}" was not found in Azure DevOps.`,
-        404,
-      );
+    const head = await this.azureHead(connection, ref);
     const exists = (await this.readFile(workspaceId, ref, filePath)) !== null;
     const response = await this.request(connection, `${repositoryUrl}/pushes?api-version=7.1`, {
       method: 'POST',
@@ -239,6 +228,77 @@ export class GitScriptRepository implements E2eScriptRepository {
     this.ensureOk(connection, response, `pushing ${filePath}`);
   }
 
+  async commitFiles(
+    workspaceId: string,
+    ref: E2eRepositoryRef,
+    changes: readonly { readonly path: string; readonly content: string | null }[],
+    message: string,
+  ): Promise<string | null> {
+    const connection = await this.requireConnection(workspaceId, ref.provider);
+    if (ref.provider === 'github') {
+      // Git Data API: one tree on top of the branch head, one commit, then the branch moves.
+      const repo = `${connection.baseUrl}/repos/${ref.name}`;
+      const head = await this.json<{ object: { sha: string } }>(
+        connection,
+        `${repo}/git/ref/heads/${encodePath(ref.branch)}`,
+        'reading the branch',
+      );
+      const parent = await this.json<{ tree: { sha: string } }>(
+        connection,
+        `${repo}/git/commits/${head.object.sha}`,
+        'reading the branch head',
+      );
+      const tree = await this.send<{ sha: string }>(connection, `${repo}/git/trees`, 'POST', {
+        base_tree: parent.tree.sha,
+        tree: changes.map((change) => ({
+          path: change.path,
+          mode: '100644',
+          type: 'blob',
+          ...(change.content === null ? { sha: null } : { content: change.content }),
+        })),
+      });
+      if (tree.sha === parent.tree.sha) return null;
+      const commit = await this.send<{ sha: string; html_url: string }>(
+        connection,
+        `${repo}/git/commits`,
+        'POST',
+        { message, tree: tree.sha, parents: [head.object.sha] },
+      );
+      await this.send(connection, `${repo}/git/refs/heads/${encodePath(ref.branch)}`, 'PATCH', {
+        sha: commit.sha,
+      });
+      return commit.html_url;
+    }
+    const head = await this.azureHead(connection, ref);
+    const existing = new Set(await this.listFiles(workspaceId, ref));
+    const pushed = await this.send<{ commits?: { commitId: string }[] }>(
+      connection,
+      `${this.azureRepositoryUrl(connection, ref)}/pushes?api-version=7.1`,
+      'POST',
+      {
+        refUpdates: [{ name: `refs/heads/${ref.branch}`, oldObjectId: head.objectId }],
+        commits: [
+          {
+            comment: message,
+            changes: changes.map((change) =>
+              change.content === null
+                ? { changeType: 'delete', item: { path: `/${change.path}` } }
+                : {
+                    changeType: existing.has(change.path) ? 'edit' : 'add',
+                    item: { path: `/${change.path}` },
+                    newContent: { content: change.content, contentType: 'rawtext' },
+                  },
+            ),
+          },
+        ],
+      },
+    );
+    const commitId = pushed.commits?.[0]?.commitId;
+    if (!commitId) return null;
+    const { project, repository } = azureNames(ref);
+    return `${connection.baseUrl}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repository)}/commit/${commitId}`;
+  }
+
   async fileUrl(
     workspaceId: string,
     ref: E2eRepositoryRef,
@@ -256,9 +316,7 @@ export class GitScriptRepository implements E2eScriptRepository {
         .replace(/\/api\/v3$/, '');
       return `${web}/${ref.name}/blob/${encodePath(ref.branch)}/${encodePath(filePath)}`;
     }
-    const slash = ref.name.indexOf('/');
-    const project = ref.name.slice(0, Math.max(slash, 0));
-    const repository = ref.name.slice(slash + 1);
+    const { project, repository } = azureNames(ref);
     return `${connection.baseUrl}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repository)}?path=/${encodePath(filePath)}&version=GB${encodeURIComponent(ref.branch)}`;
   }
 
@@ -311,6 +369,23 @@ export class GitScriptRepository implements E2eScriptRepository {
 
   private azureRepositoryUrl(connection: Connection, ref: E2eRepositoryRef): string {
     return `${connection.baseUrl}/_apis/git/repositories/${encodeURIComponent(ref.id)}`;
+  }
+
+  /** The branch's ref, which a push must name as its old object. */
+  private async azureHead(connection: Connection, ref: E2eRepositoryRef) {
+    const refs = await this.json<{ value?: { name: string; objectId: string }[] }>(
+      connection,
+      `${this.azureRepositoryUrl(connection, ref)}/refs?filter=heads/${encodeURIComponent(ref.branch)}&api-version=7.1`,
+      'reading the branch',
+    );
+    const head = refs.value?.find((item) => item.name === `refs/heads/${ref.branch}`);
+    if (!head)
+      throw new ApplicationError(
+        'E2E_REPOSITORY_ERROR',
+        `Branch "${ref.branch}" was not found in Azure DevOps.`,
+        404,
+      );
+    return head;
   }
 
   private async requireConnection(
@@ -391,6 +466,17 @@ export class GitScriptRepository implements E2eScriptRepository {
     return (await response.json()) as T;
   }
 
+  private async send<T = unknown>(
+    connection: Connection,
+    url: string,
+    method: 'POST' | 'PATCH',
+    body: unknown,
+  ): Promise<T> {
+    const response = await this.request(connection, url, { method, body: JSON.stringify(body) });
+    this.ensureOk(connection, response, 'committing the files');
+    return (await response.json()) as T;
+  }
+
   private ensureOk(connection: Connection, response: Response, action: string): void {
     if (response.ok) return;
     const label = LABELS[connection.provider];
@@ -404,6 +490,12 @@ export class GitScriptRepository implements E2eScriptRepository {
       502,
     );
   }
+}
+
+/** "Project/Repo" split in two. */
+function azureNames(ref: E2eRepositoryRef) {
+  const slash = ref.name.indexOf('/');
+  return { project: ref.name.slice(0, Math.max(slash, 0)), repository: ref.name.slice(slash + 1) };
 }
 
 function azureVersion(ref: E2eRepositoryRef): string {
