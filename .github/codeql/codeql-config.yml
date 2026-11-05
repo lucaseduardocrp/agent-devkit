@@ -1,0 +1,8 @@
+name: agent-devkit CodeQL config
+
+# Test fixtures deliberately run plain-HTTP echo servers and self-signed TLS servers
+# (including `rejectUnauthorized: false` to exercise mutual-TLS handling). They never ship,
+# so they are not analyzed; production code under `src/` still is.
+paths-ignore:
+  - apps/Backend/tests
+  - apps/Frontend/tests
