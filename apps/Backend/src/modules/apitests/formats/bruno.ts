@@ -53,12 +53,8 @@ const textBlock = (title: string, text: string | undefined) =>
   text?.trim() ? `${title} {\n${indent(text)}\n}\n` : '';
 
 /** Keys with `:`, quotes, braces or spaces are quoted, as Bruno does. */
-<<<<<<< HEAD
 const keyString = (key: string) =>
   /[:"{} ]/.test(key) ? `"${key.replace(/[\\"]/g, '\\$&')}"` : key;
-=======
-const keyString = (key: string) => (/[:"{} ]/.test(key) ? `"${key.replace(/[\\"]/g, '\\$&')}"` : key);
->>>>>>> e59ac2e116e8ab765e728a8f5689227f7c705eb8
 /** Multi-line values go between `'''`. */
 const valueString = (value: string) =>
   /[\r\n]/.test(value) ? `'''\n${indent(value)}\n'''` : value;
