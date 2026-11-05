@@ -558,14 +558,14 @@ describe('RequestPane: GraphQL', () => {
 
     // Hovering and clicking a suggestion with the mouse chooses it as well.
     fireEvent.change(editor, {
-      target: { value: 'query { user { fir', selectionStart: 19, selectionEnd: 19 },
+      target: { value: 'query { user { na', selectionStart: 17, selectionEnd: 17 },
     });
     const mouseWords = await view.findByTestId('word-suggestions');
     const options = within(mouseWords).getAllByRole('option');
     fireEvent.mouseEnter(options[0]!);
     expect(options[0]!.getAttribute('aria-selected')).toBe('true');
     fireEvent.mouseDown(options[0]!);
-    expect(last(onChange).graphql?.query).toBe('query { user { first');
+    expect(last(onChange).graphql?.query).toBe('query { user { name');
 
     // The docs close and open again from the cache, without another request.
     fireEvent.click(panel().getByRole('button', { name: 'Fechar' }));
