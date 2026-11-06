@@ -51,6 +51,7 @@ export const enUS = {
     'The file downloaded from the ADK Hub does not match its index and was not installed.',
   HUB_AGENT_NOT_FROM_HUB: 'This agent was not installed from the ADK Hub.',
   ISSUE_NOT_FOUND: 'Issue not found.',
+  BRIEFS_UNAVAILABLE: 'Agent briefs are not available.',
   PBI_NOT_FOUND: 'PBI or card not found.',
   PBI_HIERARCHY: 'The PBI and card hierarchy is invalid.',
   PBI_PROVIDER_CONFIG: 'The board integration needs to be configured: {detail}',
