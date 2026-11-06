@@ -45,9 +45,7 @@ function mockClient(items: PbiItem[] = [base], providerId = 'trello') {
     getPbiComments: vi.fn().mockResolvedValue([]),
     getPbiRelations: vi.fn().mockResolvedValue([]),
     updatePbiItem: vi.fn().mockResolvedValue(base),
-    pullPbiBoards: vi
-      .fn()
-      .mockResolvedValue({ results: [{ providerId, imported: 1 }], items }),
+    pullPbiBoards: vi.fn().mockResolvedValue({ results: [{ providerId, imported: 1 }], items }),
     getPbiPushContract: vi.fn().mockResolvedValue({ providerId, update: false, fields: [] }),
     getFieldMappingTemplates: vi.fn().mockResolvedValue([]),
     getAuditHistory: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, totalPages: 0 }),
@@ -84,11 +82,7 @@ describe('PbiView view mode storage', () => {
       if (key === 'adk:pbi-view:ws') throw new Error('blocked');
       return getItem.call(this, key);
     });
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
-      this: Storage,
-      key,
-      value,
-    ) {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
       if (key === 'adk:pbi-view:ws') throw new Error('blocked');
       setItem.call(this, key, value);
     });
@@ -293,5 +287,4 @@ describe('PbiView without a workspace', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
     expect(localStorage.getItem('adk:pbi-view:default')).toBe('kanban');
   });
-
 });

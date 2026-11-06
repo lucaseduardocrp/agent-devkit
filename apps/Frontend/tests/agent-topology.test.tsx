@@ -3,7 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentTopology } from '../src/features/agents/AgentTopology.js';
 import type { AgentWorkflowDto, CustomAgentDto } from '../src/features/agents/agent-types.js';
 import type { AgentRun, Issue } from '../src/features/issues/issue-types.js';
-const emptyWorkflow: AgentWorkflowDto = {  enabled: true,  autonomy: 'balanced',  finalReview: true,  uncertaintyBehavior: 'ask',  issueCreationBehavior: 'ask',  defaultAction: 'allow',  steps: [],  rules: [],};
+const emptyWorkflow: AgentWorkflowDto = {
+  enabled: true,
+  autonomy: 'balanced',
+  finalReview: true,
+  uncertaintyBehavior: 'ask',
+  issueCreationBehavior: 'ask',
+  defaultAction: 'allow',
+  steps: [],
+  rules: [],
+};
 
 const parent: CustomAgentDto = {
   id: 'parent',

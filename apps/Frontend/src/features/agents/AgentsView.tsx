@@ -537,7 +537,15 @@ export function AgentsView({
   const visibleTab = isReadOnly && activeViewTab === 'playground' ? 'catalog' : activeViewTab;
 
   return (
-    <div className={cn(visibleTab === 'map' ? 'flex min-h-full flex-col gap-4 p-4' : 'flex min-h-full flex-col gap-6 p-6', className)} data-testid="agents-view">
+    <div
+      className={cn(
+        visibleTab === 'map'
+          ? 'flex min-h-full flex-col gap-4 p-4'
+          : 'flex min-h-full flex-col gap-6 p-6',
+        className,
+      )}
+      data-testid="agents-view"
+    >
       {/* Header */}
       <div
         className={cn(

@@ -472,7 +472,7 @@ export function ReleaseNotesView({ apiClient, workspaceId, isReadOnly = false }:
                       variant="ghost"
                       role="menuitem"
                       className="flex w-full justify-start text-left"
-                              data-destructive
+                      data-destructive
                       onClick={() => setDeleteNote(note)}
                     >
                       <i className="ti ti-trash" aria-hidden="true" /> {c.delete}

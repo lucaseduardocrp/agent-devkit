@@ -8,7 +8,16 @@ import { SpecWorkflowAction } from '../src/features/spec/SpecWorkflowAction.js';
 import { AzureExportFields } from '../src/features/testplans/AzureExportFields.js';
 import { TestSuiteTree } from '../src/features/testplans/TestSuiteTree.js';
 import { ApiClient, type SavedTestPlanDto, type SpecificationDto } from '../src/lib/api-client.js';
-const emptyWorkflow: AgentWorkflowDto = {  enabled: true,  autonomy: 'balanced',  finalReview: true,  uncertaintyBehavior: 'ask',  issueCreationBehavior: 'ask',  defaultAction: 'allow',  steps: [],  rules: [],};
+const emptyWorkflow: AgentWorkflowDto = {
+  enabled: true,
+  autonomy: 'balanced',
+  finalReview: true,
+  uncertaintyBehavior: 'ask',
+  issueCreationBehavior: 'ask',
+  defaultAction: 'allow',
+  steps: [],
+  rules: [],
+};
 
 const ISO = '2026-09-18T00:00:00.000Z';
 

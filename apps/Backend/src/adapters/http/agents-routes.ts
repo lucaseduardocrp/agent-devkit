@@ -137,7 +137,16 @@ const agentWorkflowSchema = z.object({
             id: z.string().trim().min(1).max(100),
             // `start` is the name the trigger node had before triggers were configurable.
             kind: z
-              .enum(['start', 'trigger', 'step', 'approval', 'action', 'condition', 'delay', 'rule'])
+              .enum([
+                'start',
+                'trigger',
+                'step',
+                'approval',
+                'action',
+                'condition',
+                'delay',
+                'rule',
+              ])
               .transform((kind) => (kind === 'start' ? ('trigger' as const) : kind)),
             x: z.number().finite(),
             y: z.number().finite(),

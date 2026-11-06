@@ -121,7 +121,9 @@ describe('WorkView typed issues', () => {
     expect(screen.getAllByText('Bug').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: /^Filtros/ }));
     const select = await screen.findByRole('combobox', { name: 'Responsável' });
-    await waitFor(() => expect(within(select).queryByRole('option', { name: 'Bia' })).not.toBeNull());
+    await waitFor(() =>
+      expect(within(select).queryByRole('option', { name: 'Bia' })).not.toBeNull(),
+    );
     const labels = within(select)
       .getAllByRole('option')
       .map((option) => option.textContent);

@@ -369,10 +369,10 @@ export function AgentWorkflowCanvas({
                   runState
                     ? ''
                     : isSelected
-                    ? 'border-[var(--fill-accent)] ring-4 ring-[var(--fill-accent)]/15'
-                    : problem
-                      ? 'border-[var(--fill-warning)] hover:border-[var(--fill-accent)]'
-                      : 'border-[var(--border-strong)] hover:border-[var(--fill-accent)]',
+                      ? 'border-[var(--fill-accent)] ring-4 ring-[var(--fill-accent)]/15'
+                      : problem
+                        ? 'border-[var(--fill-warning)] hover:border-[var(--fill-accent)]'
+                        : 'border-[var(--border-strong)] hover:border-[var(--fill-accent)]',
                 )}
               >
                 <span
@@ -413,7 +413,8 @@ export function AgentWorkflowCanvas({
                       className={cn(
                         'ti text-sm',
                         runState === 'done' && 'ti-circle-check text-emerald-400',
-                        runState === 'current' && 'ti-loader-2 animate-spin text-[var(--fill-accent)]',
+                        runState === 'current' &&
+                          'ti-loader-2 animate-spin text-[var(--fill-accent)]',
                         runState === 'waiting' && 'ti-hourglass text-sky-300',
                       )}
                     />

@@ -73,7 +73,6 @@ const unassignedVisual = {
 
 /** Rule card width: the row minus its three 56px gaps, split evenly. */
 
-
 /** The palette entry of each node kind the canvas can add. */
 const nodeKindVisuals: Record<
   WorkflowNodeKind,

@@ -583,7 +583,10 @@ describe('PbiView coverage: loading and actions', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('status', { name: 'Carregando item...' })).toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: 'Salvar item' })).toHaveProperty('disabled', true);
+    expect(within(dialog).getByRole('button', { name: 'Salvar item' })).toHaveProperty(
+      'disabled',
+      true,
+    );
     finish({ ...root, description: 'Full text' });
     await waitFor(() =>
       expect(within(dialog).queryByRole('status', { name: 'Carregando item...' })).toBeNull(),

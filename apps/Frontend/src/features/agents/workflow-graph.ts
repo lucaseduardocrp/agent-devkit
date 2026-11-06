@@ -8,13 +8,7 @@ import type {
 export const WORKFLOW_TRIGGER_NODE_ID = 'start';
 
 export type WorkflowNodeKind =
-  | 'trigger'
-  | 'step'
-  | 'approval'
-  | 'action'
-  | 'condition'
-  | 'delay'
-  | 'rule';
+  'trigger' | 'step' | 'approval' | 'action' | 'condition' | 'delay' | 'rule';
 
 /** What makes the workflow run. */
 export type WorkflowTriggerKind = 'issue-assigned' | 'product-event' | 'schedule';
