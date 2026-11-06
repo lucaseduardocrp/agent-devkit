@@ -214,6 +214,13 @@ describe('WorkView images in descriptions', () => {
   });
 });
 
+/** The filters live behind the Filtros button of the toolbar: open them first. */
+async function renderWithFilters(...args: Parameters<typeof renderView>) {
+  const view = renderView(...args);
+  fireEvent.click(await screen.findByRole('button', { name: 'Filtros' }));
+  return view;
+}
+
 describe('WorkView saved filters', () => {
   const saved = (id: string, name: string, extra: Record<string, string> = {}) => ({
     id,
@@ -230,7 +237,7 @@ describe('WorkView saved filters', () => {
   it('ignores stored filters that are not a list or not readable', async () => {
     localStorage.setItem('adk:issue-saved-filters:ws', '{}');
     const { api } = createApi();
-    const first = renderView(api);
+    const first = await renderWithFilters(api);
     await screen.findByRole('button', { name: '1 Prepare release' });
     expect(
       within(screen.getByRole('combobox', { name: 'Filtros salvos' })).getAllByRole('option'),
@@ -238,7 +245,7 @@ describe('WorkView saved filters', () => {
     first.unmount();
 
     localStorage.setItem('adk:issue-saved-filters:ws', '{not json');
-    renderView(api);
+    await renderWithFilters(api);
     await screen.findByRole('button', { name: '1 Prepare release' });
     expect(
       within(screen.getByRole('combobox', { name: 'Filtros salvos' })).getAllByRole('option'),
@@ -260,7 +267,7 @@ describe('WorkView saved filters', () => {
       makeIssue({ id: 'issue-2', number: 2, title: 'Fix build', priority: 'urgent' }),
     ];
     const { api } = createApi({ issues });
-    renderView(api);
+    await renderWithFilters(api);
     await screen.findByRole('button', { name: '1 Prepare release' });
     const select = screen.getByRole('combobox', { name: 'Filtros salvos' });
     expect(
@@ -301,7 +308,7 @@ describe('WorkView saved filters', () => {
       throw new Error('quota');
     });
     const { api } = createApi();
-    renderView(api);
+    await renderWithFilters(api);
     await screen.findByRole('button', { name: '1 Prepare release' });
     fireEvent.change(screen.getByRole('combobox', { name: 'Prioridade' }), {
       target: { value: 'low' },
@@ -345,7 +352,7 @@ describe('WorkView saved filters', () => {
         user: { id: 'user-b', name: 'Bruno', email: 'bruno@example.com' },
       },
     ]);
-    renderView(api);
+    await renderWithFilters(api);
     await screen.findByRole('button', { name: '1 Prepare release' });
     await screen.findByRole('option', { name: 'Bruno' });
     const assignee = screen.getByRole('combobox', { name: 'Responsável' });
@@ -383,7 +390,7 @@ describe('WorkView saved filters', () => {
         pbi('sprint', null, 'Proj\\Sprint 1'),
       ],
     });
-    renderView(api);
+    await renderWithFilters(api);
     const iteration = await screen.findByRole('combobox', { name: 'Iteração' });
     expect(
       within(iteration)

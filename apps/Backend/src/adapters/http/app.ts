@@ -75,6 +75,11 @@ import { InMemoryRunStore, type RunStore } from '../../modules/issues/run-store.
 import { RunService } from '../../modules/issues/run-service.js';
 import { InMemoryUsageStore, type UsageStore } from '../../modules/issues/usage-store.js';
 import { InMemoryIssueStore, type IssueStore } from '../../modules/issues/issue-store.js';
+import { IssueBriefService } from '../../modules/issues/agent-brief/brief-service.js';
+import {
+  InMemoryIssueBriefStore,
+  type IssueBriefStore,
+} from '../../modules/issues/agent-brief/brief-store.js';
 
 import {
   AiKnowledgeTestPlanGenerator,
@@ -103,6 +108,11 @@ import {
   type DesignSettingsStore,
 } from '../../modules/design/application/design-settings-store.js';
 import { createDesignRouter } from './design-routes.js';
+import { createWorkItemTypesRouter } from './work-item-types-routes.js';
+import {
+  InMemoryWorkItemTypeStore,
+  type WorkItemTypeStore,
+} from '../../modules/work-item-types/work-item-types.js';
 import {
   InMemoryTestSuiteStore,
   type TestSuiteStore,
@@ -176,6 +186,7 @@ export interface AppOptions {
   /** Where workspace agents are installed from (the ADK Hub on GitHub by default). */
   readonly hubCatalog?: HubCatalog;
   readonly issueStore?: IssueStore;
+  readonly issueBriefStore?: IssueBriefStore;
   readonly pbiStore?: PbiStore;
   readonly pbiRelationStore?: PbiRelationStore;
   readonly fieldMappingStore?: FieldMappingStore;
@@ -188,6 +199,7 @@ export interface AppOptions {
   readonly specRepository?: SpecRepository;
   readonly designStore?: DesignRemoteStore;
   readonly designSettings?: DesignSettingsStore;
+  readonly workItemTypes?: WorkItemTypeStore;
   readonly e2eStore?: E2eStore;
   readonly e2eRunner?: E2eRunner;
   readonly e2eArtifacts?: E2eArtifactStore;
@@ -376,13 +388,25 @@ export function createApp(options: AppOptions = {}) {
   );
   const fieldMappings = options.fieldMappingStore ?? new InMemoryFieldMappingStore();
   app.use(createFieldMappingRouter(fieldMappings, contextResolver));
+  const runStore = options.runStore ?? new InMemoryRunStore();
+  const usageStore = options.usageStore ?? new InMemoryUsageStore();
+  const briefService = new IssueBriefService({
+    store: options.issueBriefStore ?? new InMemoryIssueBriefStore(),
+    issues: issueStore,
+    pbiItems: pbiStore,
+    integrations: integrationsService,
+    rates: (workspaceId) => runStore.rates(workspaceId),
+    usage: usageStore,
+    knowledge: options.knowledgeSearch,
+  });
   const runService = new RunService(
-    options.runStore ?? new InMemoryRunStore(),
+    runStore,
     issueStore,
     agentService,
     pbiStore,
-    options.usageStore ?? new InMemoryUsageStore(),
+    usageStore,
     e2eArtifacts,
+    briefService,
   );
   void runService
     .recover()
@@ -395,6 +419,13 @@ export function createApp(options: AppOptions = {}) {
       runService,
       contextResolver,
       e2eArtifacts,
+      briefService,
+    ),
+  );
+  app.use(
+    createWorkItemTypesRouter(
+      options.workItemTypes ?? new InMemoryWorkItemTypeStore(),
+      contextResolver,
     ),
   );
   app.use(

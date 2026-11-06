@@ -1,13 +1,14 @@
 import { fireEvent, render, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentTopology } from '../src/features/agents/AgentTopology.js';
-import type { CustomAgentDto } from '../src/features/agents/agent-types.js';
+import type { AgentWorkflowDto, CustomAgentDto } from '../src/features/agents/agent-types.js';
 import { parseMarkdownBlocks } from '../src/features/brain/markdown-parser.js';
 import type { AgentRun, Issue } from '../src/features/issues/issue-types.js';
 import { SpecWorkflowAction } from '../src/features/spec/SpecWorkflowAction.js';
 import { AzureExportFields } from '../src/features/testplans/AzureExportFields.js';
 import { TestSuiteTree } from '../src/features/testplans/TestSuiteTree.js';
 import { ApiClient, type SavedTestPlanDto, type SpecificationDto } from '../src/lib/api-client.js';
+const emptyWorkflow: AgentWorkflowDto = {  enabled: true,  autonomy: 'balanced',  finalReview: true,  uncertaintyBehavior: 'ask',  issueCreationBehavior: 'ask',  defaultAction: 'allow',  steps: [],  rules: [],};
 
 const ISO = '2026-09-18T00:00:00.000Z';
 
@@ -186,6 +187,7 @@ describe('AgentTopology run details', () => {
         isLoading={false}
         error={null}
         onRefresh={vi.fn()}
+        workflow={emptyWorkflow}
       />,
     );
     const card = view.getByTestId('topology-run-run-1');
@@ -196,6 +198,6 @@ describe('AgentTopology run details', () => {
     expect(view.getByTestId('topology-run-run-2')).toBeInTheDocument();
 
     fireEvent.click(view.getByTestId('topology-agent-agent-1'));
-    expect(view.getByTestId('topology-selection')).toHaveTextContent('Sem descrição cadastrada.');
+    expect(view.getByTestId('agent-run-flow')).toBeInTheDocument();
   });
 });

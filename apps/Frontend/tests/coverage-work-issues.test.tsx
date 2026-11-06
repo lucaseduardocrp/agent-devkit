@@ -1,4 +1,12 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ApiClient, type AuditHistoryPage } from '../src/lib/api-client.js';
 import { WorkView, type WorkViewProps } from '../src/features/issues/WorkView.js';
@@ -11,6 +19,11 @@ import type {
 } from '../src/features/issues/issue-types.js';
 import type { CustomAgentDto } from '../src/features/agents/agent-types.js';
 import type { WorkspaceMember } from '../src/features/workspaces/workspace-types.js';
+
+const openFilters = () => {
+  const toggle = screen.getByRole('button', { name: /^(Filters|Filtros)/ });
+  if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+};
 
 const NOW = new Date().toISOString();
 
@@ -208,6 +221,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -264,6 +278,7 @@ describe('WorkView issue list and board', () => {
       target: { value: '' },
     });
 
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Filtrar status' }), {
       target: { value: 'done' },
     });
@@ -275,10 +290,10 @@ describe('WorkView issue list and board', () => {
     const { api, spies } = createApi({ issues });
     renderView(api);
     await screen.findByRole('button', { name: '1 Ship docs' });
-    fireEvent.click(screen.getByRole('button', { name: 'Quadro' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
     fireEvent.click(screen.getByRole('button', { name: 'Lista' }));
     expect(screen.getByRole('button', { name: 'Lista' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Quadro' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
 
     const store = new Map<string, string>();
     const dataTransfer = {
@@ -294,6 +309,10 @@ describe('WorkView issue list and board', () => {
     fireEvent.dragStart(card, { dataTransfer });
     fireEvent.dragOver(blockedColumn, { dataTransfer });
     fireEvent.drop(blockedColumn, { dataTransfer });
+    // The move is a draft: the card is already in its new column but nothing was sent.
+    expect(spies.updateIssue).not.toHaveBeenCalled();
+    expect(screen.getByTestId('kanban-draft-bar')).toHaveTextContent('1 movimento(s) pendente(s)');
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar agora' }));
     await waitFor(() =>
       expect(spies.updateIssue).toHaveBeenCalledWith('i1', { status: 'blocked' }),
     );
@@ -306,15 +325,70 @@ describe('WorkView issue list and board', () => {
     await waitFor(() => expect(spies.getIssue).toHaveBeenCalledWith('i2'));
   });
 
+  it('shows where a card will land and keeps the move as a draft until it is sent', async () => {
+    const { api, spies } = createApi({ issues });
+    renderView(api);
+    await screen.findByRole('button', { name: '1 Ship docs' });
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
+    const store = new Map<string, string>();
+    const dataTransfer = {
+      setData: (type: string, value: string) => store.set(type, value),
+      getData: (type: string) => store.get(type) ?? '',
+    };
+    const card = screen.getByText('Ship docs').closest('[draggable]') as HTMLElement;
+    const ownColumn = card.closest('section') as HTMLElement;
+    const blockedColumn = screen.getByText('Fix build').closest('section') as HTMLElement;
+    const placeholder = () => screen.queryByTestId('kanban-drop-placeholder');
+
+    fireEvent.dragStart(card, { dataTransfer });
+    fireEvent.dragOver(ownColumn, { dataTransfer });
+    expect(placeholder()).not.toBeInTheDocument();
+    fireEvent.dragOver(blockedColumn, { dataTransfer });
+    expect(placeholder()).toHaveTextContent('Mover para Bloqueada');
+    expect(placeholder()).toHaveTextContent('Ship docs');
+    // Moving over the card of the column does not hide the slot; leaving the column does.
+    const inside = createEvent.dragLeave(blockedColumn);
+    Object.defineProperty(inside, 'relatedTarget', { value: screen.getByText('Fix build') });
+    fireEvent(blockedColumn, inside);
+    expect(placeholder()).toBeInTheDocument();
+    fireEvent.dragLeave(blockedColumn);
+    expect(placeholder()).not.toBeInTheDocument();
+    fireEvent.dragOver(blockedColumn, { dataTransfer });
+    fireEvent.dragEnd(card);
+    expect(placeholder()).not.toBeInTheDocument();
+
+    // Dropping only changes the draft; the discard puts the card back.
+    fireEvent.dragStart(card, { dataTransfer });
+    fireEvent.dragOver(blockedColumn, { dataTransfer });
+    fireEvent.drop(blockedColumn, { dataTransfer });
+    expect(screen.getByTestId('kanban-card-pending')).toBeInTheDocument();
+    expect(blockedColumn).toHaveTextContent('Bloqueada2');
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar' }));
+    expect(screen.queryByTestId('kanban-card-pending')).not.toBeInTheDocument();
+    expect(blockedColumn).toHaveTextContent('Bloqueada1');
+    expect(spies.updateIssue).not.toHaveBeenCalled();
+
+    // A failed batch keeps the draft and can be tried again.
+    spies.updateIssue.mockRejectedValueOnce(new Error('Falhou'));
+    fireEvent.dragStart(card, { dataTransfer });
+    fireEvent.drop(blockedColumn, { dataTransfer });
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar agora' }));
+    expect(await screen.findByText(/Não foi possível salvar: Falhou/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    await waitFor(() => expect(spies.updateIssue).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId('kanban-draft-bar')).not.toBeInTheDocument());
+  });
+
   it('shows only the filtered column and an empty message on the board', async () => {
     const { api } = createApi({ issues });
     renderView(api);
     await screen.findByRole('button', { name: '1 Ship docs' });
-    fireEvent.click(screen.getByRole('button', { name: 'Quadro' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Filtrar status' }), {
       target: { value: 'cancelled' },
     });
-    const board = screen.getByLabelText('Quadro', { selector: 'div' });
+    const board = screen.getByLabelText('Kanban', { selector: 'div' });
     expect(within(board).getAllByRole('heading')).toHaveLength(1);
     expect(screen.getByText('Nenhuma issue encontrada.')).toBeInTheDocument();
   });
@@ -323,7 +397,7 @@ describe('WorkView issue list and board', () => {
     const { api, spies } = createApi({ issues });
     renderView(api, { isReadOnly: true });
     await screen.findByRole('button', { name: '1 Ship docs' });
-    fireEvent.click(screen.getByRole('button', { name: 'Quadro' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
     const card = screen.getByText('Ship docs').closest('[draggable]') as HTMLElement;
     expect(card).toHaveAttribute('draggable', 'false');
     const dataTransfer = { setData: vi.fn(), getData: () => 'i1' };
@@ -518,6 +592,7 @@ describe('WorkView issue composer', () => {
         description: 'Details',
         status: 'in_review',
         priority: 'urgent',
+        type: '',
         assigneeAgentId: 'agent-a',
         assigneeUserId: 'user-b',
         attachments: [],

@@ -78,7 +78,6 @@ describe('AgentsView workflow saving', () => {
   it('refuses a rule without a name', async () => {
     const view = await openWorkflow();
     fireEvent.click(view.getByTestId('workflow-add-rule'));
-    fireEvent.click(screen.getByTestId('workflow-rule-node-1'));
     fireEvent.change(within(screen.getByTestId('workflow-inspector')).getByLabelText('Nome'), {
       target: { value: ' ' },
     });
@@ -130,7 +129,6 @@ describe('AgentsView workflow access', () => {
   it('refuses a rule that limits providers without naming an action', async () => {
     const view = await openWorkflow();
     fireEvent.click(view.getByTestId('workflow-add-rule'));
-    fireEvent.click(screen.getByTestId('workflow-rule-node-1'));
     const inspector = () => within(screen.getByTestId('workflow-inspector'));
     fireEvent.change(inspector().getByLabelText('Ação MCP'), { target: { value: 'e2e_run' } });
     fireEvent.change(inspector().getByPlaceholderText('Todos os provedores'), {

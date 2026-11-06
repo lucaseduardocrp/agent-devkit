@@ -14,6 +14,8 @@ export interface Issue {
   readonly attachments?: readonly ImageAttachment[];
   readonly status: IssueStatus;
   readonly priority: IssuePriority;
+  /** Key of a configured work item type; empty when untyped. */
+  readonly type?: string;
   readonly assigneeAgentId: string | null;
   readonly assigneeUserId: string | null;
   readonly pbiItemId?: string | null;
@@ -173,6 +175,7 @@ export type IssueChanges = Partial<
     | 'attachments'
     | 'status'
     | 'priority'
+    | 'type'
     | 'assigneeAgentId'
     | 'assigneeUserId'
   >

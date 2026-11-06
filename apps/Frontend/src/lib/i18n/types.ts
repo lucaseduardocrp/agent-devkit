@@ -1628,6 +1628,15 @@ export interface I18nDictionary {
     readonly clientModel: string;
     readonly server: string;
     readonly activeRunsCount: string;
+    readonly stepDone: string;
+    readonly stepRunning: string;
+    readonly stepWaiting: string;
+    readonly stepPending: string;
+    readonly noActiveRun: string;
+    readonly noWorkflowSteps: string;
+    readonly runs: string;
+    readonly runResults: string;
+    readonly currentTask: string;
     readonly parentAgent: string;
     readonly noParentAgent: string;
     readonly parentAgentHelp: string;
@@ -2168,6 +2177,7 @@ export interface I18nDictionary {
     readonly workspace: string;
     readonly resizeNavigation: string;
     readonly sections: string;
+    readonly workItemTypes: string;
     readonly accessTokens: string;
     readonly accessTokensDesc: string;
     readonly tokenName: string;

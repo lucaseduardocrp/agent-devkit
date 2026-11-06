@@ -95,6 +95,7 @@ const nodeKinds = new Set<AgentWorkflowNodeKind>([
   'action',
   'condition',
   'delay',
+  'rule',
 ]);
 
 const conditionOperators = new Set<AgentWorkflowConditionOperator>([

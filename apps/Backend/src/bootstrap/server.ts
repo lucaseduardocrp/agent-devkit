@@ -36,6 +36,7 @@ import { HttpHubCatalog } from '../modules/hub/adapters/http-hub-catalog.js';
 import { PrismaAgentWorkflowRepository } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import type { PrismaAgentWorkflowClient } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import { PrismaIssueStore } from '../modules/issues/issue-store.js';
+import { PrismaIssueBriefStore } from '../modules/issues/agent-brief/brief-store.js';
 import { PrismaPbiStore } from '../modules/pbi/pbi-store.js';
 import { PrismaPbiRelationStore } from '../modules/pbi/pbi-relations.js';
 import { PrismaFieldMappingStore } from '../modules/field-mapping/prisma-field-mapping.js';
@@ -53,6 +54,7 @@ import { InMemoryTestSuiteStore } from '../modules/testplans/application/test-su
 import { PrismaTestSuiteStore } from '../modules/testplans/adapters/prisma-test-suites.js';
 import { InMemorySpecRepository } from '../modules/spec/application/spec-service.js';
 import { PrismaSpecRepository } from '../modules/spec/adapters/prisma-spec-repository.js';
+import { PrismaWorkItemTypeStore } from '../modules/work-item-types/work-item-types.js';
 import { PrismaDesignSettingsStore } from '../modules/design/adapters/prisma-design-settings-store.js';
 import { PrismaE2eStore } from '../modules/e2e/adapters/prisma-e2e-store.js';
 import { PrismaE2eJobQueue } from '../modules/e2e/adapters/prisma-e2e-queue.js';
@@ -226,6 +228,7 @@ const app = createApp({
     githubToken: process.env['ADK_HUB_GITHUB_TOKEN']?.trim() || undefined,
   }),
   issueStore: database ? new PrismaIssueStore(database.client) : undefined,
+  issueBriefStore: database ? new PrismaIssueBriefStore(database.client) : undefined,
   pbiStore: database ? new PrismaPbiStore(database.client) : undefined,
   pbiRelationStore: database ? new PrismaPbiRelationStore(database.client) : undefined,
   fieldMappingStore: database ? new PrismaFieldMappingStore(database.client) : undefined,
@@ -235,6 +238,7 @@ const app = createApp({
   savedTestPlans,
   testSuites,
   specRepository,
+  workItemTypes: database ? new PrismaWorkItemTypeStore(database.client) : undefined,
   designSettings: database ? new PrismaDesignSettingsStore(database.client) : undefined,
   e2eStore: database ? new PrismaE2eStore(database.client) : undefined,
   e2eQueue: database ? new PrismaE2eJobQueue(database.client) : undefined,

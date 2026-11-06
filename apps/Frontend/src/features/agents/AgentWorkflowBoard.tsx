@@ -72,7 +72,7 @@ const unassignedVisual = {
 };
 
 /** Rule card width: the row minus its three 56px gaps, split evenly. */
-const RULE_WIDTH = 'calc((100% - 168px) / 4)';
+
 
 /** The palette entry of each node kind the canvas can add. */
 const nodeKindVisuals: Record<
@@ -103,6 +103,11 @@ const nodeKindVisuals: Record<
     icon: 'ti-git-branch',
     className: 'bg-[var(--fill-pro)]/15 text-[var(--text-pro)]',
     label: 'agents.workflowConditionNode',
+  },
+  rule: {
+    icon: 'ti-shield-check',
+    className: 'bg-[var(--fill-accent)]/15 text-[var(--fill-accent)]',
+    label: 'agents.workflowAddRule',
   },
   delay: {
     icon: 'ti-clock-pause',
@@ -170,114 +175,40 @@ function Switch({
   );
 }
 
-/**
- * The workflow as a free flow canvas: a settings node, the steps, and the approval nodes, each
- * sitting where it was dropped and wired to as many others as the flow needs. A click on a node
- * opens it in the inspector; a step whose output reaches an approval node pauses the run.
- */
-export function AgentWorkflowBoard({
-  workflow,
-  agents,
-  isReadOnly = false,
-  isSaving = false,
-  isDirty = false,
-  toolNames,
-  providerOptions,
-  onChange,
-  onSave,
-}: AgentWorkflowBoardProps): React.JSX.Element {
-  const { t } = useI18n();
-  const [openNode, setOpenNode] = useState<string | null>(null);
-
-  const steps = workflow.steps;
-  const rules = workflow.rules;
-  const gateCount = countApprovalGates(steps);
-  /** The canvas as stored, repaired against the steps the workflow actually has. */
-  const graph = useMemo(() => normalizeGraph(workflow), [workflow]);
-
-  /** Every canvas change re-derives the step order and the approval gates from the connections. */
-  const commitGraph = (next: WorkflowGraph, base: AgentWorkflowDto = workflow) =>
-    onChange(applyGraph(base, next));
-
-  const updateStep = (stepId: string, patch: Partial<AgentWorkflowStepDto>) =>
-    onChange({
-      ...workflow,
-      steps: steps.map((step) => (step.id === stepId ? { ...step, ...patch } : step)),
-    });
-
-  /** New nodes continue the open end of the flow, so adding one does not leave it stranded. */
-  const appendNode = (id: string, kind: WorkflowNodeKind, base: AgentWorkflowDto) => {
-    const placed = addNode(graph, id, kind);
-    const tail = findChainTail(graph);
-    commitGraph(tail ? connectNodes(placed, tail, id) : placed, base);
-  };
-
-  /** A step is the only node kind that also carries a record outside the canvas. */
-  const addNodeOfKind = (kind: WorkflowNodeKind) => {
-    if (kind !== 'step') {
-      const id = newWorkflowId(kind);
-      appendNode(id, kind, workflow);
-      setOpenNode(id);
-      return;
-    }
-    const step: AgentWorkflowStepDto = {
-      id: newWorkflowId('step'),
-      name: '',
-      instructions: '',
-      reviewRequired: false,
-    };
-    appendNode(step.id, 'step', { ...workflow, steps: [...steps, step] });
-    setOpenNode(step.id);
-  };
-
-  const removeStep = (stepId: string) => {
-    commitGraph(removeNode(graph, stepId), {
-      ...workflow,
-      steps: steps.filter((step) => step.id !== stepId),
-    });
-    setOpenNode(null);
-  };
-
-  /** A node removed from the canvas takes its step with it; an approval node is only a node. */
-  const removeCanvasNode = (nodeId: string) => {
-    if (steps.some((step) => step.id === nodeId)) {
-      removeStep(nodeId);
-      return;
-    }
-    commitGraph(removeNode(graph, nodeId));
-    if (openNode === nodeId) setOpenNode(null);
-  };
-
-  const addRule = () => {
-    const rule: AgentWorkflowRuleDto = {
-      id: newWorkflowId('rule'),
-      name: `${t('agents.workflowRule')} ${rules.length + 1}`,
-      toolset: 'pbi',
-      effect: 'allow',
-    };
-    onChange({ ...workflow, rules: [...rules, rule] });
-    setOpenNode(rule.id);
-  };
-
-  const updateRule = (ruleId: string, patch: Partial<AgentWorkflowRuleDto>) =>
-    onChange({
-      ...workflow,
-      rules: rules.map((rule) => (rule.id === ruleId ? { ...rule, ...patch } : rule)),
-    });
-
-  const removeRule = (ruleId: string) => {
-    onChange({ ...workflow, rules: rules.filter((rule) => rule.id !== ruleId) });
-    setOpenNode(null);
-  };
-
+/** What a canvas node shows, by kind; shared by the editor and the read-only run view. */
+export function describeWorkflowNode(
+  node: WorkflowNode,
+  steps: readonly AgentWorkflowStepDto[],
+  agents: readonly CustomAgentDto[],
+  rules: readonly AgentWorkflowRuleDto[],
+  t: ReturnType<typeof useI18n>['t'],
+): WorkflowNodeView {
   const agentName = (step: AgentWorkflowStepDto) =>
     agents.find((agent) => agent.id === step.agentId)?.name ?? t('agents.workflowRequestedAgent');
 
   /** What each canvas node shows, by kind. */
-  const describeNode = (node: WorkflowNode): WorkflowNodeView => {
+  return ((node: WorkflowNode): WorkflowNodeView => {
     const visual = nodeKindVisuals[node.kind];
     const chrome = { icon: visual.icon, iconClassName: visual.className };
     switch (node.kind) {
+      case 'rule': {
+        const index = rules.findIndex((rule) => rule.id === node.id);
+        const rule = rules[index];
+        const denied = rule?.effect === 'deny';
+        return {
+          icon: denied ? 'ti-shield-x' : 'ti-shield-check',
+          iconClassName: denied
+            ? 'bg-red-500/15 text-red-300'
+            : 'bg-[var(--fill-accent)]/15 text-[var(--fill-accent)]',
+          kicker: t('agents.workflowRuleNumber', { number: padNumber(index + 1) }),
+          title: rule?.name || t('agents.workflowRule'),
+          subtitle: rule
+            ? `${t(toolsetLabels[rule.toolset])} · ${
+                denied ? t('agents.workflowActionBlocked') : t('agents.workflowActionAllowed')
+              }`
+            : '',
+        };
+      }
       case 'approval':
         return {
           ...chrome,
@@ -334,7 +265,122 @@ export function AgentWorkflowBoard({
         };
       }
     }
+  })(node);
+}
+
+/**
+ * The workflow as a free flow canvas: a settings node, the steps, and the approval nodes, each
+ * sitting where it was dropped and wired to as many others as the flow needs. A click on a node
+ * opens it in the inspector; a step whose output reaches an approval node pauses the run.
+ */
+export function AgentWorkflowBoard({
+  workflow,
+  agents,
+  isReadOnly = false,
+  isSaving = false,
+  isDirty = false,
+  toolNames,
+  providerOptions,
+  onChange,
+  onSave,
+}: AgentWorkflowBoardProps): React.JSX.Element {
+  const { t } = useI18n();
+  const [openNode, setOpenNode] = useState<string | null>(null);
+
+  const steps = workflow.steps;
+  const rules = workflow.rules;
+  const gateCount = countApprovalGates(steps);
+  /** The canvas as stored, repaired against the steps the workflow actually has. */
+  const graph = useMemo(() => normalizeGraph(workflow), [workflow]);
+
+  /** Every canvas change re-derives the step order and the approval gates from the connections. */
+  const commitGraph = (next: WorkflowGraph, base: AgentWorkflowDto = workflow) =>
+    onChange(applyGraph(base, next));
+
+  const updateStep = (stepId: string, patch: Partial<AgentWorkflowStepDto>) =>
+    onChange({
+      ...workflow,
+      steps: steps.map((step) => (step.id === stepId ? { ...step, ...patch } : step)),
+    });
+
+  /** New nodes continue the open end of the flow, so adding one does not leave it stranded. */
+  const appendNode = (id: string, kind: WorkflowNodeKind, base: AgentWorkflowDto) => {
+    const placed = addNode(graph, id, kind);
+    const tail = findChainTail(graph);
+    commitGraph(tail ? connectNodes(placed, tail, id) : placed, base);
   };
+
+  /** A step is the only node kind that also carries a record outside the canvas. */
+  const addNodeOfKind = (kind: WorkflowNodeKind) => {
+    if (kind === 'rule') {
+      addRule();
+      return;
+    }
+    if (kind !== 'step') {
+      const id = newWorkflowId(kind);
+      appendNode(id, kind, workflow);
+      setOpenNode(id);
+      return;
+    }
+    const step: AgentWorkflowStepDto = {
+      id: newWorkflowId('step'),
+      name: '',
+      instructions: '',
+      reviewRequired: false,
+    };
+    appendNode(step.id, 'step', { ...workflow, steps: [...steps, step] });
+    setOpenNode(step.id);
+  };
+
+  const removeStep = (stepId: string) => {
+    commitGraph(removeNode(graph, stepId), {
+      ...workflow,
+      steps: steps.filter((step) => step.id !== stepId),
+    });
+    setOpenNode(null);
+  };
+
+  /** A node removed from the canvas takes its step with it; an approval node is only a node. */
+  const removeCanvasNode = (nodeId: string) => {
+    if (rules.some((rule) => rule.id === nodeId)) {
+      removeRule(nodeId);
+      return;
+    }
+    if (steps.some((step) => step.id === nodeId)) {
+      removeStep(nodeId);
+      return;
+    }
+    commitGraph(removeNode(graph, nodeId));
+    if (openNode === nodeId) setOpenNode(null);
+  };
+
+  const addRule = () => {
+    const rule: AgentWorkflowRuleDto = {
+      id: newWorkflowId('rule'),
+      name: `${t('agents.workflowRule')} ${rules.length + 1}`,
+      toolset: 'pbi',
+      effect: 'allow',
+    };
+    commitGraph(addNode(graph, rule.id, 'rule'), { ...workflow, rules: [...rules, rule] });
+    setOpenNode(rule.id);
+  };
+
+  const updateRule = (ruleId: string, patch: Partial<AgentWorkflowRuleDto>) =>
+    onChange({
+      ...workflow,
+      rules: rules.map((rule) => (rule.id === ruleId ? { ...rule, ...patch } : rule)),
+    });
+
+  const removeRule = (ruleId: string) => {
+    commitGraph(removeNode(graph, ruleId), {
+      ...workflow,
+      rules: rules.filter((rule) => rule.id !== ruleId),
+    });
+    setOpenNode(null);
+  };
+
+  const describeNode = (node: WorkflowNode): WorkflowNodeView =>
+    describeWorkflowNode(node, steps, agents, rules, t);
 
   const openStep = steps.find((step) => step.id === openNode) ?? null;
   const openIndex = openStep ? steps.indexOf(openStep) : -1;
@@ -416,6 +462,7 @@ export function AgentWorkflowBoard({
           graph={graph}
           isReadOnly={isReadOnly}
           isDimmed={!workflow.enabled}
+          canvasClassName="h-[calc(100vh-17rem)] min-h-[480px]"
           selectedNodeId={openNode}
           describeNode={describeNode}
           onOpenNode={setOpenNode}
@@ -436,7 +483,11 @@ export function AgentWorkflowBoard({
               variant="outline"
               size="sm"
               onClick={() => addNodeOfKind(kind)}
-              disabled={isReadOnly || (kind === 'step' && steps.length >= 20)}
+              disabled={
+                isReadOnly ||
+                (kind === 'step' && steps.length >= 20) ||
+                (kind === 'rule' && rules.length >= 100)
+              }
               data-testid={`workflow-add-${kind}`}
             >
               <i
@@ -455,74 +506,6 @@ export function AgentWorkflowBoard({
               {t('agents.workflowIncompleteNodes', { count: problems.length })}
             </span>
           )}
-        </div>
-
-        {/* Module rules: nodes of the same board, opened and added like the steps. */}
-        <div className="flex flex-col gap-4 overflow-x-auto border-t border-[var(--border)] px-7 pb-8 pt-6">
-          <span className="text-sm font-semibold text-[var(--text-primary)]">
-            {t('agents.workflowRules')}
-          </span>
-          <div className="flex min-w-[880px] flex-wrap gap-x-14 gap-y-5">
-            {rules.map((rule, index) => (
-              <button
-                key={rule.id}
-                type="button"
-                aria-pressed={openNode === rule.id}
-                onClick={() => setOpenNode(rule.id)}
-                style={{ width: RULE_WIDTH }}
-                data-testid={`workflow-rule-node-${index + 1}`}
-                className={cn(
-                  'flex h-[104px] shrink-0 items-start gap-3 rounded-2xl border-[1.5px] bg-[var(--surface-2)] p-3.5 text-left shadow-sm transition-colors hover:border-[var(--fill-accent)]',
-                  openNode === rule.id
-                    ? 'border-[var(--fill-accent)] ring-4 ring-[var(--fill-accent)]/15'
-                    : 'border-[var(--border)]',
-                )}
-              >
-                <span
-                  className={cn(
-                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
-                    rule.effect === 'deny'
-                      ? 'bg-red-500/15 text-red-300'
-                      : 'bg-[var(--fill-accent)]/15 text-[var(--fill-accent)]',
-                  )}
-                >
-                  <i
-                    className={cn(
-                      'ti text-lg',
-                      rule.effect === 'deny' ? 'ti-shield-x' : 'ti-shield-check',
-                    )}
-                    aria-hidden="true"
-                  />
-                </span>
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
-                    {t('agents.workflowRuleNumber', { number: padNumber(index + 1) })}
-                  </span>
-                  <span className="line-clamp-2 text-sm font-semibold text-[var(--text-primary)]">
-                    {rule.name || t('agents.workflowRule')}
-                  </span>
-                  <span className="truncate text-xs text-[var(--text-secondary)]">
-                    {`${t(toolsetLabels[rule.toolset])} · ${
-                      rule.effect === 'deny'
-                        ? t('agents.workflowActionBlocked')
-                        : t('agents.workflowActionAllowed')
-                    }`}
-                  </span>
-                </span>
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={addRule}
-              disabled={isReadOnly || rules.length >= 100}
-              style={{ width: RULE_WIDTH }}
-              data-testid="workflow-add-rule"
-              className="flex h-[104px] shrink-0 flex-col items-center justify-center gap-2 rounded-2xl border-[1.5px] border-dashed border-[var(--border)] text-sm font-medium text-[var(--text-muted)] transition-colors hover:border-[var(--fill-accent)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <i className="ti ti-plus text-xl" aria-hidden="true" />
-              {t('agents.workflowAddRule')}
-            </button>
-          </div>
         </div>
       </section>
 

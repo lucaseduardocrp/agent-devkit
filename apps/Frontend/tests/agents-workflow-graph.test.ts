@@ -18,6 +18,7 @@ import {
   newWorkflowId,
   nextNodePosition,
   nodeSize,
+  nodePorts,
   normalizeGraph,
   outputPort,
   removeNode,
@@ -320,5 +321,49 @@ describe('workflow-graph derivation', () => {
 
   it('counts the steps that pause the run', () => {
     expect(countApprovalGates([step('a', { reviewRequired: true }), step('b')])).toBe(1);
+  });
+});
+
+describe('rule nodes', () => {
+  const rule = (id: string) => ({
+    id,
+    name: id,
+    toolset: 'pbi' as const,
+    effect: 'allow' as const,
+  });
+
+  it('puts every module rule on the canvas, below the flow, without connections', () => {
+    const workflow = { ...workflowOf([step('a')]), rules: [rule('r1'), rule('r2')] };
+    const graph = normalizeGraph(workflow);
+    const rules = graph.nodes.filter((node) => node.kind === 'rule');
+    expect(rules.map((node) => node.id)).toEqual(['r1', 'r2']);
+    expect(rules[1]!.x).toBeGreaterThan(rules[0]!.x);
+    expect(graph.edges.some((edge) => edge.from === 'r1' || edge.to === 'r1')).toBe(false);
+    expect(nodePorts(rules[0]!)).toEqual([]);
+  });
+
+  it('drops the node of a rule that no longer exists and keeps the saved position', () => {
+    const workflow = {
+      ...workflowOf([step('a')], {
+        nodes: [
+          { id: 'start', kind: 'trigger', x: 0, y: 0 },
+          { id: 'a', kind: 'step', x: 300, y: 0 },
+          { id: 'r1', kind: 'rule', x: 40, y: 400 },
+          { id: 'gone', kind: 'rule', x: 80, y: 400 },
+        ],
+        edges: [],
+      } as AgentWorkflowDto['canvas']),
+      rules: [rule('r1')],
+    };
+    const graph = normalizeGraph(workflow);
+    expect(graph.nodes.map((node) => node.id)).toEqual(['start', 'a', 'r1']);
+    expect(graph.nodes.find((node) => node.id === 'r1')).toMatchObject({ x: 40, y: 400 });
+  });
+
+  it('places a new rule on the rule row', () => {
+    const graph = normalizeGraph(workflowOf([step('a')]));
+    const next = addNode(graph, 'r9', 'rule');
+    const placed = next.nodes.find((node) => node.id === 'r9')!;
+    expect(placed.y).toBeGreaterThan(graph.nodes.find((node) => node.id === 'a')!.y);
   });
 });

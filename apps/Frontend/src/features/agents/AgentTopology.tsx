@@ -4,7 +4,8 @@ import { Button } from '../../components/ui/button.js';
 import { SkeletonCard } from '../../components/ui/skeleton.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import type { AgentRun, Issue } from '../issues/issue-types.js';
-import type { CustomAgentDto } from './agent-types.js';
+import type { AgentWorkflowDto, CustomAgentDto } from './agent-types.js';
+import { AgentRunFlowModal } from './AgentRunFlowModal.js';
 
 interface AgentTopologyProps {
   readonly agents: readonly CustomAgentDto[];
@@ -13,6 +14,8 @@ interface AgentTopologyProps {
   readonly isLoading: boolean;
   readonly error: string | null;
   readonly onRefresh: () => void;
+  /** The workspace workflow, shown on the canvas of the run modal. */
+  readonly workflow: AgentWorkflowDto;
   /** Without it the empty map does not invite the member to create agents. */
   readonly canCreateAgents?: boolean;
 }
@@ -36,10 +39,12 @@ export function AgentTopology({
   isLoading,
   error,
   onRefresh,
+  workflow,
   canCreateAgents = true,
 }: AgentTopologyProps): React.JSX.Element {
   const { t } = useI18n();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const activeRuns = useMemo(
     () =>
       runs.filter((run) =>
@@ -92,36 +97,36 @@ export function AgentTopology({
   const selectedRuns = selectedAgent
     ? activeRuns.filter((run) => run.agentId === selectedAgent.id)
     : [];
+  const taskLabel = (run: AgentRun) => {
+    const issue = issueById.get(run.issueId);
+    return issue ? `#${issue.number} ${issue.title}` : `#${run.issueId.slice(0, 8)}`;
+  };
   const runningCount = activeRuns.filter((run) => run.status === 'running').length;
   const waitingCount = activeRuns.filter((run) => run.status.startsWith('waiting_')).length;
   const queuedCount = activeRuns.length - runningCount - waitingCount;
 
   return (
     <section className="space-y-4" data-testid="agent-topology">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-[var(--text-primary)]">{t('agents.map')}</h2>
-          <p className="text-sm text-[var(--text-secondary)]">{t('agents.mapDescription')}</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="sr-only">{t('agents.map')}</h2>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <Badge variant="outline">
+            {agents.length} {t('agents.agentsUnit')}
+          </Badge>
+          <Badge variant="success">
+            {runningCount} {t('agents.running')}
+          </Badge>
+          <Badge variant="default">
+            {queuedCount} {t('agents.queued')}
+          </Badge>
+          <Badge variant="outline">
+            {waitingCount} {t('agents.waitingForUser')}
+          </Badge>
         </div>
         <Button type="button" variant="outline" onClick={onRefresh} disabled={isLoading}>
           <i className="ti ti-refresh mr-2" aria-hidden="true" />
           {t('agents.refreshMap')}
         </Button>
-      </div>
-
-      <div className="flex flex-wrap gap-2 text-xs">
-        <Badge variant="outline">
-          {agents.length} {t('agents.agentsUnit')}
-        </Badge>
-        <Badge variant="success">
-          {runningCount} {t('agents.running')}
-        </Badge>
-        <Badge variant="default">
-          {queuedCount} {t('agents.queued')}
-        </Badge>
-        <Badge variant="outline">
-          {waitingCount} {t('agents.waitingForUser')}
-        </Badge>
       </div>
 
       <div
@@ -233,7 +238,10 @@ export function AgentTopology({
                   key={agent.id}
                   type="button"
                   variant="outline"
-                  onClick={() => setSelectedAgentId(agent.id)}
+                  onClick={() => {
+                    setSelectedRunId(null);
+                    setSelectedAgentId(agent.id);
+                  }}
                   aria-label={`${agent.name}: ${statusText}`}
                   aria-pressed={selectedAgentId === agent.id}
                   data-testid={`topology-agent-${agent.id}`}
@@ -259,56 +267,69 @@ export function AgentTopology({
                       {statusText}
                     </span>
                   </span>
+                  {agentRuns[0] && (
+                    <span
+                      data-testid={`topology-agent-task-${agent.id}`}
+                      className="w-full truncate text-xs text-emerald-300"
+                    >
+                      {taskLabel(agentRuns[0])}
+                      {agentRuns.length > 1 ? ` +${agentRuns.length - 1}` : ''}
+                    </span>
+                  )}
                 </Button>
               );
             })}
             {activeRuns.map((run, index) => {
               const issue = issueById.get(run.issueId);
               return (
-                <div
+                <button
                   key={run.id}
+                  type="button"
                   data-testid={`topology-run-${run.id}`}
-                  className="absolute flex h-[84px] flex-col justify-center gap-1 rounded-xl border border-emerald-400/40 bg-[var(--surface-1)] px-4 shadow-sm"
+                  onClick={() => {
+                    setSelectedRunId(run.id);
+                    setSelectedAgentId(run.agentId);
+                  }}
+                  className="absolute flex h-[84px] flex-col items-start justify-center gap-1 overflow-hidden rounded-xl border border-emerald-400/40 bg-[var(--surface-1)] px-4 text-left shadow-sm hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fill-accent)]"
                   style={{
                     left: layout.issueX,
                     top: PADDING + index * ROW_HEIGHT,
                     width: NODE_WIDTH,
                   }}
                 >
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">
+                  <span className="w-full truncate text-[10px] font-semibold uppercase tracking-wide text-emerald-400">
                     {run.status === 'running'
                       ? t('agents.runningIssue')
                       : run.status.startsWith('waiting_')
                         ? t('agents.waitingIssue')
                         : t('agents.queuedIssue')}
                   </span>
-                  <span className="truncate text-sm font-medium text-[var(--text-primary)]">
+                  <span className="w-full truncate text-sm font-medium text-[var(--text-primary)]">
                     {issue ? `#${issue.number} ${issue.title}` : `#${run.issueId.slice(0, 8)}`}
                   </span>
-                  <span className="text-xs text-[var(--text-secondary)]">
+                  <span className="w-full truncate text-xs text-[var(--text-secondary)]">
+                    {agentById.get(run.agentId)?.name ?? ''} ·{' '}
                     {run.mode === 'host' ? t('agents.clientModel') : t('agents.server')}
                   </span>
-                </div>
+                </button>
               );
             })}
           </div>
         </div>
       )}
 
-      {selectedAgent && (
-        <div
-          className="rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-4 text-sm"
-          data-testid="topology-selection"
-        >
-          <h3 className="font-semibold text-[var(--text-primary)]">{selectedAgent.name}</h3>
-          <p className="mt-1 text-[var(--text-secondary)]">
-            {selectedAgent.description || t('agents.noDescription')}
-          </p>
-          <p className="mt-2 text-xs text-[var(--text-muted)]">
-            {t('agents.activeRunsCount', { count: selectedRuns.length })}
-          </p>
-        </div>
-      )}
+      <AgentRunFlowModal
+        agent={selectedAgent ?? null}
+        runs={selectedRuns}
+        issues={issues}
+        agents={agents}
+        workflow={workflow}
+        initialRunId={selectedRunId}
+        onClose={() => {
+          setSelectedAgentId(null);
+          setSelectedRunId(null);
+        }}
+      />
     </section>
   );
 }

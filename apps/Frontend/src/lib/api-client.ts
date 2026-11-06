@@ -22,6 +22,11 @@ import type {
 } from '../features/agents/agent-types.js';
 import type { SupportedLocale } from './i18n/types.js';
 import type {
+  IssueAgentBrief,
+  IssueAgentBriefEdits,
+} from '../features/issues/agent-brief-types.js';
+import type { WorkItemType } from '../features/work-item-types/work-item-types.js';
+import type {
   ApiCollection,
   ApiCollectionSummary,
   ApiEnvironment,
@@ -895,8 +900,9 @@ export class ApiClient {
       }),
     });
   }
-  public async pullPbiBoards(): Promise<PbiPullResult> {
-    return this.issueRequest('/pbi/pull', { method: 'POST' });
+  public async pullPbiBoards(providerId?: string): Promise<PbiPullResult> {
+    const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : '';
+    return this.issueRequest(`/pbi/pull${query}`, { method: 'POST' });
   }
   public async createPbiItem(fields: PbiFields): Promise<PbiItem> {
     return (
@@ -1025,6 +1031,41 @@ export class ApiClient {
         body: JSON.stringify(changes),
       })
     ).issue;
+  }
+
+  public async getIssueBrief(id: string, signal?: AbortSignal): Promise<IssueAgentBrief | null> {
+    return (
+      await this.issueRequest<{ brief: IssueAgentBrief | null }>(
+        `/issues/${encodeURIComponent(id)}/brief`,
+        { signal },
+      )
+    ).brief;
+  }
+
+  public async updateIssueBrief(id: string, edits: IssueAgentBriefEdits): Promise<IssueAgentBrief> {
+    return (
+      await this.issueRequest<{ brief: IssueAgentBrief }>(
+        `/issues/${encodeURIComponent(id)}/brief`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(edits),
+        },
+      )
+    ).brief;
+  }
+
+  public async regenerateIssueBrief(id: string, force = false): Promise<IssueAgentBrief> {
+    return (
+      await this.issueRequest<{ brief: IssueAgentBrief }>(
+        `/issues/${encodeURIComponent(id)}/brief/regenerate`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ force }),
+        },
+      )
+    ).brief;
   }
 
   public async deleteIssue(id: string): Promise<void> {
@@ -1620,6 +1661,16 @@ export class ApiClient {
     );
     if (!response.ok) return this.handleErrorResponse(response);
     return response.text();
+  }
+
+  /** Work item types (name, color, icon) that color PBI cards and issues. */
+  public async getWorkItemTypes(): Promise<readonly WorkItemType[]> {
+    return (await this.getJson<{ types: readonly WorkItemType[] }>('/work-item-types')).types;
+  }
+  public async saveWorkItemTypes(types: readonly WorkItemType[]): Promise<readonly WorkItemType[]> {
+    return (
+      await this.sendJson<{ types: readonly WorkItemType[] }>('/work-item-types', 'PUT', { types })
+    ).types;
   }
 
   /** Repository the Design module works in, chosen in its own settings. */

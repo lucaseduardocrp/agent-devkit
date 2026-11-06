@@ -471,7 +471,8 @@ export function ReleaseNotesView({ apiClient, workspaceId, isReadOnly = false }:
                     <Button
                       variant="ghost"
                       role="menuitem"
-                      className="flex w-full justify-start text-left text-red-400"
+                      className="flex w-full justify-start text-left"
+                              data-destructive
                       onClick={() => setDeleteNote(note)}
                     >
                       <i className="ti ti-trash" aria-hidden="true" /> {c.delete}

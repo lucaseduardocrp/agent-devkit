@@ -189,6 +189,8 @@ model IssueRecord {
   attachments     Json     @default("[]")
   status          String   @default("todo")
   priority        String   @default("medium")
+  /// Key of a configured work item type (see WorkItemTypeSettingsRecord); empty when untyped.
+  type            String   @default("")
   assigneeAgentId String?  @map("assignee_agent_id")
   assigneeUserId  String?  @map("assignee_user_id")
   createdBy       String   @map("created_by")
@@ -204,11 +206,26 @@ model IssueRecord {
   inbox     IssueInboxRecord[]
   runs      AgentRunRecord[]
   pbiItem   PbiItemRecord?       @relation(fields: [pbiItemId], references: [id], onDelete: SetNull)
+  brief     IssueBriefRecord?
 
   @@unique([workspaceId, number], map: "issues_workspace_number_key")
   @@index([workspaceId, updatedAt], map: "issues_workspace_updated_idx")
   @@index([workspaceId, pbiItemId], map: "issues_workspace_pbi_idx")
   @@map("issues")
+}
+
+/// Execution plan the brief engine derives for an issue so an agent runs with the right model and context.
+model IssueBriefRecord {
+  issueId     String   @id @map("issue_id")
+  workspaceId String   @map("workspace_id")
+  data        Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  issue IssueRecord @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId], map: "issue_briefs_workspace_idx")
+  @@map("issue_briefs")
 }
 
 model PbiItemRecord {
@@ -662,6 +679,16 @@ model E2eCreationRecord {
   @@index([workspaceId, updatedAt], map: "e2e_creations_workspace_updated_idx")
   @@index([status], map: "e2e_creations_status_idx")
   @@map("e2e_creations")
+}
+
+/// Work item types (name, color, icon) a workspace uses to tag PBI cards and issues.
+model WorkItemTypeSettingsRecord {
+  workspaceId String   @id @map("workspace_id")
+  types       Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("work_item_type_settings")
 }
 
 /// Repository the Design module keeps its prototypes and design systems in.

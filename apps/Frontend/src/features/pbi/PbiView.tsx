@@ -19,7 +19,7 @@ import { Select } from '../../components/ui/select.js';
 import { Pagination, PagingSentinel, usePaging } from '../../components/ui/pagination.js';
 import { Modal } from '../../components/ui/modal.js';
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog.js';
-import { SkeletonCard } from '../../components/ui/skeleton.js';
+import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/skeleton.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { parseMarkdownBlocks, renderInlineContent } from '../brain/markdown-parser.js';
 import { useActivityRunner } from '../activities/ActivityCenter.js';
@@ -31,6 +31,21 @@ import { usePermissions } from '../workspaces/permissions.js';
 import { PbiPushDialog } from './PbiPushDialog.js';
 import type { FieldValue } from '../field-mapping/types.js';
 import { PbiLinks } from './PbiLinks.js';
+import {
+  WorkItemTypeBadge,
+  resolveWorkItemType,
+  useWorkItemTypes,
+  resolveTypePalette,
+} from '../work-item-types/work-item-types.js';
+import {
+  KanbanCardPending,
+  KanbanCardSaving,
+  KanbanDraftBar,
+  KanbanDropPlaceholder,
+  kanbanCardStateClass,
+  kanbanColumnClass,
+} from '../../components/ui/kanban.js';
+import { useKanbanDraft } from '../../lib/use-kanban-draft.js';
 import { AttachmentPanel } from '../shared/AttachmentPanel.js';
 import {
   discardDrafts,
@@ -188,60 +203,29 @@ function displayType(item: PbiItem): string {
     (item.kind === 'pbi' ? 'PBI' : 'Card')
   );
 }
-function typeAppearance(item: PbiItem): {
-  icon: string;
-  colors: string;
-  iconColor: string;
-} {
-  const type = displayType(item).trim().toLocaleLowerCase('pt-BR');
-  if (type === 'bug')
-    return {
-      icon: 'ti-bug',
-      colors: 'border-red-500/25 bg-red-500/10 text-red-300',
-      iconColor: 'text-red-400',
-    };
-  if (type === 'task' || type === 'tarefa')
-    return {
-      icon: 'ti-checklist',
-      colors: 'border-sky-500/25 bg-sky-500/10 text-sky-300',
-      iconColor: 'text-sky-400',
-    };
-  if (type === 'sac')
-    return {
-      icon: 'ti-message-circle',
-      colors: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
-      iconColor: 'text-amber-400',
-    };
-  if (type.startsWith('plano de'))
-    return {
-      icon: 'ti-clipboard-list',
-      colors: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
-      iconColor: 'text-emerald-400',
-    };
-  if (type === 'product backlog item' || type === 'pbi' || type === 'user story')
-    return {
-      icon: 'ti-layout-kanban',
-      colors: 'border-violet-500/25 bg-violet-500/10 text-violet-300',
-      iconColor: 'text-violet-400',
-    };
-  if (type === 'epic')
-    return {
-      icon: 'ti-flag',
-      colors: 'border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300',
-      iconColor: 'text-fuchsia-400',
-    };
-  if (type === 'feature')
-    return {
-      icon: 'ti-sparkles',
-      colors: 'border-cyan-500/25 bg-cyan-500/10 text-cyan-300',
-      iconColor: 'text-cyan-400',
-    };
-  return {
-    icon: item.kind === 'card' ? 'ti-file-description' : 'ti-folder',
-    colors: 'border-slate-500/25 bg-slate-500/10 text-slate-300',
-    iconColor: 'text-[var(--text-secondary)]',
-  };
-}
+const fallbackTypeIcon = (item: PbiItem) => (item.kind === 'card' ? 'file-description' : 'folder');
+/** Workflow states in their usual board order; others follow alphabetically. */
+const stateOrder = [
+  'new',
+  'to do',
+  'todo',
+  'backlog',
+  'approved',
+  'committed',
+  'active',
+  'doing',
+  'in progress',
+  'resolved',
+  'in review',
+  'done',
+  'closed',
+  'removed',
+];
+const stateRank = (state: string) => {
+  const index = stateOrder.indexOf(state.trim().toLocaleLowerCase());
+  return index === -1 ? stateOrder.length : index;
+};
+const kanbanPageSize = 40;
 const hiddenWorkItemTypes = new Set(['test case']);
 function shouldHideItem(item: PbiItem): boolean {
   return (
@@ -449,6 +433,8 @@ const copy = {
     subtitle: 'Backlog do workspace, cards e integrações',
     refresh: 'Atualizar',
     pullAll: 'Pull de todos',
+    pullFrom: 'Pull apenas de',
+    loadingItem: 'Carregando item...',
     newPbi: 'Novo PBI',
     loadError: 'Não foi possível carregar os PBIs.',
     actionError: 'Não foi possível concluir a ação.',
@@ -516,14 +502,37 @@ const copy = {
     membersError: 'Não foi possível carregar os membros do workspace.',
     savedFilters: 'Filtros salvos',
     saveFilter: 'Salvar filtro',
+    showFilters: 'Filtros',
+    hideFilters: 'Ocultar filtros',
     saveFilterTitle: 'Salvar filtros atuais',
     filterName: 'Nome do filtro',
     deleteSavedFilter: 'Excluir filtro salvo',
+    viewMode: 'Modo de visualização',
+    listView: 'Lista',
+    kanbanView: 'Kanban',
+    showMore: 'Mostrar mais',
+    emptyColumn: 'Sem itens',
+    dropHere: 'Mover para',
+    savingMove: 'Salvando movimento',
+    draftPendingCard: 'Alteração pendente',
+    draftLabels: {
+      pending: 'movimento(s) pendente(s): salvos automaticamente quando você parar de mexer',
+      saving: 'Salvando alterações',
+      offline:
+        'Sem conexão: as alterações ficam guardadas neste navegador e serão enviadas ao reconectar.',
+      error: 'Não foi possível salvar',
+      saveNow: 'Salvar agora',
+      retry: 'Tentar novamente',
+      discard: 'Descartar',
+    },
+    moveError: 'Não foi possível mover o item.',
   },
   'en-US': {
     subtitle: 'Workspace backlog, cards and integrations',
     refresh: 'Refresh',
     pullAll: 'Pull all',
+    pullFrom: 'Pull only from',
+    loadingItem: 'Loading item...',
     newPbi: 'New PBI',
     loadError: 'Could not load PBIs.',
     actionError: 'Could not complete the action.',
@@ -591,9 +600,29 @@ const copy = {
     membersError: 'Could not load workspace members.',
     savedFilters: 'Saved filters',
     saveFilter: 'Save filter',
+    showFilters: 'Filters',
+    hideFilters: 'Hide filters',
     saveFilterTitle: 'Save current filters',
     filterName: 'Filter name',
     deleteSavedFilter: 'Delete saved filter',
+    viewMode: 'View mode',
+    listView: 'List',
+    kanbanView: 'Kanban',
+    showMore: 'Show more',
+    emptyColumn: 'No items',
+    dropHere: 'Move to',
+    savingMove: 'Saving move',
+    draftPendingCard: 'Pending change',
+    draftLabels: {
+      pending: 'pending move(s): saved automatically once you stop',
+      saving: 'Saving changes',
+      offline: 'Offline: changes are kept in this browser and sent when you reconnect.',
+      error: 'Could not save',
+      saveNow: 'Save now',
+      retry: 'Try again',
+      discard: 'Discard',
+    },
+    moveError: 'Could not move the item.',
   },
 } as const;
 
@@ -616,11 +645,54 @@ export function PbiView({
   const canViewAgents = permissions.can('agents');
   const { runActivity } = useActivityRunner();
   const c = copy[locale];
-  const [items, setItems] = useState<PbiItem[]>([]);
+  const workItemTypes = useWorkItemTypes(apiClient, workspaceId, refreshToken);
+  const [viewMode, setViewMode] = useState<'list' | 'kanban'>(() => {
+    try {
+      return localStorage.getItem(`adk:pbi-view:${workspaceId ?? 'default'}`) === 'kanban'
+        ? 'kanban'
+        : 'list';
+    } catch {
+      return 'list';
+    }
+  });
+  const chooseViewMode = (mode: 'list' | 'kanban') => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(`adk:pbi-view:${workspaceId ?? 'default'}`, mode);
+    } catch {
+      // Storage can be unavailable in private browsing.
+    }
+  };
+  const [kanbanLimits, setKanbanLimits] = useState<Record<string, number>>({});
+  const [dragOverState, setDragOverState] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [rawItems, setItems] = useState<PbiItem[]>([]);
+  // Moves made on the board are a draft: sent in one batch after a pause, kept in the browser
+  // meanwhile, and sent again if the tab is hidden, closed or the connection drops.
+  const kanbanDraft = useKanbanDraft({
+    storageKey: workspaceId ? `adk:kanban-draft:pbi:${workspaceId}` : null,
+    save: async (id, to) => {
+      await apiClient.updatePbiItem(id, { status: to });
+      setItems((list) => list.map((entry) => (entry.id === id ? { ...entry, status: to } : entry)));
+    },
+  });
+  /** The server items with the draft applied; positions are kept, so cards stay in order. */
+  const items = useMemo(
+    () =>
+      Object.keys(kanbanDraft.draft).length
+        ? rawItems.map((entry) =>
+            entry.id in kanbanDraft.draft
+              ? { ...entry, status: kanbanDraft.draft[entry.id]!.to }
+              : entry,
+          )
+        : rawItems,
+    [rawItems, kanbanDraft.draft],
+  );
   const [providers, setProviders] = useState<PbiProvider[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [pulling, setPulling] = useState(false);
+  const [formLoadingId, setFormLoadingId] = useState<string | null>(null);
   const [pushingIds, setPushingIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -649,6 +721,7 @@ export function PbiView({
   columnWidthsRef.current = columnWidths;
   workspaceIdRef.current = workspaceId;
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [form, setForm] = useState<ItemForm | null>(null);
   const [syncingChildrenId, setSyncingChildrenId] = useState<string | null>(null);
   const [childrenError, setChildrenError] = useState<string | null>(null);
@@ -960,6 +1033,9 @@ export function PbiView({
     assignee: assigneeFilter,
   };
   const hasFilters = Object.values(currentFilters).some((value) => value.trim());
+  const activeFilterCount = [sourceFilter, statusFilter, iterationFilter, assigneeFilter].filter(
+    (value) => value.trim(),
+  ).length;
   const activeSavedFilter = savedFilters.find((saved) =>
     (Object.keys(currentFilters) as (keyof FilterValues)[]).every(
       (key) => saved[key] === currentFilters[key],
@@ -1052,6 +1128,28 @@ export function PbiView({
     }
     return map;
   }, [visible]);
+  /** Kanban: every item that passes the filters, grouped by state in board order. */
+  const kanbanColumns = useMemo(() => {
+    const groups = new Map<string, PbiItem[]>();
+    for (const item of visibleItems) {
+      if (shownIds && !shownIds.has(item.id)) continue;
+      const state = item.status || 'backlog';
+      const group = groups.get(state);
+      if (group) group.push(item);
+      else groups.set(state, [item]);
+    }
+    for (const state of statuses) if (!groups.has(state)) groups.set(state, []);
+    return [...groups.entries()]
+      .sort(([a], [b]) => stateRank(a) - stateRank(b) || a.localeCompare(b))
+      .map(([state, list]) => ({
+        state,
+        items: list.sort((a, b) => a.position - b.position || a.title.localeCompare(b.title)),
+      }));
+  }, [visibleItems, shownIds, statuses]);
+  const moveItem = (id: string, status: string) => {
+    const current = rawItems.find((entry) => entry.id === id);
+    if (current) kanbanDraft.move(id, current.status, status);
+  };
   const runAction = async (task: () => Promise<void>) => {
     setBusy(true);
     setError(null);
@@ -1064,10 +1162,16 @@ export function PbiView({
       setBusy(false);
     }
   };
-  const pull = () => {
+  const pull = (providerId?: string) => {
+    // The pull buttons are disabled while pulling; this only guards a double call.
+    /* v8 ignore next */
+    if (pulling) return;
     setPulling(true);
-    void runActivity({ kind: 'pull', title: c.pullAll }, async () => {
-      const result = await apiClient.pullPbiBoards();
+    const title = providerId
+      ? `${c.pullFrom} ${providerNames[providerId as PbiProviderId] ?? providerId}`
+      : c.pullAll;
+    void runActivity({ kind: 'pull', title }, async () => {
+      const result = await apiClient.pullPbiBoards(providerId);
       onPbiChanged?.();
       const failed = result.results.filter((entry) => entry.error);
       if (failed.length)
@@ -1194,20 +1298,41 @@ export function PbiView({
   };
   // The form opens with the full item only: saving a list item would overwrite its
   // description and provider fields with the excerpt.
-  const editItem = (item: PbiItem) =>
-    withFullItem(item, (full) =>
-      setForm({
-        id: full.id,
-        kind: full.kind,
-        title: full.title,
-        description: full.description,
-        status: full.status,
-        parentId: full.parentId,
-        position: full.position,
-        sourceData: full.sourceData,
-        attachments: full.attachments,
-      }),
-    );
+  const formLoading = Boolean(form?.id) && form?.id === formLoadingId;
+  const toForm = (full: PbiItem) => ({
+    id: full.id,
+    kind: full.kind,
+    title: full.title,
+    description: full.description,
+    status: full.status,
+    parentId: full.parentId,
+    position: full.position,
+    sourceData: full.sourceData,
+    attachments: full.attachments,
+  });
+  // The modal opens at once; a skeleton covers the body while the full item loads.
+  const editItem = (item: PbiItem) => {
+    setForm(toForm(item));
+    if (!item.partial) return;
+    setError(null);
+    setFormLoadingId(item.id);
+    apiClient
+      .getPbiItem(item.id)
+      .then(
+        (full) => {
+          if (mounted.current)
+            setForm((current) => (current?.id === item.id ? toForm(full) : current));
+        },
+        (cause: unknown) => {
+          if (!mounted.current) return;
+          setForm((current) => (current?.id === item.id ? null : current));
+          setError(cause instanceof Error ? cause.message : c.actionError);
+        },
+      )
+      .finally(() => {
+        if (mounted.current) setFormLoadingId((current) => (current === item.id ? null : current));
+      });
+  };
   const openItem = (id: string) => {
     const target = itemsRef.current.find((entry) => entry.id === id);
     if (target) editItem(target);
@@ -1367,82 +1492,7 @@ export function PbiView({
   );
 
   return (
-    <main className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 p-6 text-[var(--text-primary)]">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">{t('nav.pbis')}</h1>
-          <p className="text-sm text-[var(--text-muted)]">{c.subtitle}</p>
-        </div>
-        <ActionsMenu label={c.actions}>
-          <Button
-            variant="ghost"
-            role="menuitem"
-            className="flex w-full justify-start text-left"
-            onClick={() => void load()}
-            disabled={busy}
-          >
-            <i className="ti ti-refresh" aria-hidden="true" /> {c.refresh}
-          </Button>
-          {!isReadOnly && (
-            <Button
-              variant="ghost"
-              role="menuitem"
-              className="flex w-full justify-start text-left"
-              onClick={pull}
-              isLoading={pulling}
-            >
-              <i className="ti ti-cloud-download" aria-hidden="true" /> {c.pullAll}
-            </Button>
-          )}
-          {!isReadOnly && (
-            <Button
-              variant="ghost"
-              role="menuitem"
-              className="flex w-full justify-start text-left"
-              onClick={() => setForm({ ...emptyForm })}
-            >
-              <i className="ti ti-plus" aria-hidden="true" /> {c.newPbi}
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            role="menuitemcheckbox"
-            aria-checked={columnsOpen}
-            className="flex w-full justify-start text-left"
-            onClick={(event) => {
-              event.stopPropagation();
-              setColumnsOpen((open) => !open);
-            }}
-          >
-            <i className="ti ti-columns-3" aria-hidden="true" /> {c.columns}
-          </Button>
-          {columnsOpen && (
-            <div className="border-t border-border px-2 py-1">
-              {columnIds
-                .filter((id) => id !== 'title' && id !== 'actions')
-                .map((id) => (
-                  <Button
-                    key={id}
-                    variant="ghost"
-                    role="checkbox"
-                    aria-checked={showColumn(id)}
-                    className="flex w-full justify-start gap-2 text-left"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      toggleColumn(id);
-                    }}
-                  >
-                    <i
-                      className={`ti ${showColumn(id) ? 'ti-square-check text-[var(--text-accent)]' : 'ti-square'}`}
-                      aria-hidden="true"
-                    />
-                    {c[id]}
-                  </Button>
-                ))}
-            </div>
-          )}
-        </ActionsMenu>
-      </div>
+    <main className="flex w-full flex-col gap-5 p-6 text-[var(--text-primary)]">
       {error && (
         <div
           role="alert"
@@ -1465,513 +1515,793 @@ export function PbiView({
       {loading ? (
         <SkeletonCard />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="grid gap-4">
           <section className="min-w-0">
-            <div className="mb-3 flex flex-wrap items-center gap-3">
-              <Input
-                aria-label={c.filter}
-                placeholder={c.filterPlaceholder}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="max-w-md"
-              />
-              <Select
-                aria-label={c.source}
-                value={sourceFilter}
-                onChange={(event) => setSourceFilter(event.target.value)}
-                containerClassName="max-w-44"
-              >
-                <option value="">{c.allSources}</option>
-                <option value="local">{c.localSource}</option>
-                {Object.entries(providerNames).map(([id, name]) => (
-                  <option key={id} value={id}>
-                    {name}
-                  </option>
-                ))}
-              </Select>
-              <Select
-                aria-label={c.state}
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-                containerClassName="max-w-40"
-              >
-                <option value="">{c.allStates}</option>
-                {statuses.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </Select>
-              {iterations.length > 0 && (
-                <Select
-                  aria-label={c.iteration}
-                  value={iterationFilter}
-                  onChange={(event) => {
-                    iterationTouched.current = true;
-                    setIterationFilter(event.target.value);
-                  }}
-                  containerClassName="w-80 max-w-full flex-none"
-                >
-                  <option value="">{c.allIterations}</option>
-                  {iterations.map(([iteration]) => (
-                    <option key={iteration} value={iteration}>
-                      {iteration}
-                    </option>
-                  ))}
-                </Select>
-              )}
-              <Select
-                aria-label={c.assignee}
-                value={assigneeFilter}
-                onChange={(event) => setAssigneeFilter(event.target.value)}
-                containerClassName="max-w-48"
-              >
-                <option value="">{c.allAssignees}</option>
-                <option value="none">{c.noAssignee}</option>
-                {sortedMembers.map((member) => (
-                  <option key={member.userId} value={member.userId}>
-                    {memberLabel(member)}
-                  </option>
-                ))}
-              </Select>
-              <div className="flex items-center gap-1">
-                <Select
-                  aria-label={c.savedFilters}
-                  value={activeSavedFilter?.id ?? ''}
-                  onChange={(event) => applySavedFilter(event.target.value)}
-                  containerClassName="max-w-48"
-                >
-                  <option value="" disabled={savedFilters.length > 0}>
-                    {c.savedFilters}
-                  </option>
-                  {savedFilters.map((saved) => (
-                    <option key={saved.id} value={saved.id}>
-                      {saved.name}
-                    </option>
-                  ))}
-                </Select>
+            <div className="mb-3 space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="min-w-64 flex-1">
+                  <Input
+                    aria-label={c.filter}
+                    placeholder={c.filterPlaceholder}
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    className="w-full"
+                  />
+                </div>
+
                 <Button
                   type="button"
-                  variant="outline"
-                  className="h-10 gap-2 px-4"
-                  title={c.saveFilter}
-                  disabled={!hasFilters}
-                  onClick={() => setFilterNameDraft(activeSavedFilter?.name ?? '')}
+                  variant={filtersOpen ? 'secondary' : 'outline'}
+                  aria-expanded={filtersOpen}
+                  aria-controls="pbi-filters-panel"
+                  onClick={() => setFiltersOpen((open) => !open)}
                 >
-                  <i className="ti ti-device-floppy text-lg" aria-hidden="true" />
-                  {c.saveFilter}
+                  <i className="ti ti-filter" aria-hidden="true" />
+                  {filtersOpen ? c.hideFilters : c.showFilters}
+                  {activeFilterCount > 0 && (
+                    <span className="rounded-full bg-[var(--fill-accent)] px-1.5 text-xs text-white">
+                      {activeFilterCount}
+                    </span>
+                  )}
                 </Button>
-                {activeSavedFilter && (
+                <span className="text-xs text-[var(--text-muted)]">
+                  {pbiCount} {t('nav.pbis')} · {cardCount} {c.cards}
+                </span>
+                <div role="group" aria-label={c.viewMode} className="flex gap-1">
+                  {(['list', 'kanban'] as const).map((mode) => (
+                    <Button
+                      key={mode}
+                      type="button"
+                      variant={viewMode === mode ? 'secondary' : 'ghost'}
+                      aria-pressed={viewMode === mode}
+                      onClick={() => chooseViewMode(mode)}
+                    >
+                      <i
+                        className={`ti ${mode === 'list' ? 'ti-list-tree' : 'ti-layout-kanban'}`}
+                        aria-hidden="true"
+                      />
+                      {mode === 'list' ? c.listView : c.kanbanView}
+                    </Button>
+                  ))}
+                </div>
+                <ActionsMenu label={c.actions} trigger="button">
                   <Button
-                    type="button"
                     variant="ghost"
-                    size="icon"
-                    className="h-10 w-10"
-                    aria-label={`${c.deleteSavedFilter}: ${activeSavedFilter.name}`}
-                    title={c.deleteSavedFilter}
-                    onClick={() =>
-                      persistSavedFilters(
-                        savedFilters.filter((saved) => saved.id !== activeSavedFilter.id),
-                      )
-                    }
+                    role="menuitem"
+                    className="flex w-full justify-start text-left"
+                    onClick={() => void load()}
+                    disabled={busy}
                   >
-                    <i className="ti ti-trash" aria-hidden="true" />
+                    <i className="ti ti-refresh" aria-hidden="true" /> {c.refresh}
                   </Button>
-                )}
+                  {!isReadOnly && (
+                    <Button
+                      variant="ghost"
+                      role="menuitem"
+                      className="flex w-full justify-start text-left"
+                      onClick={() => pull()}
+                      isLoading={pulling}
+                    >
+                      <i className="ti ti-cloud-download" aria-hidden="true" /> {c.pullAll}
+                    </Button>
+                  )}
+                  {!isReadOnly &&
+                    providers.map((provider) => (
+                      <Button
+                        key={provider.providerId}
+                        variant="ghost"
+                        role="menuitem"
+                        className="flex w-full justify-start pl-8 text-left text-sm"
+                        onClick={() => pull(provider.providerId)}
+                        disabled={pulling}
+                      >
+                        <i className="ti ti-cloud-download" aria-hidden="true" /> {c.pullFrom}{' '}
+                        {providerNames[provider.providerId] ?? provider.providerId}
+                      </Button>
+                    ))}
+                  {!isReadOnly && (
+                    <Button
+                      variant="ghost"
+                      role="menuitem"
+                      className="flex w-full justify-start text-left"
+                      onClick={() => setForm({ ...emptyForm })}
+                    >
+                      <i className="ti ti-plus" aria-hidden="true" /> {c.newPbi}
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    role="menuitemcheckbox"
+                    aria-checked={columnsOpen}
+                    className="flex w-full justify-start text-left"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setColumnsOpen((open) => !open);
+                    }}
+                  >
+                    <i className="ti ti-columns-3" aria-hidden="true" /> {c.columns}
+                  </Button>
+                  {columnsOpen && (
+                    <div className="border-t border-border px-2 py-1">
+                      {columnIds
+                        .filter((id) => id !== 'title' && id !== 'actions')
+                        .map((id) => (
+                          <Button
+                            key={id}
+                            variant="ghost"
+                            role="checkbox"
+                            aria-checked={showColumn(id)}
+                            className="flex w-full justify-start gap-2 text-left"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleColumn(id);
+                            }}
+                          >
+                            <i
+                              className={`ti ${showColumn(id) ? 'ti-square-check text-[var(--text-accent)]' : 'ti-square'}`}
+                              aria-hidden="true"
+                            />
+                            {c[id]}
+                          </Button>
+                        ))}
+                    </div>
+                  )}
+
+                  <div
+                    className="border-t border-border px-3 py-2 text-sm"
+                    data-testid="pbi-integrations"
+                  >
+                    <h2 className="font-semibold">{c.integrations}</h2>
+                    <p className="mt-1 text-xs text-[var(--text-muted)]">{c.pullHint}</p>
+                    <div className="mt-2 space-y-1">
+                      {sourceCounts.map((source) => (
+                        <div key={source.id} className="flex justify-between text-sm">
+                          <span>{source.name}</span>
+                          <span className="text-[var(--text-muted)]">{source.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {!providers.length && (
+                      <p className="mt-2 text-xs text-[var(--text-muted)]">{c.configureHint}</p>
+                    )}
+                  </div>
+                </ActionsMenu>
               </div>
-              <span className="text-xs text-[var(--text-muted)]">
-                {pbiCount} {t('nav.pbis')} · {cardCount} {c.cards}
-              </span>
+              {filtersOpen && (
+                <div
+                  id="pbi-filters-panel"
+                  className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-3"
+                >
+                  <div className="flex items-center gap-1">
+                    <Select
+                      aria-label={c.savedFilters}
+                      value={activeSavedFilter?.id ?? ''}
+                      onChange={(event) => applySavedFilter(event.target.value)}
+                      containerClassName="max-w-48"
+                    >
+                      <option value="" disabled={savedFilters.length > 0}>
+                        {c.savedFilters}
+                      </option>
+                      {savedFilters.map((saved) => (
+                        <option key={saved.id} value={saved.id}>
+                          {saved.name}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-10 gap-2 px-4"
+                      title={c.saveFilter}
+                      disabled={!hasFilters}
+                      onClick={() => setFilterNameDraft(activeSavedFilter?.name ?? '')}
+                    >
+                      <i className="ti ti-device-floppy text-lg" aria-hidden="true" />
+                      {c.saveFilter}
+                    </Button>
+                    {activeSavedFilter && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-10 w-10"
+                        aria-label={`${c.deleteSavedFilter}: ${activeSavedFilter.name}`}
+                        title={c.deleteSavedFilter}
+                        onClick={() =>
+                          persistSavedFilters(
+                            savedFilters.filter((saved) => saved.id !== activeSavedFilter.id),
+                          )
+                        }
+                      >
+                        <i className="ti ti-trash" aria-hidden="true" />
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <Select
+                      aria-label={c.source}
+                      value={sourceFilter}
+                      onChange={(event) => setSourceFilter(event.target.value)}
+                      containerClassName="w-full"
+                    >
+                      <option value="">{c.allSources}</option>
+                      <option value="local">{c.localSource}</option>
+                      {Object.entries(providerNames).map(([id, name]) => (
+                        <option key={id} value={id}>
+                          {name}
+                        </option>
+                      ))}
+                    </Select>
+                    <Select
+                      aria-label={c.state}
+                      value={statusFilter}
+                      onChange={(event) => setStatusFilter(event.target.value)}
+                      containerClassName="w-full"
+                    >
+                      <option value="">{c.allStates}</option>
+                      {statuses.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </Select>
+                    {iterations.length > 0 && (
+                      <Select
+                        aria-label={c.iteration}
+                        value={iterationFilter}
+                        onChange={(event) => {
+                          iterationTouched.current = true;
+                          setIterationFilter(event.target.value);
+                        }}
+                        containerClassName="w-full"
+                      >
+                        <option value="">{c.allIterations}</option>
+                        {iterations.map(([iteration]) => (
+                          <option key={iteration} value={iteration}>
+                            {iteration}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                    <Select
+                      aria-label={c.assignee}
+                      value={assigneeFilter}
+                      onChange={(event) => setAssigneeFilter(event.target.value)}
+                      containerClassName="w-full"
+                    >
+                      <option value="">{c.allAssignees}</option>
+                      <option value="none">{c.noAssignee}</option>
+                      {sortedMembers.map((member) => (
+                        <option key={member.userId} value={member.userId}>
+                          {memberLabel(member)}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                </div>
+              )}
             </div>
             {membersError && (
               <p role="alert" className="mb-3 text-xs text-red-300">
                 {membersError}
               </p>
             )}
-            <div className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
-              <table
-                role="treegrid"
-                className="w-full table-fixed text-left text-sm [&_th:not(:last-child)]:border-r [&_th:not(:last-child)]:border-[var(--border)] [&_td:not(:last-child)]:border-r [&_td:not(:last-child)]:border-[var(--border)]"
-                style={{ minWidth: tableMinimumWidth }}
-              >
-                {renderColumnGroup()}
-                <thead className="border-b border-[var(--border)] text-xs text-[var(--text-muted)]">
-                  <tr>
-                    <th className="w-10 px-2 py-3" aria-label={c.expand} />
-                    {showColumn('order') && (
-                      <th className="relative px-3 py-3">
-                        {c.order}
-                        {resizeHandle('order')}
-                      </th>
-                    )}
-                    {showColumn('type') && (
-                      <th className="relative px-3 py-3">
-                        {c.type}
-                        {resizeHandle('type')}
-                      </th>
-                    )}
-                    <th className="relative px-3 py-3">
-                      {c.title}
-                      {resizeHandle('title')}
-                    </th>
-                    {showColumn('state') && (
-                      <th className="relative px-3 py-3">
-                        {c.state}
-                        {resizeHandle('state')}
-                      </th>
-                    )}
-                    {showColumn('assignee') && (
-                      <th className="relative px-3 py-3">
-                        {c.assignee}
-                        {resizeHandle('assignee')}
-                      </th>
-                    )}
-                    {showColumn('area') && (
-                      <th className="relative px-3 py-3">
-                        {c.area}
-                        {resizeHandle('area')}
-                      </th>
-                    )}
-                    {showColumn('iteration') && (
-                      <th className="relative px-3 py-3">
-                        {c.iteration}
-                        {resizeHandle('iteration')}
-                      </th>
-                    )}
-                    {showColumn('tags') && (
-                      <th className="relative px-3 py-3">
-                        {c.tags}
-                        {resizeHandle('tags')}
-                      </th>
-                    )}
-                    {showColumn('source') && (
-                      <th className="relative px-3 py-3">
-                        {c.source}
-                        {resizeHandle('source')}
-                      </th>
-                    )}
-                    <th className="sticky right-0 z-10 bg-[var(--surface-1)] px-3 py-3 text-right">
-                      {c.actions}
-                      {resizeHandle('actions')}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(() => {
-                    const renderRow = (
-                      { item, depth }: { item: PbiItem; depth: number },
-                      index: number,
-                    ) => {
-                      const canExpand = (children.get(item.id)?.length ?? 0) > 0;
-                      const type = displayType(item);
-                      const appearance = typeAppearance(item);
-                      return (
-                        <Fragment key={item.id}>
-                          <tr
-                            aria-level={depth + 1}
-                            aria-expanded={canExpand ? expanded.has(item.id) : undefined}
-                            tabIndex={canExpand ? 0 : undefined}
-                            onClick={(event) => {
-                              if (!canExpand || (event.target as HTMLElement).closest('button, a'))
-                                return;
-                              toggleExpanded(item.id);
-                            }}
-                            onKeyDown={(event) => {
-                              if (!canExpand || event.target !== event.currentTarget) return;
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                toggleExpanded(item.id);
-                              }
-                            }}
-                            className={`border-b border-[var(--border)] last:border-0 hover:bg-[var(--fill-ghost-hover)] ${depth ? 'bg-[var(--surface-2)]' : ''} ${canExpand ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-accent)]' : ''}`}
-                          >
-                            <td
-                              className="w-10 px-2 py-2"
-                              style={{
-                                paddingLeft: depth ? 8 + Math.min(depth, 12) * 12 : undefined,
-                              }}
-                            >
-                              {canExpand && (
+            <KanbanDraftBar
+              pending={Object.keys(kanbanDraft.draft).length - kanbanDraft.saving.size}
+              saving={kanbanDraft.saving.size}
+              offline={kanbanDraft.offline}
+              error={kanbanDraft.error}
+              labels={c.draftLabels}
+              onSave={() => void kanbanDraft.flush()}
+              onDiscard={kanbanDraft.discard}
+            />
+            {viewMode === 'kanban' ? (
+              <div className="flex items-start gap-3 overflow-x-auto pb-2" data-testid="pbi-kanban">
+                {kanbanColumns.map(({ state, items: stateItems }) => {
+                  const limit = kanbanLimits[state] ?? kanbanPageSize;
+                  const dragged = draggingId
+                    ? items.find((entry) => entry.id === draggingId)
+                    : undefined;
+                  // Moving keeps the card position, so it lands where its order falls in this column.
+                  const isTarget = dragOverState === state && !!dragged && dragged.status !== state;
+                  const insertAt = isTarget
+                    ? stateItems.filter(
+                        (entry) =>
+                          entry.position < dragged.position ||
+                          (entry.position === dragged.position &&
+                            entry.title.localeCompare(dragged.title) < 0),
+                      ).length
+                    : -1;
+                  const placeholder = isTarget ? (
+                    <KanbanDropPlaceholder title={dragged.title} label={`${c.dropHere} ${state}`} />
+                  ) : null;
+                  return (
+                    <section
+                      key={state}
+                      aria-label={state}
+                      onDragOver={(event) => {
+                        if (isReadOnly) return;
+                        event.preventDefault();
+                        setDragOverState(state);
+                      }}
+                      onDragLeave={(event) => {
+                        if (event.currentTarget.contains(event.relatedTarget as Node | null))
+                          return;
+                        setDragOverState((current) => (current === state ? null : current));
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        setDragOverState(null);
+                        setDraggingId(null);
+                        const id = event.dataTransfer.getData('text/plain');
+                        if (id && !isReadOnly) moveItem(id, state);
+                      }}
+                      className={kanbanColumnClass(isTarget)}
+                    >
+                      <header className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2 text-xs font-semibold">
+                        <span className="truncate" title={state}>
+                          {state}
+                        </span>
+                        <span className="rounded-full bg-[var(--surface-2)] px-1.5 text-[var(--text-muted)]">
+                          {stateItems.length}
+                        </span>
+                      </header>
+                      <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto overflow-x-hidden p-2">
+                        {stateItems.length === 0 && (
+                          <p className="py-4 text-center text-xs text-[var(--text-muted)]">
+                            {c.emptyColumn}
+                          </p>
+                        )}
+                        {stateItems.slice(0, limit).map((item, index) => {
+                          const type = displayType(item);
+                          const palette = resolveTypePalette(
+                            resolveWorkItemType(workItemTypes, type)?.color,
+                          );
+                          const userId = sourceText(item.sourceData.adkAssigneeUserId);
+                          const assignee = userId ? (memberNames.get(userId) ?? userId) : '';
+                          return (
+                            <Fragment key={item.id}>
+                              {index === insertAt && placeholder}
+                              <article
+                                style={palette.style}
+                                draggable={!isReadOnly}
+                                onDragStart={(event) => {
+                                  event.dataTransfer.setData('text/plain', item.id);
+                                  event.dataTransfer.effectAllowed = 'move';
+                                  setDraggingId(item.id);
+                                }}
+                                onDragEnd={() => {
+                                  setDraggingId(null);
+                                  setDragOverState(null);
+                                }}
+                                className={`rounded-md border border-l-4 border-[var(--border)] bg-[var(--surface-2)] p-2.5 ${palette.bar} ${isReadOnly ? '' : 'cursor-grab active:cursor-grabbing'} ${kanbanCardStateClass(draggingId === item.id, kanbanDraft.saving.has(item.id))}`}
+                              >
+                                {kanbanDraft.saving.has(item.id) ? (
+                                  <KanbanCardSaving label={c.savingMove} />
+                                ) : (
+                                  item.id in kanbanDraft.draft && (
+                                    <KanbanCardPending label={c.draftPendingCard} />
+                                  )
+                                )}
+                                <div className="mb-1.5">
+                                  <WorkItemTypeBadge
+                                    name={type}
+                                    types={workItemTypes}
+                                    fallbackIcon={fallbackTypeIcon(item)}
+                                  />
+                                </div>
                                 <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7 shrink-0"
-                                  aria-label={`${expanded.has(item.id) ? c.collapse : c.expand} ${item.title}`}
-                                  aria-expanded={expanded.has(item.id)}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
+                                  type="button"
+                                  variant="link"
+                                  className="h-auto w-full min-w-0 justify-start whitespace-normal p-0 text-left text-sm font-medium text-[var(--text-primary)] no-underline [overflow-wrap:anywhere] hover:text-[var(--text-primary)]"
+                                  onClick={() => editItem(item)}
+                                >
+                                  {item.title}
+                                </Button>
+                                {assignee && (
+                                  <p className="mt-1.5 truncate text-xs text-[var(--text-muted)]">
+                                    <i className="ti ti-user" aria-hidden="true" /> {assignee}
+                                  </p>
+                                )}
+                              </article>
+                            </Fragment>
+                          );
+                        })}
+                        {insertAt >= Math.min(stateItems.length, limit) && placeholder}
+                        {stateItems.length > limit && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() =>
+                              setKanbanLimits((current) => ({
+                                ...current,
+                                [state]: limit + kanbanPageSize,
+                              }))
+                            }
+                          >
+                            {c.showMore} ({stateItems.length - limit})
+                          </Button>
+                        )}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
+            ) : (
+              <>
+                <div className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
+                  <table
+                    role="treegrid"
+                    className="w-full table-fixed text-left text-sm [&_th:not(:last-child)]:border-r [&_th:not(:last-child)]:border-[var(--border)] [&_td:not(:last-child)]:border-r [&_td:not(:last-child)]:border-[var(--border)]"
+                    style={{ minWidth: tableMinimumWidth }}
+                  >
+                    {renderColumnGroup()}
+                    <thead className="border-b border-[var(--border)] text-xs text-[var(--text-muted)]">
+                      <tr>
+                        <th className="w-10 px-2 py-3" aria-label={c.expand} />
+                        {showColumn('order') && (
+                          <th className="relative px-3 py-3">
+                            {c.order}
+                            {resizeHandle('order')}
+                          </th>
+                        )}
+                        {showColumn('type') && (
+                          <th className="relative px-3 py-3">
+                            {c.type}
+                            {resizeHandle('type')}
+                          </th>
+                        )}
+                        <th className="relative px-3 py-3">
+                          {c.title}
+                          {resizeHandle('title')}
+                        </th>
+                        {showColumn('state') && (
+                          <th className="relative px-3 py-3">
+                            {c.state}
+                            {resizeHandle('state')}
+                          </th>
+                        )}
+                        {showColumn('assignee') && (
+                          <th className="relative px-3 py-3">
+                            {c.assignee}
+                            {resizeHandle('assignee')}
+                          </th>
+                        )}
+                        {showColumn('area') && (
+                          <th className="relative px-3 py-3">
+                            {c.area}
+                            {resizeHandle('area')}
+                          </th>
+                        )}
+                        {showColumn('iteration') && (
+                          <th className="relative px-3 py-3">
+                            {c.iteration}
+                            {resizeHandle('iteration')}
+                          </th>
+                        )}
+                        {showColumn('tags') && (
+                          <th className="relative px-3 py-3">
+                            {c.tags}
+                            {resizeHandle('tags')}
+                          </th>
+                        )}
+                        {showColumn('source') && (
+                          <th className="relative px-3 py-3">
+                            {c.source}
+                            {resizeHandle('source')}
+                          </th>
+                        )}
+                        <th className="sticky right-0 z-10 bg-[var(--surface-1)] px-3 py-3 text-right">
+                          {c.actions}
+                          {resizeHandle('actions')}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const renderRow = (
+                          { item, depth }: { item: PbiItem; depth: number },
+                          index: number,
+                        ) => {
+                          const canExpand = (children.get(item.id)?.length ?? 0) > 0;
+                          const type = displayType(item);
+                          return (
+                            <Fragment key={item.id}>
+                              <tr
+                                aria-level={depth + 1}
+                                aria-expanded={canExpand ? expanded.has(item.id) : undefined}
+                                tabIndex={canExpand ? 0 : undefined}
+                                onClick={(event) => {
+                                  if (
+                                    !canExpand ||
+                                    (event.target as HTMLElement).closest('button, a')
+                                  )
+                                    return;
+                                  toggleExpanded(item.id);
+                                }}
+                                onKeyDown={(event) => {
+                                  if (!canExpand || event.target !== event.currentTarget) return;
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
                                     toggleExpanded(item.id);
+                                  }
+                                }}
+                                className={`border-b border-[var(--border)] last:border-0 hover:bg-[var(--fill-ghost-hover)] ${depth ? 'bg-[var(--surface-2)]' : ''} ${canExpand ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-accent)]' : ''}`}
+                              >
+                                <td
+                                  className="w-10 px-2 py-2"
+                                  style={{
+                                    paddingLeft: depth ? 8 + Math.min(depth, 12) * 12 : undefined,
                                   }}
                                 >
-                                  <i
-                                    className={`ti ti-chevron-${expanded.has(item.id) ? 'down' : 'right'}`}
-                                    aria-hidden="true"
-                                  />
-                                </Button>
-                              )}
-                            </td>
-                            {showColumn('order') && (
-                              <td className="px-3 py-2 text-[var(--text-muted)]">
-                                {depth ? '' : index + 1}
-                              </td>
-                            )}
-                            {showColumn('type') && (
-                              <td className="overflow-hidden px-3 py-2 text-xs">
-                                <span
-                                  className={`inline-flex max-w-full items-center gap-1.5 overflow-hidden rounded-md border px-2 py-1 font-medium ${appearance.colors}`}
-                                  title={type}
-                                >
-                                  <i
-                                    className={`ti ${appearance.icon} shrink-0 ${appearance.iconColor}`}
-                                    aria-hidden="true"
-                                  />
-                                  <span className="min-w-0 truncate whitespace-nowrap">{type}</span>
-                                </span>
-                              </td>
-                            )}
-                            <td className="min-w-0 overflow-hidden px-3 py-2">
-                              <div className="min-w-0 max-w-full overflow-hidden">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <Button
-                                    variant="link"
-                                    className="h-auto min-w-0 flex-1 justify-start overflow-hidden p-0 text-left font-medium text-[var(--text-primary)] no-underline hover:text-[var(--text-primary)]"
-                                    title={item.title}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      editItem(item);
-                                    }}
-                                  >
-                                    <span className="block min-w-0 truncate">{item.title}</span>
-                                  </Button>
-                                  {(children.get(item.id)?.length ?? 0) > 0 && (
-                                    <span className="shrink-0 rounded-full bg-[var(--surface-2)] px-1.5 text-xs text-[var(--text-muted)]">
-                                      {children.get(item.id)?.length}
-                                    </span>
+                                  {canExpand && (
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7 shrink-0"
+                                      aria-label={`${expanded.has(item.id) ? c.collapse : c.expand} ${item.title}`}
+                                      aria-expanded={expanded.has(item.id)}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        toggleExpanded(item.id);
+                                      }}
+                                    >
+                                      <i
+                                        className={`ti ti-chevron-${expanded.has(item.id) ? 'down' : 'right'}`}
+                                        aria-hidden="true"
+                                      />
+                                    </Button>
                                   )}
-                                </div>
-                                {descriptionText.get(item.id) && (
-                                  <div className="max-w-full truncate text-xs text-[var(--text-muted)]">
-                                    {descriptionText.get(item.id)}
-                                  </div>
+                                </td>
+                                {showColumn('order') && (
+                                  <td className="px-3 py-2 text-[var(--text-muted)]">
+                                    {depth ? '' : index + 1}
+                                  </td>
                                 )}
-                              </div>
-                            </td>
-                            {showColumn('state') && (
-                              <td className="overflow-hidden px-3 py-2">
-                                <span
-                                  className="inline-block max-w-full truncate whitespace-nowrap rounded-full bg-[var(--surface-2)] px-2 py-1 text-xs align-middle"
-                                  title={item.status}
-                                >
-                                  {item.status}
-                                </span>
-                              </td>
-                            )}
-                            {showColumn('assignee') && (
-                              <td className="overflow-hidden px-3 py-2 text-xs">
-                                {(() => {
-                                  const userId = sourceText(item.sourceData.adkAssigneeUserId);
-                                  const name = userId ? (memberNames.get(userId) ?? userId) : '';
-                                  return (
-                                    <span className="block truncate" title={name}>
-                                      {name}
+                                {showColumn('type') && (
+                                  <td className="overflow-hidden px-3 py-2 text-xs">
+                                    <WorkItemTypeBadge
+                                      name={type}
+                                      types={workItemTypes}
+                                      fallbackIcon={fallbackTypeIcon(item)}
+                                    />
+                                  </td>
+                                )}
+                                <td className="min-w-0 overflow-hidden px-3 py-2">
+                                  <div className="min-w-0 max-w-full overflow-hidden">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <Button
+                                        variant="link"
+                                        className="h-auto min-w-0 flex-1 justify-start overflow-hidden p-0 text-left font-medium text-[var(--text-primary)] no-underline hover:text-[var(--text-primary)]"
+                                        title={item.title}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          editItem(item);
+                                        }}
+                                      >
+                                        <span className="block min-w-0 truncate">{item.title}</span>
+                                      </Button>
+                                      {(children.get(item.id)?.length ?? 0) > 0 && (
+                                        <span className="shrink-0 rounded-full bg-[var(--surface-2)] px-1.5 text-xs text-[var(--text-muted)]">
+                                          {children.get(item.id)?.length}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {descriptionText.get(item.id) && (
+                                      <div className="max-w-full truncate text-xs text-[var(--text-muted)]">
+                                        {descriptionText.get(item.id)}
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                                {showColumn('state') && (
+                                  <td className="overflow-hidden px-3 py-2">
+                                    <span
+                                      className="inline-block max-w-full truncate whitespace-nowrap rounded-full bg-[var(--surface-2)] px-2 py-1 text-xs align-middle"
+                                      title={item.status}
+                                    >
+                                      {item.status}
                                     </span>
-                                  );
-                                })()}
-                              </td>
-                            )}
-                            {showColumn('area') && (
-                              <td className="overflow-hidden px-3 py-2 text-xs text-[var(--text-muted)]">
-                                <span
-                                  className="block truncate"
-                                  title={sourceText(item.sourceData.areaPath)}
-                                >
-                                  {sourceText(item.sourceData.areaPath)}
-                                </span>
-                              </td>
-                            )}
-                            {showColumn('iteration') && (
-                              <td className="overflow-hidden px-3 py-2 text-xs text-[var(--text-muted)]">
-                                <span
-                                  className="block truncate"
-                                  title={sourceText(item.sourceData.iterationPath)}
-                                >
-                                  {sourceText(item.sourceData.iterationPath)}
-                                </span>
-                              </td>
-                            )}
-                            {showColumn('tags') && (
-                              <td className="overflow-hidden px-3 py-2 text-xs text-[var(--text-muted)]">
-                                <span
-                                  className="block truncate"
-                                  title={sourceText(item.sourceData.tags)}
-                                >
-                                  {sourceText(item.sourceData.tags)}
-                                </span>
-                              </td>
-                            )}
-                            {showColumn('source') && (
-                              <td className="overflow-hidden px-3 py-2 text-xs">
-                                <span className="block truncate">
-                                  {item.links.length
-                                    ? item.links.map((link) =>
-                                        link.externalUrl ? (
-                                          <a
-                                            key={link.id}
-                                            className="mr-1 text-[var(--text-accent)] hover:underline"
-                                            href={link.externalUrl}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                          >
-                                            {providerNames[link.providerId] ?? link.providerId}
-                                          </a>
-                                        ) : (
-                                          <span key={link.id} className="mr-1">
-                                            {providerNames[link.providerId] ?? link.providerId}
-                                          </span>
-                                        ),
-                                      )
-                                    : 'ADK'}
-                                </span>
-                              </td>
-                            )}
-                            <td
-                              className={`sticky right-0 z-10 px-2 py-1 text-right ${depth ? 'bg-[var(--surface-2)]' : 'bg-[var(--surface-1)]'}`}
-                            >
-                              {!isReadOnly && (
-                                <ActionsMenu label={`${c.actions}: ${item.title}`} portal>
-                                  <Button
-                                    variant="ghost"
-                                    role="menuitem"
-                                    className="flex w-full justify-start text-left"
-                                    onClick={() => editItem(item)}
-                                  >
-                                    <i className="ti ti-pencil" aria-hidden="true" />{' '}
-                                    {t('common.edit')}
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    role="menuitem"
-                                    className="flex w-full justify-start text-left"
-                                    onClick={() =>
-                                      setForm({ ...emptyForm, kind: 'card', parentId: item.id })
-                                    }
-                                  >
-                                    <i className="ti ti-square-rounded-plus" aria-hidden="true" />{' '}
-                                    {c.addCard}
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    role="menuitem"
-                                    className="flex w-full justify-start text-left"
-                                    onClick={() => openPush(item)}
-                                  >
-                                    <i className="ti ti-cloud-upload" aria-hidden="true" />{' '}
-                                    {c.publish}
-                                  </Button>
-                                  {canCreateIssue && (
-                                    <Button
-                                      variant="ghost"
-                                      role="menuitem"
-                                      className="flex w-full justify-start text-left"
-                                      onClick={() => createIssue(item)}
+                                  </td>
+                                )}
+                                {showColumn('assignee') && (
+                                  <td className="overflow-hidden px-3 py-2 text-xs">
+                                    {(() => {
+                                      const userId = sourceText(item.sourceData.adkAssigneeUserId);
+                                      const name = userId
+                                        ? (memberNames.get(userId) ?? userId)
+                                        : '';
+                                      return (
+                                        <span className="block truncate" title={name}>
+                                          {name}
+                                        </span>
+                                      );
+                                    })()}
+                                  </td>
+                                )}
+                                {showColumn('area') && (
+                                  <td className="overflow-hidden px-3 py-2 text-xs text-[var(--text-muted)]">
+                                    <span
+                                      className="block truncate"
+                                      title={sourceText(item.sourceData.areaPath)}
                                     >
-                                      <i className="ti ti-circle-check" aria-hidden="true" />{' '}
-                                      {c.createIssue}
-                                    </Button>
-                                  )}
-                                  {canCreateTests && (
-                                    <Button
-                                      variant="ghost"
-                                      role="menuitem"
-                                      className="flex w-full justify-start text-left"
-                                      onClick={() => createTests(item)}
+                                      {sourceText(item.sourceData.areaPath)}
+                                    </span>
+                                  </td>
+                                )}
+                                {showColumn('iteration') && (
+                                  <td className="overflow-hidden px-3 py-2 text-xs text-[var(--text-muted)]">
+                                    <span
+                                      className="block truncate"
+                                      title={sourceText(item.sourceData.iterationPath)}
                                     >
-                                      <i className="ti ti-test-pipe" aria-hidden="true" />{' '}
-                                      {c.createTests}
-                                    </Button>
-                                  )}
-                                  {canDelete && (
-                                    <Button
-                                      variant="ghost"
-                                      role="menuitem"
-                                      className="flex w-full justify-start text-left text-red-400"
-                                      onClick={() => setDeleteItem(item)}
+                                      {sourceText(item.sourceData.iterationPath)}
+                                    </span>
+                                  </td>
+                                )}
+                                {showColumn('tags') && (
+                                  <td className="overflow-hidden px-3 py-2 text-xs text-[var(--text-muted)]">
+                                    <span
+                                      className="block truncate"
+                                      title={sourceText(item.sourceData.tags)}
                                     >
-                                      <i className="ti ti-trash" aria-hidden="true" />{' '}
-                                      {t('common.delete')}
-                                    </Button>
-                                  )}
-                                </ActionsMenu>
-                              )}
-                            </td>
-                          </tr>
-                          {item.kind === 'pbi' &&
-                            expanded.has(item.id) &&
-                            !children.get(item.id)?.length && (
-                              <tr>
+                                      {sourceText(item.sourceData.tags)}
+                                    </span>
+                                  </td>
+                                )}
+                                {showColumn('source') && (
+                                  <td className="overflow-hidden px-3 py-2 text-xs">
+                                    <span className="block truncate">
+                                      {item.links.length
+                                        ? item.links.map((link) =>
+                                            link.externalUrl ? (
+                                              <a
+                                                key={link.id}
+                                                className="mr-1 text-[var(--text-accent)] hover:underline"
+                                                href={link.externalUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                              >
+                                                {providerNames[link.providerId] ?? link.providerId}
+                                              </a>
+                                            ) : (
+                                              <span key={link.id} className="mr-1">
+                                                {providerNames[link.providerId] ?? link.providerId}
+                                              </span>
+                                            ),
+                                          )
+                                        : 'ADK'}
+                                    </span>
+                                  </td>
+                                )}
                                 <td
-                                  colSpan={visibleColumns.length + 1}
-                                  className="px-8 py-3 text-xs text-[var(--text-muted)]"
+                                  className={`sticky right-0 z-10 px-2 py-1 text-right ${depth ? 'bg-[var(--surface-2)]' : 'bg-[var(--surface-1)]'}`}
                                 >
-                                  {c.noCards}
+                                  {!isReadOnly && (
+                                    <ActionsMenu label={`${c.actions}: ${item.title}`} portal>
+                                      <Button
+                                        variant="ghost"
+                                        role="menuitem"
+                                        className="flex w-full justify-start text-left"
+                                        onClick={() => editItem(item)}
+                                      >
+                                        <i className="ti ti-pencil" aria-hidden="true" />{' '}
+                                        {t('common.edit')}
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        role="menuitem"
+                                        className="flex w-full justify-start text-left"
+                                        onClick={() =>
+                                          setForm({ ...emptyForm, kind: 'card', parentId: item.id })
+                                        }
+                                      >
+                                        <i
+                                          className="ti ti-square-rounded-plus"
+                                          aria-hidden="true"
+                                        />{' '}
+                                        {c.addCard}
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        role="menuitem"
+                                        className="flex w-full justify-start text-left"
+                                        onClick={() => openPush(item)}
+                                      >
+                                        <i className="ti ti-cloud-upload" aria-hidden="true" />{' '}
+                                        {c.publish}
+                                      </Button>
+                                      {canCreateIssue && (
+                                        <Button
+                                          variant="ghost"
+                                          role="menuitem"
+                                          className="flex w-full justify-start text-left"
+                                          onClick={() => createIssue(item)}
+                                        >
+                                          <i className="ti ti-circle-check" aria-hidden="true" />{' '}
+                                          {c.createIssue}
+                                        </Button>
+                                      )}
+                                      {canCreateTests && (
+                                        <Button
+                                          variant="ghost"
+                                          role="menuitem"
+                                          className="flex w-full justify-start text-left"
+                                          onClick={() => createTests(item)}
+                                        >
+                                          <i className="ti ti-test-pipe" aria-hidden="true" />{' '}
+                                          {c.createTests}
+                                        </Button>
+                                      )}
+                                      {canDelete && (
+                                        <Button
+                                          variant="ghost"
+                                          role="menuitem"
+                                          className="flex w-full justify-start text-left"
+                                          data-destructive
+                                          onClick={() => setDeleteItem(item)}
+                                        >
+                                          <i className="ti ti-trash" aria-hidden="true" />{' '}
+                                          {t('common.delete')}
+                                        </Button>
+                                      )}
+                                    </ActionsMenu>
+                                  )}
                                 </td>
                               </tr>
-                            )}
-                        </Fragment>
-                      );
-                    };
-                    const renderPanel = (parent: PbiItem): ReactNode => {
-                      const childRows = visibleChildren.get(parent.id) ?? [];
-                      if (!expanded.has(parent.id) || !childRows.length) return null;
-                      return childRows.map((row, index) => (
-                        <Fragment key={row.item.id}>
-                          {renderRow(row, index)}
-                          {renderPanel(row.item)}
-                        </Fragment>
-                      ));
-                    };
-                    return visible
-                      .filter(({ depth }) => depth === 0)
-                      .map((row, index) => (
-                        <Fragment key={row.item.id}>
-                          {renderRow(row, index)}
-                          {renderPanel(row.item)}
-                        </Fragment>
-                      ));
-                  })()}
-                  {visible.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={visibleColumns.length + 1}
-                        className="px-6 py-12 text-center text-[var(--text-muted)]"
-                      >
-                        {hasFilters ? c.noMatch : c.empty}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <PagingSentinel paging={paging} />
-            <Pagination paging={paging} perPageLabel={c.perPage} className="mt-3" />
+                              {item.kind === 'pbi' &&
+                                expanded.has(item.id) &&
+                                !children.get(item.id)?.length && (
+                                  <tr>
+                                    <td
+                                      colSpan={visibleColumns.length + 1}
+                                      className="px-8 py-3 text-xs text-[var(--text-muted)]"
+                                    >
+                                      {c.noCards}
+                                    </td>
+                                  </tr>
+                                )}
+                            </Fragment>
+                          );
+                        };
+                        const renderPanel = (parent: PbiItem): ReactNode => {
+                          const childRows = visibleChildren.get(parent.id) ?? [];
+                          if (!expanded.has(parent.id) || !childRows.length) return null;
+                          return childRows.map((row, index) => (
+                            <Fragment key={row.item.id}>
+                              {renderRow(row, index)}
+                              {renderPanel(row.item)}
+                            </Fragment>
+                          ));
+                        };
+                        return visible
+                          .filter(({ depth }) => depth === 0)
+                          .map((row, index) => (
+                            <Fragment key={row.item.id}>
+                              {renderRow(row, index)}
+                              {renderPanel(row.item)}
+                            </Fragment>
+                          ));
+                      })()}
+                      {visible.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={visibleColumns.length + 1}
+                            className="px-6 py-12 text-center text-[var(--text-muted)]"
+                          >
+                            {hasFilters ? c.noMatch : c.empty}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <PagingSentinel paging={paging} />
+                <Pagination paging={paging} perPageLabel={c.perPage} className="mt-3" />
+              </>
+            )}
           </section>
-          <aside className="h-fit rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4">
-            <section>
-              <h2 className="font-semibold">{c.integrations}</h2>
-              <p className="mt-1 text-xs text-[var(--text-muted)]">{c.pullHint}</p>
-              <div className="mt-4 space-y-2">
-                {sourceCounts.map((source) => (
-                  <div key={source.id} className="flex justify-between text-sm">
-                    <span>{source.name}</span>
-                    <span className="text-[var(--text-muted)]">{source.count}</span>
-                  </div>
-                ))}
-              </div>
-              {!providers.length && (
-                <p className="mt-4 text-xs text-[var(--text-muted)]">{c.configureHint}</p>
-              )}
-            </section>
-          </aside>
         </div>
       )}
 
@@ -2014,6 +2344,22 @@ export function PbiView({
                 placeholder={c.title}
                 className="min-w-[220px] flex-1 border-0 bg-transparent px-0 text-xl font-semibold shadow-none"
               />
+              {form.id && canDelete && (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="icon"
+                  aria-label={t('common.delete')}
+                  title={t('common.delete')}
+                  className="bg-red-600 text-white hover:bg-red-500"
+                  onClick={() => {
+                    const target = rawItems.find((entry) => entry.id === form.id);
+                    if (target) setDeleteItem(target);
+                  }}
+                >
+                  <i className="ti ti-trash" aria-hidden="true" />
+                </Button>
+              )}
               {form.id && (
                 <HistoryViewer
                   apiClient={apiClient}
@@ -2024,11 +2370,8 @@ export function PbiView({
                   resolveValue={resolveAuditValue}
                 />
               )}
-              <Button type="button" variant="ghost" onClick={() => closeForm(form)}>
-                {t('common.cancel')}
-              </Button>
               {!isReadOnly && (
-                <Button type="submit" isLoading={busy}>
+                <Button type="submit" isLoading={busy} disabled={formLoading}>
                   <i className="ti ti-device-floppy" aria-hidden="true" />
                   {c.saveItem}
                 </Button>
@@ -2066,7 +2409,27 @@ export function PbiView({
                 </strong>
               </span>
             </div>
-            <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+            {formLoading && (
+              <div
+                role="status"
+                aria-label={c.loadingItem}
+                className="grid min-h-0 flex-1 gap-6 overflow-hidden p-6 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]"
+              >
+                <div className="space-y-4">
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="h-64 w-full rounded-md" />
+                  <SkeletonText lines={4} />
+                </div>
+                <div className="space-y-4">
+                  <Skeleton className="h-12 w-full rounded-md" />
+                  <Skeleton className="h-12 w-full rounded-md" />
+                  <Skeleton className="h-12 w-full rounded-md" />
+                </div>
+              </div>
+            )}
+            <div
+              className={`grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)] ${formLoading ? 'hidden' : ''}`}
+            >
               <div className="min-h-[300px] p-6 lg:border-r lg:border-[var(--border)]">
                 <label
                   className="mb-3 block border-b border-[var(--border)] pb-3 text-sm font-semibold"
@@ -2106,7 +2469,7 @@ export function PbiView({
                 </div>
                 {form.id && (
                   <section
-                    className="mt-6 border-t border-[var(--border)] pt-4"
+                    className="mt-6 border-t border-[var(--border)] pb-8 pt-4"
                     aria-label={c.comments}
                   >
                     <h3 className="mb-3 text-sm font-semibold">{c.comments}</h3>
@@ -2277,11 +2640,7 @@ export function PbiView({
                       <option value="">{c.noType}</option>
                       {[
                         ...new Set([
-                          'Task',
-                          'Bug',
-                          'Product Backlog Item',
-                          'User Story',
-                          'Feature',
+                          ...workItemTypes.map((type) => type.label),
                           sourceText(form.sourceData?.type),
                           sourceText(form.sourceData?.adkCardType),
                         ]),

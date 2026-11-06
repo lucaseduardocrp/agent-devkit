@@ -1888,7 +1888,7 @@ export function BrainView({
                                   <Button
                                     type="button"
                                     onClick={() => setDocumentToDelete(activeDoc)}
-                                    className="inline-flex shrink-0 items-center gap-1.5 rounded border border-red-900/40 bg-red-950/20 px-3 py-1.5 text-xs font-medium text-red-400 transition hover:bg-red-900/30 hover:text-red-300"
+                                    
                                     title={t('brain.deleteDocument')}
                                     data-testid="btn-delete-document"
                                     data-destructive

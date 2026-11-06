@@ -212,6 +212,7 @@ describe('PbiView coverage gaps: rows and search', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Filtrar PBIs' }), {
       target: { value: 'release' },
     });
+    fireEvent.click(await screen.findByRole('button', { name: 'Filtros' }));
     fireEvent.click(screen.getByRole('button', { name: 'Salvar filtro' }));
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'Nome do filtro' }), { key: 'Escape' });
     expect(screen.queryByRole('textbox', { name: 'Nome do filtro' })).not.toBeInTheDocument();
@@ -383,7 +384,7 @@ describe('PbiView coverage gaps: item editor', () => {
     renderView(api);
     fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
     await waitFor(() => expect(api.syncPbiChildren).toHaveBeenCalledWith('root'));
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Fechar' }));
     await act(async () => sync.resolve([linked, card]));
     expect(screen.queryByRole('button', { name: 'Verify release' })).not.toBeInTheDocument();
   });

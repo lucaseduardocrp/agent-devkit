@@ -523,3 +523,16 @@ describe('ApiClient remaining paths', () => {
     });
   });
 });
+
+describe('ApiClient work item types', () => {
+  it('saves the types with PUT and returns the stored ones', async () => {
+    const type = { key: 'bug', label: 'Bug', color: 'red', icon: 'bug', aliases: [] };
+    const { client, last } = setup({ json: { types: [type] } });
+    await expect(client.saveWorkItemTypes([type])).resolves.toEqual([type]);
+    expect(last()).toMatchObject({
+      url: 'http://api/work-item-types',
+      method: 'PUT',
+      body: { types: [type] },
+    });
+  });
+});

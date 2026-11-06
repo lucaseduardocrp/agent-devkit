@@ -1,10 +1,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../src/lib/api-client.js';
 import { WorkView } from '../src/features/issues/WorkView.js';
 import type { Issue } from '../src/features/issues/issue-types.js';
 import { FULL_ACCESS, PermissionsProvider } from '../src/features/workspaces/permissions.js';
 import type { EffectiveAccess, ModuleAccess } from '../src/features/workspaces/workspace-types.js';
+
+const openFilters = () => {
+  const toggle = screen.getByRole('button', { name: /^(Filters|Filtros)/ });
+  if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+};
 
 const issue: Issue = {
   id: 'issue-1',
@@ -73,6 +78,8 @@ function client() {
     }),
   };
 }
+
+afterEach(() => localStorage.clear());
 
 describe('WorkView', () => {
   it('formats compact Markdown descriptions, code and comments', async () => {
@@ -397,9 +404,63 @@ describe('WorkView', () => {
       />,
     );
     expect(await screen.findByRole('button', { name: '1 Prepare release' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Quadro' }));
-    expect(screen.getByRole('button', { name: 'Quadro' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
+    expect(screen.getByRole('button', { name: 'Kanban' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Prepare release')).toBeInTheDocument();
+  });
+
+  it('remembers the list or Kanban choice per workspace in this browser', async () => {
+    localStorage.clear();
+    const renderIssues = (workspaceId: string) =>
+      render(
+        <WorkView
+          apiClient={client() as unknown as ApiClient}
+          workspaceId={workspaceId}
+          tab="issues"
+          currentUserId="user-a"
+        />,
+      );
+    const first = renderIssues('workspace-a');
+    expect(await screen.findByRole('button', { name: '1 Prepare release' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Lista' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
+    expect(localStorage.getItem('adk:issues-view:workspace-a')).toBe('board');
+    first.unmount();
+
+    const second = renderIssues('workspace-a');
+    expect(await screen.findByText('Prepare release')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Kanban' })).toHaveAttribute('aria-pressed', 'true');
+    second.unmount();
+
+    const other = renderIssues('workspace-b');
+    expect(await screen.findByRole('button', { name: '1 Prepare release' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Lista' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Lista' }));
+    expect(localStorage.getItem('adk:issues-view:workspace-b')).toBe('list');
+    other.unmount();
+    localStorage.clear();
+  });
+
+  it('still switches views when the browser storage is unavailable', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    render(
+      <WorkView
+        apiClient={client() as unknown as ApiClient}
+        workspaceId="workspace-a"
+        tab="issues"
+        currentUserId="user-a"
+      />,
+    );
+    expect(await screen.findByRole('button', { name: '1 Prepare release' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Kanban' }));
+    expect(screen.getByRole('button', { name: 'Kanban' })).toHaveAttribute('aria-pressed', 'true');
+    vi.restoreAllMocks();
   });
 
   it('filters issues by assignee and PBI iteration path and saves the filters', async () => {
@@ -432,6 +493,7 @@ describe('WorkView', () => {
       />,
     );
     expect(await screen.findByRole('button', { name: '1 Prepare release' })).toBeInTheDocument();
+    openFilters();
     fireEvent.change(await screen.findByRole('combobox', { name: 'Iteração' }), {
       target: { value: 'Proj\\Sprint 9' },
     });
@@ -599,5 +661,47 @@ describe('WorkView permissions', () => {
       />,
     );
     expect(await screen.findByText('Crie a primeira issue para começar.')).toBeInTheDocument();
+  });
+  it('opens the agent information tab of an issue and returns to its details', async () => {
+    const api = {
+      ...client(),
+      getIssueBrief: vi.fn().mockResolvedValue({
+        issueId: 'issue-1',
+        workspaceId: 'workspace-a',
+        engineVersion: 1,
+        generatedAt: '2026-11-05T12:00:00.000Z',
+        updatedAt: '2026-11-05T12:00:00.000Z',
+        source: 'engine',
+        locked: [],
+        complexity: { score: 3, level: 'small', signals: [] },
+        recommendation: {
+          provider: 'anthropic',
+          model: 'claude-haiku-5-5',
+          effort: 'low',
+          rationale: 'Small change.',
+          estimatedCostUsd: null,
+          alternatives: [],
+        },
+        readFirst: [],
+        considerations: [],
+        prompt: { system: 's', task: 't', outputFormat: 'o' },
+        budget: { maxInputTokens: 1, maxOutputTokens: 1 },
+      }),
+    };
+    render(
+      <WorkView
+        apiClient={api as unknown as ApiClient}
+        workspaceId="workspace-a"
+        tab="issues"
+        currentUserId="user-a"
+        isReadOnly
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: '1 Prepare release' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Informações do Agente' }));
+    expect(await screen.findByText('Small change.')).toBeInTheDocument();
+    expect(api.getIssueBrief).toHaveBeenCalledWith('issue-1', expect.any(AbortSignal));
+    fireEvent.click(screen.getByRole('tab', { name: 'Detalhes' }));
+    expect(screen.queryByText('Small change.')).toBeNull();
   });
 });

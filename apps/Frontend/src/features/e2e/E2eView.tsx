@@ -463,7 +463,8 @@ export function E2eView({
                             <Button
                               variant="ghost"
                               role="menuitem"
-                              className="flex w-full justify-start text-left text-red-400"
+                              className="flex w-full justify-start text-left"
+                              data-destructive
                               onClick={() => setPendingDelete(creation)}
                             >
                               <i className="ti ti-trash" aria-hidden="true" />

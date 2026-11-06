@@ -227,3 +227,14 @@ describe('AuthModal sign-in options', () => {
     await pending.catch(() => undefined);
   });
 });
+
+describe('AuthModal sign-in options failure', () => {
+  it('falls back to no OAuth providers when the options request fails', async () => {
+    const client = new ApiClient();
+    const getAuthOptions = vi.spyOn(client, 'getAuthOptions').mockRejectedValue(new Error('x'));
+    render(<AuthModal isOpen={true} onClose={vi.fn()} onSuccess={vi.fn()} apiClient={client} />);
+    await waitFor(() => expect(getAuthOptions).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+});

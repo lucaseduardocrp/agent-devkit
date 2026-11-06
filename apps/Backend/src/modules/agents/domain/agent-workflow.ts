@@ -76,7 +76,7 @@ export interface AgentWorkflowDelayConfig {
 }
 
 export type AgentWorkflowNodeKind =
-  'trigger' | 'step' | 'approval' | 'action' | 'condition' | 'delay';
+  'trigger' | 'step' | 'approval' | 'action' | 'condition' | 'delay' | 'rule';
 
 /**
  * A node of the hand-arranged flow canvas. The canvas is what the editor saves and what the runner

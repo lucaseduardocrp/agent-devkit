@@ -1,8 +1,9 @@
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentTopology } from '../src/features/agents/AgentTopology.js';
-import type { CustomAgentDto } from '../src/features/agents/agent-types.js';
+import type { AgentWorkflowDto, CustomAgentDto } from '../src/features/agents/agent-types.js';
 import type { AgentRun, Issue } from '../src/features/issues/issue-types.js';
+const emptyWorkflow: AgentWorkflowDto = {  enabled: true,  autonomy: 'balanced',  finalReview: true,  uncertaintyBehavior: 'ask',  issueCreationBehavior: 'ask',  defaultAction: 'allow',  steps: [],  rules: [],};
 
 const parent: CustomAgentDto = {
   id: 'parent',
@@ -69,6 +70,7 @@ describe('AgentTopology', () => {
         isLoading={false}
         error={null}
         onRefresh={onRefresh}
+        workflow={emptyWorkflow}
       />,
     );
 
@@ -80,7 +82,7 @@ describe('AgentTopology', () => {
     expect(view.getByRole('button', { name: 'BDD Agent: Rodando' })).toBeInTheDocument();
 
     fireEvent.click(view.getByRole('button', { name: 'BDD Agent: Rodando' }));
-    expect(view.getByTestId('topology-selection')).toHaveTextContent('1 execuções ativas');
+    expect(view.getByTestId('agent-run-flow')).toHaveTextContent('1 execuções ativas');
     fireEvent.click(view.getByRole('button', { name: 'Atualizar' }));
     expect(onRefresh).toHaveBeenCalledOnce();
   });
@@ -97,6 +99,7 @@ describe('AgentTopology', () => {
         isLoading={false}
         error={null}
         onRefresh={vi.fn()}
+        workflow={emptyWorkflow}
       />,
     );
     expect(view.queryByTestId('run-edge-run-1')).not.toBeInTheDocument();
@@ -114,6 +117,7 @@ describe('AgentTopology', () => {
         isLoading={true}
         error={null}
         onRefresh={onRefresh}
+        workflow={emptyWorkflow}
       />,
     );
     expect(view.getAllByTestId('skeleton-card')).toHaveLength(2);
@@ -125,6 +129,7 @@ describe('AgentTopology', () => {
         isLoading={false}
         error="Network error"
         onRefresh={onRefresh}
+        workflow={emptyWorkflow}
       />,
     );
     expect(view.getByText('Crie um agente para começar o mapa.')).toBeInTheDocument();
@@ -142,10 +147,71 @@ describe('AgentTopology', () => {
         isLoading={false}
         error={null}
         onRefresh={vi.fn()}
+        workflow={emptyWorkflow}
         canCreateAgents={false}
       />,
     );
     expect(view.getByText('Nenhum agente cadastrado')).toBeInTheDocument();
     expect(view.queryByText('Crie um agente para começar o mapa.')).not.toBeInTheDocument();
+  });
+
+  it('opens the workflow of a run from its task and marks the current step', () => {
+    const withWorkflow: AgentRun = {
+      ...run,
+      workflowState: {
+        autonomy: 'balanced',
+        steps: [
+          { id: 's1', name: 'Triage' },
+          { id: 's2', name: 'Implement', reviewRequired: true },
+          { id: 's3', name: 'Review' },
+        ],
+        currentStepIndex: 1,
+        results: [{ stepId: 's1', name: 'Triage', output: 'Looks fine' }],
+      },
+    };
+    const view = render(
+      <AgentTopology
+        agents={[parent, child]}
+        issues={[issue]}
+        runs={[withWorkflow]}
+        isLoading={false}
+        error={null}
+        onRefresh={vi.fn()}
+        workflow={{
+          ...emptyWorkflow,
+          steps: [
+            { id: 's1', name: 'Triage', instructions: '', reviewRequired: false },
+            { id: 's2', name: 'Implement', instructions: '', reviewRequired: true },
+            { id: 's3', name: 'Review', instructions: '', reviewRequired: false },
+          ],
+        }}
+      />,
+    );
+    expect(view.getByTestId('topology-agent-task-child')).toHaveTextContent('#42 Write scenarios');
+    fireEvent.click(view.getByTestId('topology-run-run-1'));
+    expect(view.getByTestId('workflow-node-state-s1')).toHaveAttribute('data-state', 'done');
+    expect(view.getByTestId('workflow-node-state-s2')).toHaveAttribute('data-state', 'current');
+    expect(view.queryByTestId('workflow-node-state-s3')).toBeNull();
+    expect(view.getByTestId('workflow-node-s3')).toBeInTheDocument();
+    expect(view.getByTestId('run-flow-current-step')).toHaveTextContent('Implement');
+    expect(view.getByText('Looks fine')).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: 'Fechar' }));
+    expect(view.queryByTestId('agent-run-flow')).not.toBeInTheDocument();
+  });
+
+  it('shows an agent without active runs in the modal', () => {
+    const view = render(
+      <AgentTopology
+        agents={[parent]}
+        issues={[]}
+        runs={[]}
+        isLoading={false}
+        error={null}
+        onRefresh={vi.fn()}
+        workflow={emptyWorkflow}
+      />,
+    );
+    fireEvent.click(view.getByTestId('topology-agent-parent'));
+    expect(view.getByRole('status')).toHaveTextContent('Nenhuma execução ativa');
   });
 });

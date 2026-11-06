@@ -58,6 +58,7 @@ function nth<T>(items: readonly T[], index: number): T {
 
 const R = { id: 'r1', marker: true };
 const F = { title: 'Fields', value: 1 };
+const BRIEF_EDITS = { considerations: ['Fields'] };
 
 type Endpoint = readonly [
   name: string,
@@ -166,6 +167,15 @@ const endpoints: readonly Endpoint[] = [
     'Sprint 4',
   ],
   ['pullPbiBoards', (c) => c.pullPbiBoards(), 'POST', '/pbi/pull', undefined, R, R],
+  [
+    'pullPbiBoards (provider)',
+    (c) => c.pullPbiBoards('trello'),
+    'POST',
+    '/pbi/pull?providerId=trello',
+    undefined,
+    R,
+    R,
+  ],
   ['createPbiItem', (c) => c.createPbiItem(F as never), 'POST', '/pbi/items', F, { item: R }, R],
   ['updatePbiItem', (c) => c.updatePbiItem('p1', F), 'PATCH', '/pbi/items/p1', F, { item: R }, R],
   [
@@ -260,6 +270,33 @@ const endpoints: readonly Endpoint[] = [
   ],
   ['updateIssue', (c) => c.updateIssue('i1', F), 'PATCH', '/issues/i1', F, { issue: R }, R],
   ['deleteIssue', (c) => c.deleteIssue('i1'), 'DELETE', '/issues/i1', undefined, {}, undefined],
+  [
+    'getIssueBrief',
+    (c) => c.getIssueBrief('i1'),
+    'GET',
+    '/issues/i1/brief',
+    undefined,
+    { brief: R },
+    R,
+  ],
+  [
+    'updateIssueBrief',
+    (c) => c.updateIssueBrief('i1', BRIEF_EDITS),
+    'PUT',
+    '/issues/i1/brief',
+    BRIEF_EDITS,
+    { brief: R },
+    R,
+  ],
+  [
+    'regenerateIssueBrief',
+    (c) => c.regenerateIssueBrief('i1', true),
+    'POST',
+    '/issues/i1/brief/regenerate',
+    { force: true },
+    { brief: R },
+    R,
+  ],
   [
     'addIssueComment',
     (c) => c.addIssueComment('i1', 'hello'),

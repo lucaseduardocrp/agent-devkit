@@ -1,3 +1,4 @@
+import { briefRunContext, type IssueBriefService } from './agent-brief/brief-service.js';
 import { ApplicationError } from '../../shared/errors.js';
 import type { RequestContext } from '../../shared/context.js';
 import type { AgentService } from '../agents/application/agent-service.js';
@@ -146,6 +147,7 @@ export class RunService {
     private readonly pbiItems?: PbiStore,
     private readonly usage: UsageStore = new InMemoryUsageStore(),
     private readonly imageStore?: E2eArtifactStore,
+    private readonly briefs?: Pick<IssueBriefService, 'get'>,
   ) {}
 
   async recover(): Promise<void> {
@@ -336,7 +338,9 @@ export class RunService {
     const instruction = responseTo
       ? `\n\nThe latest user comment [${responseTo.id}] is a new request. Consider the issue, previous work and the full conversation. Carry out the requested work when possible. If clarification or a decision is needed, ask a specific question. Write a concise, direct reply to the user; the application will publish your answer as an issue comment. Do not claim changes you did not make.`
       : '\n\nProvide the work performed, result, and any remaining blockers. Do not claim external changes you did not make.';
-    const prompt = `Work on issue #${issue.number}: ${issue.title}\n\n${issue.description}${pbiContext}${imageContext}${conversation}${instruction}`;
+    const brief = await this.briefs?.get(workspaceId, issue.id);
+    const briefContext = brief ? briefRunContext(brief) : '';
+    const prompt = `Work on issue #${issue.number}: ${issue.title}\n\n${issue.description}${pbiContext}${imageContext}${conversation}${briefContext}${instruction}`;
     // A flow is walked only when it has nodes the step list cannot express and a trigger wired to
     // them; anything else still runs as the plain ordered list of steps.
     const canvas = configuredWorkflow.canvas;
