@@ -29,7 +29,13 @@ export interface WorkflowNodeView {
   readonly subtitle: string;
 }
 
+/** Where a run is on a node, when the canvas shows a run instead of editing a flow. */
+export type WorkflowRunState = 'done' | 'current' | 'waiting' | 'pending';
+
 export interface AgentWorkflowCanvasProps {
+  /** Marks each node with the progress of a run; nodes missing from it render as usual. */
+  readonly nodeStates?: Readonly<Record<string, WorkflowRunState>>;
+  readonly canvasClassName?: string;
   readonly graph: WorkflowGraph;
   readonly isReadOnly: boolean;
   /** Dims the whole canvas while the workflow is turned off. */
@@ -82,6 +88,8 @@ function nodeIdAt(target: EventTarget): string | null {
  * others as the flow needs, and an approval node is just another node on a connection.
  */
 export function AgentWorkflowCanvas({
+  nodeStates,
+  canvasClassName,
   graph,
   isReadOnly,
   isDimmed,
@@ -208,7 +216,7 @@ export function AgentWorkflowCanvas({
       : null;
 
   return (
-    <div className="flex flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2 border-b border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
         <span className="text-sm font-semibold text-[var(--text-primary)]">
           {t('agents.workflowFlow')}
@@ -266,6 +274,7 @@ export function AgentWorkflowCanvas({
           gesture?.kind === 'pan' ? 'cursor-grabbing' : 'cursor-grab',
           // Turned off reads as muted, not as unreadable: the flow still has to be editable.
           isDimmed && 'opacity-[0.78]',
+          canvasClassName,
         )}
       >
         <div
@@ -339,6 +348,7 @@ export function AgentWorkflowCanvas({
             const isSelected = selectedNodeId === node.id;
             const isDragging = gesture?.kind === 'node' && gesture.id === node.id;
             const problem = nodeProblem(node);
+            const runState = nodeStates?.[node.id];
             return (
               <div
                 key={node.id}
@@ -351,11 +361,18 @@ export function AgentWorkflowCanvas({
                   node.kind === 'trigger' ? 'rounded-l-[36px] rounded-r-2xl' : 'rounded-2xl',
                   !isReadOnly && 'cursor-grab active:cursor-grabbing',
                   isDragging && 'shadow-lg',
-                  isSelected
-                    ? 'border-[var(--fill-accent)] ring-4 ring-[var(--fill-accent)]/15'
-                    : problem
-                      ? 'border-[var(--fill-warning)] hover:border-[var(--fill-accent)]'
-                      : 'border-[var(--border-strong)] hover:border-[var(--fill-accent)]',
+                  runState === 'current' &&
+                    'border-[var(--fill-accent)] ring-4 ring-[var(--fill-accent)]/25',
+                  runState === 'waiting' && 'border-sky-400 ring-4 ring-sky-400/20',
+                  runState === 'done' && 'border-emerald-500/60',
+                  runState === 'pending' && 'opacity-60',
+                  runState
+                    ? ''
+                    : isSelected
+                      ? 'border-[var(--fill-accent)] ring-4 ring-[var(--fill-accent)]/15'
+                      : problem
+                        ? 'border-[var(--fill-warning)] hover:border-[var(--fill-accent)]'
+                        : 'border-[var(--border-strong)] hover:border-[var(--fill-accent)]',
                 )}
               >
                 <span
@@ -383,8 +400,29 @@ export function AgentWorkflowCanvas({
                   </span>
                 </span>
 
+                {runState && runState !== 'pending' && (
+                  <span
+                    data-testid={`workflow-node-state-${node.id}`}
+                    data-state={runState}
+                    aria-hidden="true"
+                    className={cn(
+                      'absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full border border-[var(--border-strong)] bg-[var(--surface-1)]',
+                    )}
+                  >
+                    <i
+                      className={cn(
+                        'ti text-sm',
+                        runState === 'done' && 'ti-circle-check text-emerald-400',
+                        runState === 'current' &&
+                          'ti-loader-2 animate-spin text-[var(--fill-accent)]',
+                        runState === 'waiting' && 'ti-hourglass text-sky-300',
+                      )}
+                    />
+                  </span>
+                )}
+
                 {/* Input port: the drop target of a connection. */}
-                {node.kind !== 'trigger' && (
+                {node.kind !== 'trigger' && node.kind !== 'rule' && (
                   <span
                     aria-hidden="true"
                     className="absolute -left-[7px] top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full border-2 border-[var(--text-muted)] bg-[var(--surface-2)]"

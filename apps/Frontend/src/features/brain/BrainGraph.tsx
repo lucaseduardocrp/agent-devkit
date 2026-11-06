@@ -41,7 +41,6 @@ const WHEEL_ZOOM_SPEED = 0.0015;
 const DRAG_THRESHOLD = 3;
 
 // Obsidian dark-theme graph palette.
-const BACKGROUND = '#1e1e1e';
 const EDGE_COLOR = 'rgba(255, 255, 255, 0.16)';
 const EDGE_DIM_COLOR = 'rgba(255, 255, 255, 0.05)';
 const NODE_COLOR = '#b3b3b3';
@@ -98,8 +97,7 @@ function drawBrainGraph(
 ): void {
   context.setTransform(viewport.pixelRatio, 0, 0, viewport.pixelRatio, 0, 0);
   context.clearRect(0, 0, viewport.width, viewport.height);
-  context.fillStyle = BACKGROUND;
-  context.fillRect(0, 0, viewport.width, viewport.height);
+  // No fill: the canvas is transparent and the container paints --graph-bg.
   context.save();
   context.translate(camera.x, camera.y);
   context.scale(camera.scale, camera.scale);
@@ -426,14 +424,17 @@ export function BrainGraph({
   };
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[#1e1e1e]" data-testid="graph-view">
+    <div
+      className="relative h-full w-full overflow-hidden bg-[var(--graph-bg)]"
+      data-testid="graph-view"
+    >
       <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
-        <div className="flex items-center rounded-md border border-[#303030] bg-[#1a1a1a]/90 p-0.5 backdrop-blur">
+        <div className="flex items-center rounded-md border border-[var(--border-strong)] bg-[var(--graph-control-bg)] p-0.5 shadow-md">
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-7 w-7 text-[#c8c8c8]"
+            className="h-7 w-7 text-[var(--text-secondary)]"
             onClick={() => zoomAt(1 / ZOOM_STEP)}
             disabled={cameraRef.current.scale <= MIN_ZOOM}
             aria-label={t('brain.zoomOut')}
@@ -446,7 +447,7 @@ export function BrainGraph({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 min-w-14 px-2 text-[11px] text-[#c8c8c8]"
+            className="h-7 min-w-14 px-2 text-[11px] text-[var(--text-secondary)]"
             onClick={() => centerGraph(true)}
             aria-label={t('brain.resetZoom')}
             title={t('brain.resetZoom')}
@@ -458,7 +459,7 @@ export function BrainGraph({
             type="button"
             variant="ghost"
             size="icon"
-            className="h-7 w-7 text-[#c8c8c8]"
+            className="h-7 w-7 text-[var(--text-secondary)]"
             onClick={() => zoomAt(ZOOM_STEP)}
             disabled={cameraRef.current.scale >= MAX_ZOOM}
             aria-label={t('brain.zoomIn')}
@@ -471,7 +472,7 @@ export function BrainGraph({
         <button
           type="button"
           onClick={() => centerGraph(true)}
-          className="flex h-8 items-center gap-1.5 rounded-md border border-[#303030] bg-[#1a1a1a]/90 px-2.5 text-xs font-medium text-[#c8c8c8] backdrop-blur transition-colors hover:border-[#454545] hover:bg-[#242424] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b6cf6]"
+          className="flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-strong)] bg-[var(--graph-control-bg)] px-2.5 text-xs font-medium text-[var(--text-secondary)] shadow-md transition-colors hover:border-[var(--border-accent)] hover:bg-[var(--surface-1)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-accent)]"
           data-testid="center-graph"
           aria-label={t('brain.centerGraph')}
           title={t('brain.centerGraph')}
@@ -479,7 +480,7 @@ export function BrainGraph({
           <i className="ti ti-focus-centered" aria-hidden="true" />
           <span>{t('brain.centerGraph')}</span>
         </button>
-        <div className="rounded-md border border-[#2a2a2a] bg-[#1a1a1a]/90 px-3 py-1.5 text-xs text-[#a0a0a0] backdrop-blur">
+        <div className="rounded-md border border-[var(--border)] bg-[var(--graph-control-bg)] px-3 py-1.5 text-xs text-[var(--text-muted)] shadow-md">
           {t('brain.graphStats', {
             notes: documents.length,
             connections: graphState.edges.length,

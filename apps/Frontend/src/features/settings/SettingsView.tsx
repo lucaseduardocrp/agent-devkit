@@ -9,6 +9,7 @@ import { ConfirmationDialog } from '../../components/ui/confirmation-dialog.js';
 import type { ApiClient } from '../../lib/api-client.js';
 import { AccessTokensPanel } from './AccessTokensPanel.js';
 import { PermissionGroupsPanel } from './PermissionGroupsPanel.js';
+import { WorkItemTypesPanel } from '../work-item-types/WorkItemTypesPanel.js';
 import { accessFor } from '../workspaces/permissions.js';
 import { useI18n, type SupportedLocale, type TranslationKey } from '../../lib/i18n/index.js';
 import {
@@ -23,13 +24,14 @@ import {
   getRoleBadgeClass,
 } from '../workspaces/workspace-types.js';
 
-type SettingsSection = 'general' | 'members' | 'groups' | 'workspace' | 'tokens';
+type SettingsSection = 'general' | 'members' | 'groups' | 'workspace' | 'types' | 'tokens';
 
 const sectionIcons: Record<SettingsSection, string> = {
   general: 'ti-settings',
   members: 'ti-users',
   groups: 'ti-shield-lock',
   workspace: 'ti-building-community',
+  types: 'ti-palette',
   tokens: 'ti-key',
 };
 
@@ -38,6 +40,7 @@ const sectionLabels: Record<SettingsSection, TranslationKey> = {
   members: 'settings.members',
   groups: 'permissions.section',
   workspace: 'settings.workspace',
+  types: 'settings.workItemTypes',
   tokens: 'settings.accessTokens',
 };
 
@@ -107,8 +110,8 @@ export function SettingsView({
   const canEditWorkspace = workspaceAccess.editWorkspace;
   const canDeleteWorkspace = workspaceAccess.deleteWorkspace;
   const sections: readonly SettingsSection[] = canManageGroups
-    ? ['general', 'members', 'groups', 'workspace', 'tokens']
-    : ['general', 'members', 'workspace', 'tokens'];
+    ? ['general', 'members', 'groups', 'workspace', 'types', 'tokens']
+    : ['general', 'members', 'workspace', 'types', 'tokens'];
   const groupName = (id: string) => groups.find((group) => group.id === id)?.name;
   const loadMembers = useCallback(async () => {
     if (!apiClient || !activeWorkspaceId) return;
@@ -348,6 +351,12 @@ export function SettingsView({
               </div>
             </div>
           </div>
+
+          {settingsSection === 'types' && apiClient && (
+            <div className="rounded-xl border border-border bg-surface-1 p-5 shadow-sm">
+              <WorkItemTypesPanel apiClient={apiClient} canEdit={isAdmin || canEditWorkspace} />
+            </div>
+          )}
 
           {settingsSection === 'tokens' && (
             <div className="rounded-xl border border-border bg-surface-1 p-5 shadow-sm">

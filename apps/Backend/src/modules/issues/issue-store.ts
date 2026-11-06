@@ -14,6 +14,8 @@ export interface Issue {
   attachments?: ImageAttachment[];
   status: IssueStatus;
   priority: IssuePriority;
+  /** Key of a configured work item type; empty when untyped. */
+  type: string;
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
   pbiItemId: string | null;
@@ -45,6 +47,7 @@ export type IssueChanges = Partial<
     | 'attachments'
     | 'status'
     | 'priority'
+    | 'type'
     | 'assigneeAgentId'
     | 'assigneeUserId'
     | 'pbiItemId'
@@ -105,6 +108,7 @@ export class InMemoryIssueStore implements IssueStore {
       attachments: changes.attachments ?? [],
       status: changes.status ?? 'todo',
       priority: changes.priority ?? 'medium',
+      type: changes.type ?? '',
       assigneeAgentId: changes.assigneeAgentId ?? null,
       assigneeUserId: changes.assigneeUserId ?? null,
       pbiItemId: changes.pbiItemId ?? null,
@@ -203,6 +207,7 @@ export class PrismaIssueStore implements IssueStore {
           attachments: (changes.attachments ?? []) as unknown as Prisma.InputJsonValue,
           status: changes.status ?? 'todo',
           priority: changes.priority ?? 'medium',
+          type: changes.type ?? '',
           assigneeAgentId: changes.assigneeAgentId,
           assigneeUserId: changes.assigneeUserId,
           pbiItemId: changes.pbiItemId,

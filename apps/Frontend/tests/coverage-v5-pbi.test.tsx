@@ -228,7 +228,7 @@ describe('PbiView coverage (Vitest 5)', () => {
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => expect(api.syncPbiChildren).toHaveBeenCalledWith('root'));
     expect(api.getAgents).toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fechar' }));
     await act(async () => {
       children.reject(new Error('sync'));
       agents.reject(new Error('agents'));
@@ -246,6 +246,7 @@ describe('PbiView coverage (Vitest 5)', () => {
     ]);
     api.getPbiCurrentIteration.mockResolvedValue(undefined);
     renderView(api);
+    fireEvent.click(await screen.findByRole('button', { name: /^Filtros/ }));
     const select = await screen.findByRole('combobox', { name: 'Iteração' });
     await waitFor(() => expect(select).toHaveProperty('value', 'Proj\\Sprint 1'));
     fireEvent.change(select, { target: { value: 'Proj\\Sprint 2' } });

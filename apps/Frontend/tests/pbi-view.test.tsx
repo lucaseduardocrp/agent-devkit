@@ -12,6 +12,11 @@ import type {
   PermissionModule,
 } from '../src/features/workspaces/workspace-types.js';
 
+const openFilters = () => {
+  const toggle = screen.getByRole('button', { name: /^(Filters|Filtros)/ });
+  if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+};
+
 function accessWith(modules: Partial<Record<PermissionModule, ModuleAccess>>): EffectiveAccess {
   return { ...FULL_ACCESS, modules: { ...FULL_ACCESS.modules, ...modules } };
 }
@@ -305,6 +310,7 @@ describe('PbiView', () => {
     expect(await screen.findByText('Release PBI')).toBeInTheDocument();
     expect(screen.getByText('Verify release')).toBeInTheDocument();
     expect(screen.getByText('Fix release')).toBeInTheDocument();
+    openFilters();
     expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Iteração' }).value).toBe(
       'Sprint 190',
     );
@@ -513,6 +519,7 @@ describe('PbiView', () => {
     ]);
     render(<PbiView apiClient={api as unknown as ApiClient} workspaceId="ws" />);
     expect(await screen.findByText('Unrelated PBI')).toBeInTheDocument();
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Origem' }), {
       target: { value: 'azure_devops' },
     });
@@ -629,6 +636,7 @@ describe('PbiView', () => {
     ]);
     render(<PbiView apiClient={api as unknown as ApiClient} workspaceId="ws" />);
     expect(await screen.findByText('Other PBI')).toBeInTheDocument();
+    openFilters();
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Salvar filtro' }).disabled).toBe(
       true,
     );
@@ -667,6 +675,7 @@ describe('PbiView', () => {
     ]);
     render(<PbiView apiClient={api as unknown as ApiClient} workspaceId="ws" />);
     expect(await screen.findByText('Other PBI')).toBeInTheDocument();
+    openFilters();
     await waitFor(() =>
       expect(screen.getAllByRole('option', { name: 'Ana Souza' }).length).toBeGreaterThan(0),
     );

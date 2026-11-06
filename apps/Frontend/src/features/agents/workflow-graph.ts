@@ -7,7 +7,8 @@ import type {
 /** The node every flow starts from. It is the trigger, and it cannot be removed. */
 export const WORKFLOW_TRIGGER_NODE_ID = 'start';
 
-export type WorkflowNodeKind = 'trigger' | 'step' | 'approval' | 'action' | 'condition' | 'delay';
+export type WorkflowNodeKind =
+  'trigger' | 'step' | 'approval' | 'action' | 'condition' | 'delay' | 'rule';
 
 /** What makes the workflow run. */
 export type WorkflowTriggerKind = 'issue-assigned' | 'product-event' | 'schedule';
@@ -72,6 +73,8 @@ export type WorkflowNode =
   | (WorkflowNodeBase & { readonly kind: 'trigger'; readonly trigger: WorkflowTriggerConfig })
   | (WorkflowNodeBase & { readonly kind: 'step' })
   | (WorkflowNodeBase & { readonly kind: 'approval' })
+  /** A module rule: its id is the rule's id; it sits on the canvas but takes no connections. */
+  | (WorkflowNodeBase & { readonly kind: 'rule' })
   | (WorkflowNodeBase & { readonly kind: 'action'; readonly action: WorkflowActionConfig })
   | (WorkflowNodeBase & {
       readonly kind: 'condition';
@@ -114,6 +117,7 @@ export const NODE_SIZES: Record<
   action: { width: 232, height: 112 },
   condition: { width: 212, height: 112 },
   delay: { width: 196, height: 96 },
+  rule: { width: 216, height: 96 },
 };
 
 /** The node kinds the palette can drop on the canvas; the trigger is always there already. */
@@ -123,6 +127,7 @@ export const ADDABLE_NODE_KINDS: readonly Exclude<WorkflowNodeKind, 'trigger'>[]
   'action',
   'condition',
   'delay',
+  'rule',
 ];
 
 /** Nodes snap to this grid while dragging, the way the dotted background suggests. */
@@ -159,6 +164,7 @@ export function nodeSize(kind: WorkflowNodeKind): {
 
 /** The outputs a node offers: a condition has a true and a false one, everything else has one. */
 export function nodePorts(node: WorkflowNode): readonly (WorkflowPort | undefined)[] {
+  if (node.kind === 'rule') return [];
   return node.kind === 'condition' ? ['true', 'false'] : [undefined];
 }
 
@@ -256,6 +262,7 @@ const nodeKinds: readonly WorkflowNodeKind[] = [
   'action',
   'condition',
   'delay',
+  'rule',
 ];
 
 /**
@@ -341,7 +348,7 @@ function readEdge(value: unknown): WorkflowEdge | null {
  * The canvas of a stored workflow, repaired against its steps: a step added elsewhere gets a node,
  * a step that is gone loses its node, and connections to nodes that no longer exist are dropped.
  */
-export function normalizeGraph(workflow: AgentWorkflowDto): WorkflowGraph {
+function normalizeFlow(workflow: AgentWorkflowDto): WorkflowGraph {
   const steps = workflow.steps;
   const stored = workflow.canvas;
   if (!stored || !Array.isArray(stored.nodes) || stored.nodes.length === 0) {
@@ -349,12 +356,14 @@ export function normalizeGraph(workflow: AgentWorkflowDto): WorkflowGraph {
   }
 
   const stepIds = new Set(steps.map((step) => step.id));
+  const ruleIds = new Set(workflow.rules.map((rule) => rule.id));
   const seen = new Set<string>();
   const nodes: WorkflowNode[] = [];
   for (const candidate of stored.nodes) {
     const node = readNode(candidate);
     if (!node || seen.has(node.id)) continue;
     if (node.kind === 'step' && !stepIds.has(node.id)) continue;
+    if (node.kind === 'rule' && !ruleIds.has(node.id)) continue;
     if (node.kind === 'trigger' && node.id !== WORKFLOW_TRIGGER_NODE_ID) continue;
     seen.add(node.id);
     nodes.push(node);
@@ -471,8 +480,35 @@ export function removeNode(graph: WorkflowGraph, id: string): WorkflowGraph {
   };
 }
 
+/** Rules sit on their own row under the flow, so they never overlap its steps. */
+const RULE_ROW_Y = LAYOUT_ORIGIN.y + 232;
+
+function nextRulePosition(graph: WorkflowGraph): WorkflowPoint {
+  const x = graph.nodes
+    .filter((node) => node.kind === 'rule')
+    .reduce(
+      (furthest, node) => Math.max(furthest, node.x + NODE_SIZES.rule.width + COLUMN_GAP / 2),
+      LAYOUT_ORIGIN.x,
+    );
+  return { x, y: RULE_ROW_Y };
+}
+
+/** The canvas of a stored workflow, repaired against its steps and its module rules. */
+export function normalizeGraph(workflow: AgentWorkflowDto): WorkflowGraph {
+  let graph = normalizeFlow(workflow);
+  for (const rule of workflow.rules) {
+    if (graph.nodes.some((node) => node.id === rule.id)) continue;
+    graph = {
+      nodes: [...graph.nodes, createNode(rule.id, 'rule', nextRulePosition(graph))],
+      edges: graph.edges,
+    };
+  }
+  return graph;
+}
+
 /** A free spot for a new node: to the right of everything already placed. */
 export function nextNodePosition(graph: WorkflowGraph, kind: WorkflowNodeKind): WorkflowPoint {
+  if (kind === 'rule') return nextRulePosition(graph);
   const x = graph.nodes.reduce(
     (furthest, node) => Math.max(furthest, node.x + nodeSize(node.kind).width + COLUMN_GAP),
     LAYOUT_ORIGIN.x,

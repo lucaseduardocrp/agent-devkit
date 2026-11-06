@@ -78,6 +78,7 @@ describe('WorkView coverage (Vitest 5)', () => {
       Promise.resolve([pbi('b', 'Proj\\Sprint 2'), pbi('a', 'Proj\\Sprint 1')]),
     );
     render(<WorkView apiClient={api} workspaceId="ws" tab="issues" currentUserId="user-a" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Filtros' }));
     const iteration = await screen.findByRole('combobox', { name: 'Iteração' });
     expect(
       within(iteration)

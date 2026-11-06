@@ -569,7 +569,8 @@ describe('AgentWorkflowBoard inspector', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Block action' }));
     expect((onWorkflow.mock.lastCall![0] as AgentWorkflowDto).rules[0]!.effect).toBe('deny');
-    expect(screen.getByTestId('workflow-rule-node-1')).toHaveTextContent('Blocked');
+    const ruleId = (onWorkflow.mock.lastCall![0] as AgentWorkflowDto).rules[0]!.id;
+    expect(screen.getByTestId(`workflow-node-${ruleId}`)).toHaveTextContent('Blocked');
 
     fireEvent.click(screen.getByRole('switch', { name: 'Block action' }));
     expect((onWorkflow.mock.lastCall![0] as AgentWorkflowDto).rules[0]!.effect).toBe('allow');
@@ -583,11 +584,14 @@ describe('AgentWorkflowBoard inspector', () => {
     expect((onWorkflow.mock.lastCall![0] as AgentWorkflowDto).rules).toEqual([]);
   });
 
-  it('reopens a rule card from the rules row', () => {
-    render(<Host />);
+  it('reopens a rule node from the canvas', () => {
+    const onWorkflow = vi.fn();
+    render(<Host onWorkflow={onWorkflow} />);
     fireEvent.click(screen.getByTestId('workflow-add-rule'));
+    const ruleId = (onWorkflow.mock.lastCall![0] as AgentWorkflowDto).rules[0]!.id;
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    fireEvent.click(screen.getByTestId('workflow-rule-node-1'));
+    pointerDown(node(ruleId), { clientX: 0, clientY: 0 });
+    pointerUp(node(ruleId), { clientX: 0, clientY: 0 });
     expect(screen.getByTestId('workflow-inspector')).toHaveTextContent('Rule 1');
   });
 });
@@ -658,14 +662,16 @@ describe('AgentWorkflowBoard edge cases', () => {
         onWorkflow={onWorkflow}
       />,
     );
-    expect(screen.getByTestId('workflow-rule-node-1')).toHaveTextContent('Rule');
+    expect(screen.getByTestId('workflow-node-rule-1')).toHaveTextContent('Rule');
 
-    fireEvent.click(screen.getByTestId('workflow-rule-node-1'));
+    pointerDown(node('rule-1'), { clientX: 0, clientY: 0 });
+    pointerUp(node('rule-1'), { clientX: 0, clientY: 0 });
     expect(screen.getByTestId('workflow-inspector')).toHaveTextContent('Rule');
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByTestId('workflow-inspector')).toBeNull();
 
-    fireEvent.click(screen.getByTestId('workflow-rule-node-2'));
+    pointerDown(node('rule-2'), { clientX: 0, clientY: 0 });
+    pointerUp(node('rule-2'), { clientX: 0, clientY: 0 });
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed' } });
 
     const saved = onWorkflow.mock.lastCall![0] as AgentWorkflowDto;

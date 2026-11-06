@@ -1055,7 +1055,7 @@ export function TestPlansView({
                               type="button"
                               variant="ghost"
                               size="sm"
-                              className="h-8 w-8 p-0 text-red-400 hover:bg-red-950/30 hover:text-red-300"
+                              className="h-8 w-8 p-0"
                               onClick={() => setPlanToDelete(plan)}
                               title={t('common.delete')}
                               aria-label={t('testplans.deletePlan', { title: plan.title })}
@@ -1169,7 +1169,6 @@ export function TestPlansView({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="text-red-400 hover:bg-red-950/30 hover:text-red-300"
                       onClick={() => selectedPlanObj && setPlanToDelete(selectedPlanObj)}
                       title={t('common.delete')}
                       data-destructive

@@ -136,6 +136,88 @@ export const issuesModule: McpModule = {
         ),
     }),
     defineTool({
+      name: 'issues_brief_get',
+      title: 'Get agent brief',
+      description:
+        'Gets the agent brief of an issue (recommended model, files to read first, considerations, prompt and budget), or null when none exists.',
+      toolset: 'issues',
+      access: 'read',
+      routes: ['GET /issues/:id/brief'],
+      input: { issueId },
+      run: async ({ issueId: target }, { api }) =>
+        json(await api.request({ method: 'GET', path: `/issues/${segment(target)}/brief` })),
+    }),
+    defineTool({
+      name: 'issues_brief_update',
+      title: 'Edit agent brief',
+      description:
+        'Edits parts of an issue agent brief. Pass any of recommendation, readFirst, considerations, prompt ({system, task, outputFormat}) and budget ({maxInputTokens, maxOutputTokens}); the API validates the shape.',
+      toolset: 'issues',
+      access: 'write',
+      routes: ['PUT /issues/:id/brief'],
+      input: { issueId, edits: z.record(z.string(), z.unknown()) },
+      run: async ({ issueId: target, edits }, { api }) =>
+        json(
+          await api.request({
+            method: 'PUT',
+            path: `/issues/${segment(target)}/brief`,
+            body: edits,
+          }),
+        ),
+    }),
+    defineTool({
+      name: 'issues_brief_regenerate',
+      title: 'Regenerate agent brief',
+      description: 'Regenerates the agent brief of an issue; force overwrites manual edits.',
+      toolset: 'issues',
+      access: 'write',
+      routes: ['POST /issues/:id/brief/regenerate'],
+      input: { issueId, force: z.boolean().optional() },
+      run: async ({ issueId: target, force }, { api }) =>
+        json(
+          await api.request({
+            method: 'POST',
+            path: `/issues/${segment(target)}/brief/regenerate`,
+            body: { force: force ?? false },
+          }),
+        ),
+    }),
+    defineTool({
+      name: 'work_item_types_get',
+      title: 'Get work item types',
+      description:
+        'Gets the work item types (key, label, color, icon, aliases) that tag PBI cards and issues in the workspace.',
+      toolset: 'issues',
+      access: 'read',
+      routes: ['GET /work-item-types'],
+      input: {},
+      run: async (_, { api }) =>
+        json(await api.request({ method: 'GET', path: '/work-item-types' })),
+    }),
+    defineTool({
+      name: 'work_item_types_save',
+      title: 'Save work item types',
+      description: 'Replaces the workspace work item types. Keys must be unique lowercase slugs.',
+      toolset: 'issues',
+      access: 'write',
+      routes: ['PUT /work-item-types'],
+      input: {
+        types: z
+          .array(
+            z.object({
+              key: z.string(),
+              label: z.string(),
+              color: z.string(),
+              icon: z.string(),
+              aliases: z.array(z.string()).optional(),
+            }),
+          )
+          .max(40),
+      },
+      run: async ({ types }, { api }) =>
+        json(await api.request({ method: 'PUT', path: '/work-item-types', body: { types } })),
+    }),
+    defineTool({
       name: 'issues_inbox',
       title: 'Get inbox',
       description:

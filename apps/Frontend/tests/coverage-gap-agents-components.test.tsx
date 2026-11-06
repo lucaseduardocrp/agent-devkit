@@ -11,6 +11,7 @@ import {
   type HubAgentCatalogDto,
   type HubSkillDto,
 } from '../src/features/agents/agent-types.js';
+import type { AgentWorkflowDto } from '../src/features/agents/agent-types.js';
 import type { AgentRun, Issue } from '../src/features/issues/issue-types.js';
 import type { ApiClient } from '../src/lib/api-client.js';
 
@@ -132,6 +133,17 @@ describe('AgentSkillsField', () => {
   });
 });
 
+const workflow: AgentWorkflowDto = {
+  enabled: false,
+  autonomy: 'balanced',
+  finalReview: true,
+  uncertaintyBehavior: 'ask',
+  issueCreationBehavior: 'ask',
+  defaultAction: 'allow',
+  steps: [],
+  rules: [],
+};
+
 describe('AgentTopology run states', () => {
   const issue = { id: 'issue-1', number: 7, title: 'Known issue' } as Issue;
   const run = (id: string, agentId: string, status: AgentRun['status'], extra = {}) =>
@@ -150,6 +162,7 @@ describe('AgentTopology run states', () => {
         isLoading={false}
         error={null}
         onRefresh={vi.fn()}
+        workflow={workflow}
       />,
     );
     expect(view.getByRole('button', { name: 'Waiter: Aguardando você' })).toBeInTheDocument();
@@ -163,7 +176,9 @@ describe('AgentTopology run states', () => {
     expect(view.getByTestId('run-edge-r1')).toBeInTheDocument();
 
     fireEvent.click(view.getByRole('button', { name: 'Waiter: Aguardando você' }));
-    expect(view.getByTestId('topology-selection')).toHaveTextContent('Sem descrição cadastrada.');
+    // Selecting an agent opens its run flow; it shows a description only when the agent has one.
+    expect(view.getByTestId('agent-run-flow')).toHaveTextContent('Waiter');
+    expect(view.queryByText('Sem descrição cadastrada.')).toBeNull();
   });
 });
 

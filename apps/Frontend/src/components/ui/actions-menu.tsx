@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { Button } from './button.js';
 import { IconButton } from './icon-button.js';
 import { useI18n } from '../../lib/i18n/index.js';
 
@@ -15,10 +16,12 @@ export function ActionsMenu({
   children,
   label,
   portal = false,
+  trigger: triggerStyle = 'icon',
 }: {
   children: ReactNode;
   label?: string;
   portal?: boolean;
+  trigger?: 'icon' | 'button';
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -124,21 +127,43 @@ export function ActionsMenu({
           setOpen(false);
       }}
     >
-      <IconButton
-        ref={trigger}
-        label={name}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={id}
-        icon={<i className="ti ti-dots-vertical text-lg" aria-hidden="true" />}
-        onClick={() => setOpen((value) => !value)}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            event.preventDefault();
-            setOpen(true);
-          }
-        }}
-      />
+      {triggerStyle === 'button' ? (
+        <Button
+          ref={trigger}
+          type="button"
+          variant="outline"
+          aria-label={name}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={() => setOpen((value) => !value)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              setOpen(true);
+            }
+          }}
+        >
+          <i className="ti ti-dots-vertical" aria-hidden="true" />
+          {name}
+        </Button>
+      ) : (
+        <IconButton
+          ref={trigger}
+          label={name}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={id}
+          icon={<i className="ti ti-dots-vertical text-lg" aria-hidden="true" />}
+          onClick={() => setOpen((value) => !value)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              setOpen(true);
+            }
+          }}
+        />
+      )}
       {portal && typeof document !== 'undefined'
         ? createPortal(menuPanel, document.body)
         : menuPanel}

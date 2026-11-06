@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useKanbanDraft } from '../../lib/use-kanban-draft.js';
 import type { ApiClient } from '../../lib/api-client.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { cn } from '../../lib/utils.js';
@@ -8,13 +9,28 @@ import { Select } from '../../components/ui/select.js';
 import { Pagination, PagingSentinel, usePaging } from '../../components/ui/pagination.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Modal } from '../../components/ui/modal.js';
-import { Skeleton, SkeletonCard } from '../../components/ui/skeleton.js';
+import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/skeleton.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import type { CustomAgentDto } from '../agents/agent-types.js';
 import type { PbiItem } from '../pbi/pbi-types.js';
 import type { WorkspaceMember } from '../workspaces/workspace-types.js';
+import { AgentBriefTab } from './AgentBriefTab.js';
 import { HistoryViewer } from '../audit/HistoryViewer.js';
 import { usePermissions } from '../workspaces/permissions.js';
+import {
+  KanbanCardPending,
+  KanbanCardSaving,
+  KanbanDraftBar,
+  KanbanDropPlaceholder,
+  kanbanCardStateClass,
+  kanbanColumnClass,
+} from '../../components/ui/kanban.js';
+import {
+  WorkItemTypeBadge,
+  resolveWorkItemType,
+  useWorkItemTypes,
+  resolveTypePalette,
+} from '../work-item-types/work-item-types.js';
 import { AttachmentPanel } from '../shared/AttachmentPanel.js';
 import type { ImageAttachment } from '../shared/image-attachment-types.js';
 import {
@@ -107,6 +123,7 @@ interface IssueForm {
   attachments: readonly ImageAttachment[];
   status: IssueStatus;
   priority: IssuePriority;
+  type: string;
   assigneeAgentId: string;
   assigneeUserId: string;
 }
@@ -117,6 +134,7 @@ const emptyIssueForm: IssueForm = {
   attachments: [],
   status: 'todo',
   priority: 'medium',
+  type: '',
   assigneeAgentId: '',
   assigneeUserId: '',
 };
@@ -147,6 +165,19 @@ const copy = {
     noActivity: 'Ainda não há atividade.',
     noAgents: 'Nenhum agente configurado.',
     noIssues: 'Nenhuma issue encontrada.',
+    moveTo: 'Mover para',
+    savingMove: 'Salvando movimento',
+    draftPendingCard: 'Alteração pendente',
+    draftLabels: {
+      pending: 'movimento(s) pendente(s): salvos automaticamente quando você parar de mexer',
+      saving: 'Salvando alterações',
+      offline:
+        'Sem conexão: as alterações ficam guardadas neste navegador e serão enviadas ao reconectar.',
+      error: 'Não foi possível salvar',
+      saveNow: 'Salvar agora',
+      retry: 'Tentar novamente',
+      discard: 'Descartar',
+    },
     createFirst: 'Crie a primeira issue para começar.',
     mine: 'Minhas',
     inboxEmpty: 'Nenhuma execução foi feita enquanto uma issue estava atribuída a você.',
@@ -158,7 +189,7 @@ const copy = {
     search: 'Buscar issues',
     filterStatus: 'Filtrar status',
     listView: 'Lista',
-    boardView: 'Quadro',
+    boardView: 'Kanban',
     anyStatus: 'Todos os status',
     allAssignees: 'Todos os responsáveis',
     noAssignee: 'Sem responsável',
@@ -168,6 +199,10 @@ const copy = {
     iteration: 'Iteração',
     savedFilters: 'Filtros salvos',
     saveFilter: 'Salvar filtro',
+    detailsTab: 'Detalhes',
+    agentInfoTab: 'Informações do Agente',
+    showFilters: 'Filtros',
+    hideFilters: 'Ocultar filtros',
     saveFilterTitle: 'Salvar filtros atuais',
     filterName: 'Nome do filtro',
     deleteSavedFilter: 'Excluir filtro salvo',
@@ -176,6 +211,8 @@ const copy = {
     description: 'Descrição',
     status: 'Status',
     priority: 'Prioridade',
+    type: 'Tipo',
+    noType: 'Sem tipo',
     assignee: 'Responsável',
     unassigned: 'Sem responsável',
     agent: 'Agente',
@@ -278,6 +315,18 @@ const copy = {
     noActivity: 'No activity yet.',
     noAgents: 'No agents configured.',
     noIssues: 'No issues found.',
+    moveTo: 'Move to',
+    savingMove: 'Saving move',
+    draftPendingCard: 'Pending change',
+    draftLabels: {
+      pending: 'pending move(s): saved automatically once you stop',
+      saving: 'Saving changes',
+      offline: 'Offline: changes are kept in this browser and sent when you reconnect.',
+      error: 'Could not save',
+      saveNow: 'Save now',
+      retry: 'Try again',
+      discard: 'Discard',
+    },
     createFirst: 'Create your first issue to get started.',
     mine: 'Mine',
     inboxEmpty: 'No runs were executed while an issue was assigned to you.',
@@ -289,7 +338,7 @@ const copy = {
     search: 'Search issues',
     filterStatus: 'Filter status',
     listView: 'List',
-    boardView: 'Board',
+    boardView: 'Kanban',
     anyStatus: 'All statuses',
     allAssignees: 'All assignees',
     noAssignee: 'No assignee',
@@ -299,6 +348,10 @@ const copy = {
     iteration: 'Iteration',
     savedFilters: 'Saved filters',
     saveFilter: 'Save filter',
+    detailsTab: 'Details',
+    agentInfoTab: 'Agent Information',
+    showFilters: 'Filters',
+    hideFilters: 'Hide filters',
     saveFilterTitle: 'Save current filters',
     filterName: 'Filter name',
     deleteSavedFilter: 'Delete saved filter',
@@ -307,6 +360,8 @@ const copy = {
     description: 'Description',
     status: 'Status',
     priority: 'Priority',
+    type: 'Type',
+    noType: 'No type',
     assignee: 'Assignee',
     unassigned: 'Unassigned',
     agent: 'Agent',
@@ -425,6 +480,14 @@ const emptyFilters: IssueFilters = {
 const filterKeys = Object.keys(emptyFilters) as (keyof IssueFilters)[];
 const savedFiltersKey = (workspaceId: string | null) =>
   `adk:issue-saved-filters:${workspaceId ?? 'default'}`;
+const issuesViewKey = (workspaceId: string | null) => `adk:issues-view:${workspaceId ?? 'default'}`;
+function readIssuesView(workspaceId: string | null): 'list' | 'board' {
+  try {
+    return localStorage.getItem(issuesViewKey(workspaceId)) === 'board' ? 'board' : 'list';
+  } catch {
+    return 'list';
+  }
+}
 function readSavedFilters(workspaceId: string | null): SavedIssueFilter[] {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(savedFiltersKey(workspaceId)) ?? '[]');
@@ -495,9 +558,10 @@ export function WorkView({
 }: WorkViewProps) {
   const { locale } = useI18n();
   const t = copy[locale];
+  const workItemTypes = useWorkItemTypes(apiClient, workspaceId);
   const permissions = usePermissions();
   const canDelete = !isReadOnly && permissions.can('issues', 'delete');
-  const [issues, setIssues] = useState<readonly Issue[]>([]);
+  const [rawIssues, setIssues] = useState<readonly Issue[]>([]);
   const [inbox, setInbox] = useState<readonly InboxItem[]>([]);
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
   const [agents, setAgents] = useState<readonly CustomAgentDto[]>([]);
@@ -507,6 +571,7 @@ export function WorkView({
   const [busy, setBusy] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<'details' | 'agent'>('details');
   const [selectedComments, setSelectedComments] = useState<readonly IssueComment[]>([]);
   const [selectedRuns, setSelectedRuns] = useState<readonly AgentRun[]>([]);
   const [workflowAnswerDraft, setWorkflowAnswerDraft] = useState('');
@@ -534,7 +599,22 @@ export function WorkView({
   const [filterNameDraft, setFilterNameDraft] = useState<string | null>(null);
   const [pbiItems, setPbiItems] = useState<readonly PbiItem[]>([]);
   const canViewPbis = permissions.can('pbis');
-  const [issuesView, setIssuesView] = useState<'list' | 'board'>('list');
+  const [issuesView, setIssuesView] = useState<'list' | 'board'>(() => readIssuesView(workspaceId));
+  // The choice is remembered per workspace in this browser.
+  const chooseIssuesView = (view: 'list' | 'board') => {
+    setIssuesView(view);
+    try {
+      localStorage.setItem(issuesViewKey(workspaceId), view);
+    } catch {
+      // Storage can be unavailable in private browsing.
+    }
+  };
+  useEffect(() => {
+    setIssuesView(readIssuesView(workspaceId));
+  }, [workspaceId]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverStatus, setDragOverStatus] = useState<IssueStatus | null>(null);
   const [inboxTab, setInboxTab] = useState<InboxTab>('mine');
   const [form, setForm] = useState<IssueForm>(emptyIssueForm);
   const formImages = useMarkdownImageInput('issue', (description) =>
@@ -546,13 +626,15 @@ export function WorkView({
   const appendImage = (description: string, attachment: ImageAttachment) =>
     `${description.trimEnd()}${description.trim() ? '\n\n' : ''}${markdownImage(attachment)}\n`;
 
+  const loadedFor = useRef<string | null>(null);
   const reload = useCallback(
     async (signal?: AbortSignal) => {
       if (!workspaceId) {
         setLoading(false);
         return;
       }
-      setLoading(true);
+      // Later refreshes keep the screen as it is; only the first load shows skeletons.
+      setLoading(loadedFor.current !== workspaceId);
       setError(null);
       try {
         const [issueList, inboxList, summary] = await Promise.all([
@@ -561,6 +643,7 @@ export function WorkView({
           apiClient.getDashboard(signal),
         ]);
         if (signal?.aborted) return;
+        loadedFor.current = workspaceId;
         setIssues(issueList);
         setInbox(inboxList);
         setDashboard(summary);
@@ -574,6 +657,28 @@ export function WorkView({
     },
     [apiClient, workspaceId, t.loadError],
   );
+
+  // Moves made on the board are a draft: they are sent in one batch after a pause, kept in the
+  // browser meanwhile, and sent again if the tab is hidden, closed or the connection drops.
+  const kanbanDraft = useKanbanDraft({
+    storageKey: workspaceId ? `adk:kanban-draft:issues:${workspaceId}` : null,
+    save: async (id, to) => {
+      const saved = await apiClient.updateIssue(id, { status: to as IssueStatus });
+      setIssues((list) => list.map((issue) => (issue.id === saved.id ? saved : issue)));
+    },
+    onSaved: () => void reload(),
+  });
+  /** The server list with the draft applied; moved cards sit on top of their new column. */
+  const issues = useMemo<readonly Issue[]>(() => {
+    const moved = Object.keys(kanbanDraft.draft);
+    if (!moved.length) return rawIssues;
+    const byId = new Map(rawIssues.map((issue) => [issue.id, issue]));
+    const head = moved.reverse().flatMap((id) => {
+      const issue = byId.get(id);
+      return issue ? [{ ...issue, status: kanbanDraft.draft[id]!.to as IssueStatus }] : [];
+    });
+    return [...head, ...rawIssues.filter((issue) => !(issue.id in kanbanDraft.draft))];
+  }, [rawIssues, kanbanDraft.draft]);
 
   useEffect(() => {
     setMembers([]);
@@ -658,6 +763,7 @@ export function WorkView({
   const selectedInbox = inbox.find((item) => item.issue.id === selectedId);
 
   const openIssue = async (issue: Issue) => {
+    setDetailTab('details');
     setSelectedId(issue.id);
     setSelectedComments([]);
     setCommentText('');
@@ -732,12 +838,14 @@ export function WorkView({
             ...files,
             status: form.status,
             priority: form.priority,
+            type: form.type,
             assigneeAgentId: form.assigneeAgentId || null,
             assigneeUserId: form.assigneeUserId || null,
           }),
       );
       setComposerOpen(false);
       setForm(emptyIssueForm);
+      setDetailTab('details');
       setSelectedId(issue.id);
       setSelectedComments([]);
       onOpenIssues?.();
@@ -797,6 +905,7 @@ export function WorkView({
 
   const currentFilters: IssueFilters = { query: search, ...filters };
   const hasFilters = filterKeys.some((key) => currentFilters[key].trim());
+  const activeFilterCount = filterKeys.filter((key) => currentFilters[key].trim()).length;
   const activeSavedFilter = savedFilters.find((saved) =>
     filterKeys.every((key) => saved[key] === currentFilters[key]),
   );
@@ -921,6 +1030,7 @@ export function WorkView({
           )}
         />
         <span className="shrink-0 font-mono text-xs text-[var(--text-muted)]">#{issue.number}</span>
+        {issue.type && <WorkItemTypeBadge name={issue.type} types={workItemTypes} />}
         <span
           className={cn(
             'truncate',
@@ -964,7 +1074,7 @@ export function WorkView({
   );
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-5" data-testid={`work-${tab}`}>
+    <div className="w-full space-y-5" data-testid={`work-${tab}`}>
       {error && (
         <div
           role="alert"
@@ -985,22 +1095,22 @@ export function WorkView({
       ) : null}
       {tab === 'dashboard' && dashboard && (
         <>
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold uppercase tracking-wide">{t.dashboard}</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              {t.agents}
+            </h3>
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
+              variant="outline"
+              size="default"
               onClick={() => void reload()}
               aria-label={t.refresh}
             >
               <i className="ti ti-refresh" aria-hidden="true" />
+              {t.refresh}
             </Button>
           </div>
           <section aria-label={t.agents}>
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-              {t.agents}
-            </h3>
             {agents.length === 0 ? (
               <p className={cn(panel, 'p-5 text-sm text-[var(--text-muted)]')}>{t.noAgents}</p>
             ) : (
@@ -1318,9 +1428,6 @@ export function WorkView({
 
       {(tab === 'issues' || tab === 'inbox') && (
         <>
-          <div>
-            <h2 className="text-xl font-semibold">{tab === 'issues' ? t.issues : t.inbox}</h2>
-          </div>
           {tab === 'inbox' && (
             <div
               role="tablist"
@@ -1364,31 +1471,47 @@ export function WorkView({
               className="max-w-md flex-1"
             />
             {tab === 'issues' && (
-              <div className="flex gap-1" role="group" aria-label={t.issues}>
+              <>
                 <Button
                   type="button"
-                  variant={issuesView === 'list' ? 'secondary' : 'ghost'}
-                  aria-pressed={issuesView === 'list'}
-                  onClick={() => setIssuesView('list')}
+                  variant={filtersOpen ? 'secondary' : 'outline'}
+                  aria-expanded={filtersOpen}
+                  onClick={() => setFiltersOpen((open) => !open)}
                 >
-                  <i className="ti ti-list" aria-hidden="true" />
-                  {t.listView}
+                  <i className="ti ti-filter" aria-hidden="true" />
+                  {filtersOpen ? t.hideFilters : t.showFilters}
+                  {activeFilterCount > 0 && (
+                    <span className="rounded-full bg-[var(--fill-accent)] px-1.5 text-xs text-white">
+                      {activeFilterCount}
+                    </span>
+                  )}
                 </Button>
-                <Button
-                  type="button"
-                  variant={issuesView === 'board' ? 'secondary' : 'ghost'}
-                  aria-pressed={issuesView === 'board'}
-                  onClick={() => setIssuesView('board')}
-                >
-                  <i className="ti ti-layout-kanban" aria-hidden="true" />
-                  {t.boardView}
-                </Button>
-              </div>
+                <div className="flex gap-1" role="group" aria-label={t.issues}>
+                  <Button
+                    type="button"
+                    variant={issuesView === 'list' ? 'secondary' : 'ghost'}
+                    aria-pressed={issuesView === 'list'}
+                    onClick={() => chooseIssuesView('list')}
+                  >
+                    <i className="ti ti-list" aria-hidden="true" />
+                    {t.listView}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={issuesView === 'board' ? 'secondary' : 'ghost'}
+                    aria-pressed={issuesView === 'board'}
+                    onClick={() => chooseIssuesView('board')}
+                  >
+                    <i className="ti ti-layout-kanban" aria-hidden="true" />
+                    {t.boardView}
+                  </Button>
+                </div>
+              </>
             )}
             <div className="ml-auto flex shrink-0 items-center gap-2">
               <Button
                 type="button"
-                variant="ghost"
+                variant="outline"
                 size="icon"
                 onClick={() => void reload()}
                 aria-label={t.refresh}
@@ -1404,7 +1527,7 @@ export function WorkView({
               )}
             </div>
           </div>
-          {tab === 'issues' && (
+          {tab === 'issues' && filtersOpen && (
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={filters.status}
@@ -1543,60 +1666,131 @@ export function WorkView({
               <SkeletonCard />
             </div>
           ) : tab === 'issues' && issuesView === 'board' ? (
-            <div className="flex gap-3 overflow-x-auto pb-2" aria-label={t.boardView}>
-              {statusOrder
-                .filter((status) => !filters.status || filters.status === status)
-                .map((status) => (
-                  <section
-                    key={status}
-                    className={cn(panel, 'w-64 min-w-64 p-3')}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      const id = event.dataTransfer.getData('text/plain');
-                      if (id && !isReadOnly)
-                        void runAction(async () => {
-                          await apiClient.updateIssue(id, { status });
-                        });
-                    }}
-                  >
-                    <h3 className="mb-3 flex justify-between text-sm font-semibold">
-                      <span>{t.statusNames[status]}</span>
-                      <span className="text-[var(--text-muted)]">
-                        {filteredIssues.filter((issue) => issue.status === status).length}
-                      </span>
-                    </h3>
-                    <div className="space-y-2">
-                      {filteredIssues
-                        .filter((issue) => issue.status === status)
-                        .map((issue) => (
-                          <div
-                            key={issue.id}
-                            draggable={!isReadOnly}
-                            onDragStart={(event) =>
-                              event.dataTransfer.setData('text/plain', issue.id)
-                            }
-                            className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-3"
-                          >
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              className="h-auto w-full justify-start whitespace-normal p-0 text-left text-sm"
-                              onClick={() => void openIssue(issue)}
-                            >
-                              <span className="font-mono text-xs text-[var(--text-muted)]">
-                                #{issue.number}
-                              </span>
-                              <span>{issue.title}</span>
-                            </Button>
-                            <p className="mt-2 text-xs text-[var(--text-muted)]">
-                              {t.priorityNames[issue.priority]}
-                            </p>
-                          </div>
-                        ))}
-                    </div>
-                  </section>
-                ))}
+            <div>
+              <KanbanDraftBar
+                pending={Object.keys(kanbanDraft.draft).length - kanbanDraft.saving.size}
+                saving={kanbanDraft.saving.size}
+                offline={kanbanDraft.offline}
+                error={kanbanDraft.error}
+                labels={t.draftLabels}
+                onSave={() => void kanbanDraft.flush()}
+                onDiscard={kanbanDraft.discard}
+              />
+              <div className="flex items-start gap-3 overflow-x-auto pb-2" aria-label={t.boardView}>
+                {statusOrder
+                  .filter((status) => !filters.status || filters.status === status)
+                  .map((status) => {
+                    const columnIssues = filteredIssues.filter((issue) => issue.status === status);
+                    const dragged = draggingId
+                      ? issues.find((issue) => issue.id === draggingId)
+                      : undefined;
+                    const isTarget =
+                      dragOverStatus === status && !!dragged && dragged.status !== status;
+                    return (
+                      <section
+                        key={status}
+                        aria-label={t.statusNames[status]}
+                        className={kanbanColumnClass(isTarget)}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          setDragOverStatus(status);
+                        }}
+                        onDragLeave={(event) => {
+                          if (event.currentTarget.contains(event.relatedTarget as Node | null))
+                            return;
+                          setDragOverStatus((current) => (current === status ? null : current));
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          setDragOverStatus(null);
+                          setDraggingId(null);
+                          const id = event.dataTransfer.getData('text/plain');
+                          const current = rawIssues.find((issue) => issue.id === id);
+                          if (current && !isReadOnly) kanbanDraft.move(id, current.status, status);
+                        }}
+                      >
+                        <header className="flex items-center justify-between border-b border-[var(--border)] px-3 py-2 text-xs font-semibold">
+                          <h3 className="truncate" title={t.statusNames[status]}>
+                            {t.statusNames[status]}
+                          </h3>
+                          <span className="rounded-full bg-[var(--surface-2)] px-1.5 text-[var(--text-muted)]">
+                            {columnIssues.length}
+                          </span>
+                        </header>
+                        <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto overflow-x-hidden p-2">
+                          {isTarget && (
+                            <KanbanDropPlaceholder
+                              title={`#${dragged.number} ${dragged.title}`}
+                              label={`${t.moveTo} ${t.statusNames[status]}`}
+                            />
+                          )}
+                          {columnIssues.map((issue) => {
+                            const palette = resolveTypePalette(
+                              resolveWorkItemType(workItemTypes, issue.type ?? '')?.color,
+                            );
+                            const assignee = issue.assigneeUserId
+                              ? (members.find((member) => member.userId === issue.assigneeUserId) ??
+                                null)
+                              : null;
+                            return (
+                              <article
+                                key={issue.id}
+                                style={palette.style}
+                                draggable={!isReadOnly}
+                                onDragStart={(event) => {
+                                  event.dataTransfer.setData('text/plain', issue.id);
+                                  event.dataTransfer.effectAllowed = 'move';
+                                  setDraggingId(issue.id);
+                                }}
+                                onDragEnd={() => {
+                                  setDraggingId(null);
+                                  setDragOverStatus(null);
+                                }}
+                                className={`rounded-md border border-l-4 border-[var(--border)] bg-[var(--surface-2)] p-2.5 ${palette.bar} ${isReadOnly ? '' : 'cursor-grab active:cursor-grabbing'} ${kanbanCardStateClass(draggingId === issue.id, kanbanDraft.saving.has(issue.id))}`}
+                              >
+                                {kanbanDraft.saving.has(issue.id) ? (
+                                  <KanbanCardSaving label={t.savingMove} />
+                                ) : (
+                                  issue.id in kanbanDraft.draft && (
+                                    <KanbanCardPending label={t.draftPendingCard} />
+                                  )
+                                )}
+                                {issue.type && (
+                                  <div className="mb-1.5">
+                                    <WorkItemTypeBadge name={issue.type} types={workItemTypes} />
+                                  </div>
+                                )}
+                                <Button
+                                  type="button"
+                                  variant="link"
+                                  className="h-auto w-full min-w-0 justify-start whitespace-normal p-0 text-left text-sm font-medium text-[var(--text-primary)] no-underline [overflow-wrap:anywhere] hover:text-[var(--text-primary)]"
+                                  onClick={() => void openIssue(issue)}
+                                >
+                                  <span className="font-mono text-xs text-[var(--text-muted)]">
+                                    #{issue.number}
+                                  </span>
+                                  <span className="min-w-0 [overflow-wrap:anywhere]">
+                                    {issue.title}
+                                  </span>
+                                </Button>
+                                <p className="mt-1.5 truncate text-xs text-[var(--text-muted)]">
+                                  {t.priorityNames[issue.priority]}
+                                  {assignee && (
+                                    <>
+                                      {' · '}
+                                      <i className="ti ti-user" aria-hidden="true" />{' '}
+                                      {memberLabel(assignee)}
+                                    </>
+                                  )}
+                                </p>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    );
+                  })}
+              </div>
             </div>
           ) : (
             <div className={panel}>
@@ -1749,6 +1943,20 @@ export function WorkView({
                 ))}
               </Select>
             </label>
+            <label className="space-y-1 text-sm">
+              <span>{t.type}</span>
+              <Select
+                value={form.type}
+                onChange={(event) => setForm({ ...form, type: event.target.value })}
+              >
+                <option value="">{t.noType}</option>
+                {workItemTypes.map((type) => (
+                  <option key={type.key} value={type.key}>
+                    {type.label}
+                  </option>
+                ))}
+              </Select>
+            </label>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1 text-sm">
@@ -1784,7 +1992,7 @@ export function WorkView({
       </Modal>
 
       <Modal
-        open={Boolean(selectedIssue)}
+        open={Boolean(selectedId)}
         onClose={() => {
           cancelDetailEdit();
           setSelectedId(null);
@@ -1800,6 +2008,26 @@ export function WorkView({
               </h2>
             </div>
             <div className="flex items-center gap-1">
+              {selectedIssue && canDelete && (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={t.delete}
+                  title={t.delete}
+                  className="bg-red-600 text-white hover:bg-red-500"
+                  onClick={() => {
+                    if (window.confirm(t.deleteConfirm))
+                      void runAction(async () => {
+                        await apiClient.deleteIssue(selectedIssue.id);
+                        setSelectedId(null);
+                      });
+                  }}
+                >
+                  <i className="ti ti-trash" aria-hidden="true" />
+                </Button>
+              )}
               {selectedIssue && (
                 <HistoryViewer
                   apiClient={apiClient}
@@ -1834,599 +2062,657 @@ export function WorkView({
               </Button>
             </div>
           </div>
+          {!selectedIssue && (
+            <div
+              role="status"
+              aria-label={t.loadingDetails}
+              className="grid min-h-0 flex-1 gap-6 overflow-hidden p-6 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]"
+            >
+              <div className="space-y-4">
+                <Skeleton className="h-8 w-48" />
+                <Skeleton className="h-56 w-full rounded-md" />
+                <SkeletonText lines={4} />
+              </div>
+              <div className="space-y-4">
+                <Skeleton className="h-12 w-full rounded-md" />
+                <Skeleton className="h-12 w-full rounded-md" />
+                <Skeleton className="h-12 w-full rounded-md" />
+              </div>
+            </div>
+          )}
           {selectedIssue && (
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
-              <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
-                <div className="min-w-0 space-y-5 lg:border-r lg:border-[var(--border)] lg:pr-6">
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <label className="space-y-1 text-sm">
-                      <span>{t.status}</span>
-                      <Select
-                        disabled={isReadOnly || busy}
-                        value={selectedIssue.status}
-                        onChange={(event) =>
-                          updateIssue(selectedIssue.id, {
-                            status: event.target.value as IssueStatus,
-                          })
-                        }
-                      >
-                        {statusOrder.map((key) => (
-                          <option key={key} value={key}>
-                            {t.statusNames[key]}
-                          </option>
-                        ))}
-                      </Select>
-                    </label>
-                    <label className="space-y-1 text-sm">
-                      <span>{t.priority}</span>
-                      <Select
-                        disabled={isReadOnly || busy}
-                        value={selectedIssue.priority}
-                        onChange={(event) =>
-                          updateIssue(selectedIssue.id, {
-                            priority: event.target.value as IssuePriority,
-                          })
-                        }
-                      >
-                        {priorityOrder.map((key) => (
-                          <option key={key} value={key}>
-                            {t.priorityNames[key]}
-                          </option>
-                        ))}
-                      </Select>
-                    </label>
-                    <label className="space-y-1 text-sm">
-                      <span>{t.agent}</span>
-                      <Select
-                        disabled={isReadOnly || busy}
-                        value={selectedIssue.assigneeAgentId ?? ''}
-                        onChange={(event) =>
-                          updateIssue(selectedIssue.id, {
-                            assigneeAgentId: event.target.value || null,
-                          })
-                        }
-                      >
-                        <option value="">{t.noAgent}</option>
-                        {agentOptions}
-                      </Select>
-                    </label>
-                    <label className="space-y-1 text-sm">
-                      <span>{t.assignee}</span>
-                      <Select
-                        disabled={isReadOnly || busy}
-                        value={selectedIssue.assigneeUserId ?? ''}
-                        onChange={(event) =>
-                          updateIssue(selectedIssue.id, {
-                            assigneeUserId: event.target.value || null,
-                          })
-                        }
-                      >
-                        <option value="">{t.unassigned}</option>
-                        {memberOptions}
-                        {selectedIssue.assigneeUserId &&
-                          !members.some(
-                            (member) => member.userId === selectedIssue.assigneeUserId,
-                          ) && (
-                            <option value={selectedIssue.assigneeUserId}>
-                              {selectedIssue.assigneeUserId}
-                            </option>
-                          )}
-                      </Select>
-                    </label>
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold">{t.description}</h3>
-                      {!isReadOnly && !editingDetails && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setDetailDraft({
-                              title: selectedIssue.title,
-                              description: selectedIssue.description,
-                              attachments: selectedIssue.attachments ?? [],
-                            });
-                            setEditingDetails(true);
-                          }}
-                        >
-                          {t.edit}
-                        </Button>
-                      )}
-                    </div>
-                    {editingDetails ? (
-                      <form
-                        className="mt-2 space-y-3"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void runAction(async () => {
-                            await saveWithDrafts(
-                              apiClient,
-                              'issue',
-                              {
-                                description: detailDraft.description,
-                                attachments: detailDraft.attachments,
-                              },
-                              (files) =>
-                                apiClient.updateIssue(selectedIssue.id, {
-                                  title: detailDraft.title.trim(),
-                                  ...files,
-                                }),
-                            );
-                            setEditingDetails(false);
-                          });
-                        }}
-                      >
-                        <label className="block space-y-1 text-sm">
-                          <span>{t.title}</span>
-                          <Input
-                            required
-                            maxLength={240}
-                            value={detailDraft.title}
-                            onChange={(event) =>
-                              setDetailDraft({ ...detailDraft, title: event.target.value })
-                            }
-                          />
-                        </label>
-                        <label className="block space-y-1 text-sm">
-                          <span>{t.description}</span>
-                          <Textarea
-                            rows={5}
-                            value={detailDraft.description}
-                            onChange={(event) =>
-                              setDetailDraft({ ...detailDraft, description: event.target.value })
-                            }
-                            onPaste={detailImages.onPaste}
-                            onDrop={detailImages.onDrop}
-                          />
-                        </label>
-                        <ImageInputStatus state={detailImages} />
-                        <div className="flex gap-2">
-                          <Button
-                            type="submit"
-                            size="sm"
-                            disabled={busy || !detailDraft.title.trim()}
-                          >
-                            {t.save}
-                          </Button>
+              <div
+                role="tablist"
+                aria-label={selectedIssue.title}
+                className="mb-5 flex gap-1 border-b border-[var(--border)]"
+              >
+                {(['details', 'agent'] as const).map((key) => (
+                  <Button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    variant="ghost"
+                    aria-selected={detailTab === key}
+                    className={cn(
+                      'rounded-b-none border-b-2',
+                      detailTab === key
+                        ? 'border-[var(--border-accent)] text-[var(--text-primary)]'
+                        : 'border-transparent text-[var(--text-muted)]',
+                    )}
+                    onClick={() => setDetailTab(key)}
+                  >
+                    {key === 'details' ? t.detailsTab : t.agentInfoTab}
+                  </Button>
+                ))}
+              </div>
+              {detailTab === 'agent' ? (
+                <AgentBriefTab
+                  apiClient={apiClient}
+                  issueId={selectedIssue.id}
+                  issueVersion={selectedIssue.updatedAt}
+                  isReadOnly={isReadOnly}
+                />
+              ) : (
+                <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+                  <div className="min-w-0 space-y-5 lg:border-r lg:border-[var(--border)] lg:pr-6">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-semibold">{t.description}</h3>
+                        {!isReadOnly && !editingDetails && (
                           <Button
                             type="button"
-                            size="sm"
                             variant="ghost"
+                            size="sm"
                             onClick={() => {
-                              cancelDetailEdit();
                               setDetailDraft({
                                 title: selectedIssue.title,
                                 description: selectedIssue.description,
                                 attachments: selectedIssue.attachments ?? [],
                               });
+                              setEditingDetails(true);
                             }}
                           >
-                            {t.cancel}
+                            {t.edit}
                           </Button>
-                        </div>
-                      </form>
-                    ) : selectedIssue.description &&
-                      !isHtmlDescription(selectedIssue.description) ? (
-                      <MarkdownViewer
-                        content={selectedIssue.description}
-                        showModeToggle={false}
-                        className="mt-2 min-w-0 break-words text-sm"
-                      />
-                    ) : (
-                      <div
-                        ref={issueDescriptionRef}
-                        className="mt-2 break-words text-sm leading-6 text-[var(--text-secondary)] [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded [&_a]:text-[var(--text-accent)] [&_a]:underline [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-[var(--border-strong)] [&_blockquote]:pl-4 [&_h1]:my-4 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:my-4 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:my-3 [&_h3]:font-semibold [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-[var(--surface-2)] [&_pre]:p-3 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--border)] [&_td]:px-2 [&_th]:border [&_th]:border-[var(--border)] [&_th]:px-2 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6"
-                        dangerouslySetInnerHTML={{
-                          __html: selectedIssue.description
-                            ? formatIssueDescription(selectedIssue.description)
-                            : '—',
-                        }}
-                      />
-                    )}
-                    <div className="mt-4">
-                      <AttachmentPanel
-                        apiClient={apiClient}
-                        scope="issue"
-                        attachments={
-                          editingDetails
-                            ? detailDraft.attachments
-                            : (selectedIssue.attachments ?? [])
-                        }
-                        disabled={isReadOnly}
-                        onChange={
-                          editingDetails
-                            ? (attachments) => setDetailDraft({ ...detailDraft, attachments })
-                            : undefined
-                        }
-                        onInsertInline={(attachment) =>
-                          setDetailDraft({
-                            ...detailDraft,
-                            description: appendImage(detailDraft.description, attachment),
-                          })
-                        }
-                      />
+                        )}
+                      </div>
+                      {editingDetails ? (
+                        <form
+                          className="mt-2 space-y-3"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void runAction(async () => {
+                              await saveWithDrafts(
+                                apiClient,
+                                'issue',
+                                {
+                                  description: detailDraft.description,
+                                  attachments: detailDraft.attachments,
+                                },
+                                (files) =>
+                                  apiClient.updateIssue(selectedIssue.id, {
+                                    title: detailDraft.title.trim(),
+                                    ...files,
+                                  }),
+                              );
+                              setEditingDetails(false);
+                            });
+                          }}
+                        >
+                          <label className="block space-y-1 text-sm">
+                            <span>{t.title}</span>
+                            <Input
+                              required
+                              maxLength={240}
+                              value={detailDraft.title}
+                              onChange={(event) =>
+                                setDetailDraft({ ...detailDraft, title: event.target.value })
+                              }
+                            />
+                          </label>
+                          <label className="block space-y-1 text-sm">
+                            <span>{t.description}</span>
+                            <Textarea
+                              rows={5}
+                              value={detailDraft.description}
+                              onChange={(event) =>
+                                setDetailDraft({ ...detailDraft, description: event.target.value })
+                              }
+                              onPaste={detailImages.onPaste}
+                              onDrop={detailImages.onDrop}
+                            />
+                          </label>
+                          <ImageInputStatus state={detailImages} />
+                          <div className="flex gap-2">
+                            <Button
+                              type="submit"
+                              size="sm"
+                              disabled={busy || !detailDraft.title.trim()}
+                            >
+                              {t.save}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                cancelDetailEdit();
+                                setDetailDraft({
+                                  title: selectedIssue.title,
+                                  description: selectedIssue.description,
+                                  attachments: selectedIssue.attachments ?? [],
+                                });
+                              }}
+                            >
+                              {t.cancel}
+                            </Button>
+                          </div>
+                        </form>
+                      ) : selectedIssue.description &&
+                        !isHtmlDescription(selectedIssue.description) ? (
+                        <MarkdownViewer
+                          content={selectedIssue.description}
+                          showModeToggle={false}
+                          className="mt-2 min-w-0 break-words text-sm"
+                        />
+                      ) : (
+                        <div
+                          ref={issueDescriptionRef}
+                          className="mt-2 break-words text-sm leading-6 text-[var(--text-secondary)] [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded [&_a]:text-[var(--text-accent)] [&_a]:underline [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-[var(--border-strong)] [&_blockquote]:pl-4 [&_h1]:my-4 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:my-4 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:my-3 [&_h3]:font-semibold [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-[var(--surface-2)] [&_pre]:p-3 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--border)] [&_td]:px-2 [&_th]:border [&_th]:border-[var(--border)] [&_th]:px-2 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6"
+                          dangerouslySetInnerHTML={{
+                            __html: selectedIssue.description
+                              ? formatIssueDescription(selectedIssue.description)
+                              : '—',
+                          }}
+                        />
+                      )}
+                      <div className="mt-4">
+                        <AttachmentPanel
+                          apiClient={apiClient}
+                          scope="issue"
+                          attachments={
+                            editingDetails
+                              ? detailDraft.attachments
+                              : (selectedIssue.attachments ?? [])
+                          }
+                          disabled={isReadOnly}
+                          onChange={
+                            editingDetails
+                              ? (attachments) => setDetailDraft({ ...detailDraft, attachments })
+                              : undefined
+                          }
+                          onInsertInline={(attachment) =>
+                            setDetailDraft({
+                              ...detailDraft,
+                              description: appendImage(detailDraft.description, attachment),
+                            })
+                          }
+                        />
+                      </div>
                     </div>
-                  </div>
-                </div>
-                <aside className="min-w-0 space-y-5">
-                  <section aria-label={t.runs}>
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold">{t.runs}</h3>
-                      {!isReadOnly &&
-                        selectedIssue.assigneeAgentId &&
-                        !selectedRuns.some((run) => activeRunStatuses.includes(run.status)) && (
+                    <div className="border-t border-[var(--border)] pt-4">
+                      <h3 className="mb-3 text-sm font-semibold">{t.comments}</h3>
+                      <div className="space-y-3">
+                        {selectedDetailsLoading ? (
+                          <div className="space-y-3" role="status" aria-label={t.loadingDetails}>
+                            <div className="rounded-lg bg-[var(--surface-2)] p-3">
+                              <Skeleton className="h-3 w-1/3 rounded-full" />
+                              <Skeleton className="mt-3 h-3 w-full rounded-full" />
+                              <Skeleton className="mt-2 h-3 w-2/3 rounded-full" />
+                            </div>
+                            <div className="rounded-lg bg-[var(--surface-2)] p-3">
+                              <Skeleton className="h-3 w-1/4 rounded-full" />
+                              <Skeleton className="mt-3 h-3 w-4/5 rounded-full" />
+                            </div>
+                          </div>
+                        ) : (
+                          selectedComments.map((comment) => (
+                            <div
+                              key={comment.id}
+                              className="rounded-lg bg-[var(--surface-2)] p-3 text-sm"
+                            >
+                              <div className="mb-1 flex justify-between text-xs text-[var(--text-muted)]">
+                                <span>
+                                  {comment.authorId === currentUserId
+                                    ? t.mine
+                                    : (agents.find((agent) => agent.id === comment.authorId)
+                                        ?.name ?? comment.authorId.slice(0, 8))}
+                                </span>
+                                <span>{relativeDate(comment.createdAt, locale)}</span>
+                              </div>
+                              <MarkdownViewer
+                                content={comment.body}
+                                showModeToggle={false}
+                                className="min-w-0 break-words text-sm"
+                              />
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      {!isReadOnly && (
+                        <form
+                          className="mt-3 flex gap-2"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            if (!commentText.trim()) return;
+                            void (async () => {
+                              setBusy(true);
+                              setCommentError(null);
+                              try {
+                                const result = await apiClient.addIssueComment(
+                                  selectedIssue.id,
+                                  commentText.trim(),
+                                );
+                                setSelectedComments((current) => [...current, result.comment]);
+                                setCommentText('');
+                                const run = result.run;
+                                if (run) setSelectedRuns((current) => [run, ...current]);
+                                await reload();
+                                if (result.automationError) setCommentError(result.automationError);
+                              } catch (reason) {
+                                setCommentError(
+                                  reason instanceof Error ? reason.message : t.saveError,
+                                );
+                              } finally {
+                                setBusy(false);
+                              }
+                            })();
+                          }}
+                        >
+                          <Input
+                            value={commentText}
+                            onChange={(event) => setCommentText(event.target.value)}
+                            placeholder={t.commentPlaceholder}
+                            aria-label={t.commentPlaceholder}
+                          />
+                          <Button type="submit" disabled={busy || !commentText.trim()}>
+                            {t.addComment}
+                          </Button>
+                        </form>
+                      )}
+                      {commentError && (
+                        <p role="alert" className="mt-2 text-sm text-red-400">
+                          {commentError}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2 border-t border-[var(--border)] pt-4">
+                      {selectedInbox && (
+                        <>
                           <Button
                             type="button"
+                            variant="outline"
                             size="sm"
                             disabled={busy}
                             onClick={() =>
-                              void runAction(async () => {
-                                await apiClient.startIssueRun(selectedIssue.id);
-                                setSelectedRuns(await apiClient.getAgentRuns(selectedIssue.id));
-                              })
+                              changeInbox(selectedIssue.id, { read: !selectedInbox.readAt })
                             }
                           >
-                            {t.startRun}
+                            {selectedInbox.readAt ? t.markUnread : t.markRead}
                           </Button>
-                        )}
-                    </div>
-                    {selectedDetailsLoading ? (
-                      <div className="space-y-3" role="status" aria-label={t.loadingDetails}>
-                        <div className="rounded-lg border border-[var(--border)] p-3">
-                          <Skeleton className="h-4 w-2/3 rounded-full" />
-                          <Skeleton className="mt-3 h-3 w-1/2 rounded-full" />
-                        </div>
-                        <div className="rounded-lg border border-[var(--border)] p-3">
-                          <Skeleton className="h-4 w-3/4 rounded-full" />
-                          <Skeleton className="mt-3 h-3 w-2/5 rounded-full" />
-                        </div>
-                      </div>
-                    ) : selectedRuns.length === 0 ? (
-                      <p className="text-sm text-[var(--text-muted)]">{t.noRuns}</p>
-                    ) : (
-                      <div className="space-y-3">
-                        {selectedRuns.map((run) => (
-                          <article
-                            key={run.id}
-                            className="rounded-lg border border-[var(--border)] p-3 text-sm"
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() =>
+                              changeInbox(selectedIssue.id, { archived: !selectedInbox.archivedAt })
+                            }
                           >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <strong>
-                                #{run.attempt} · {t.runStatus[run.status]}
-                              </strong>
-                              <span className="text-xs text-[var(--text-muted)]">
-                                {relativeDate(run.createdAt, locale)} ·{' '}
-                                {run.costMicros === null ? '—' : money(run.costMicros, locale)}
-                              </span>
-                            </div>
-                            {run.provider && (
-                              <p className="mt-1 text-xs text-[var(--text-muted)]">
-                                {run.provider}
-                                {run.model ? ` / ${run.model}` : ''}
-                                {run.inputTokens !== null
-                                  ? ` · ${run.inputTokens} / ${run.outputTokens} tokens`
-                                  : ''}
-                              </p>
+                            {selectedInbox.archivedAt ? t.restore : t.archive}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <aside className="min-w-0 space-y-5">
+                    <div className="grid gap-3">
+                      <label className="space-y-1 text-sm">
+                        <span>{t.status}</span>
+                        <Select
+                          disabled={isReadOnly || busy}
+                          value={selectedIssue.status}
+                          onChange={(event) =>
+                            updateIssue(selectedIssue.id, {
+                              status: event.target.value as IssueStatus,
+                            })
+                          }
+                        >
+                          {statusOrder.map((key) => (
+                            <option key={key} value={key}>
+                              {t.statusNames[key]}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                      <label className="space-y-1 text-sm">
+                        <span>{t.priority}</span>
+                        <Select
+                          disabled={isReadOnly || busy}
+                          value={selectedIssue.priority}
+                          onChange={(event) =>
+                            updateIssue(selectedIssue.id, {
+                              priority: event.target.value as IssuePriority,
+                            })
+                          }
+                        >
+                          {priorityOrder.map((key) => (
+                            <option key={key} value={key}>
+                              {t.priorityNames[key]}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                      <label className="space-y-1 text-sm">
+                        <span>{t.type}</span>
+                        <Select
+                          disabled={isReadOnly || busy}
+                          value={selectedIssue.type ?? ''}
+                          onChange={(event) =>
+                            updateIssue(selectedIssue.id, { type: event.target.value })
+                          }
+                        >
+                          <option value="">{t.noType}</option>
+                          {workItemTypes.map((type) => (
+                            <option key={type.key} value={type.key}>
+                              {type.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                      <label className="space-y-1 text-sm">
+                        <span>{t.agent}</span>
+                        <Select
+                          disabled={isReadOnly || busy}
+                          value={selectedIssue.assigneeAgentId ?? ''}
+                          onChange={(event) =>
+                            updateIssue(selectedIssue.id, {
+                              assigneeAgentId: event.target.value || null,
+                            })
+                          }
+                        >
+                          <option value="">{t.noAgent}</option>
+                          {agentOptions}
+                        </Select>
+                      </label>
+                      <label className="space-y-1 text-sm">
+                        <span>{t.assignee}</span>
+                        <Select
+                          disabled={isReadOnly || busy}
+                          value={selectedIssue.assigneeUserId ?? ''}
+                          onChange={(event) =>
+                            updateIssue(selectedIssue.id, {
+                              assigneeUserId: event.target.value || null,
+                            })
+                          }
+                        >
+                          <option value="">{t.unassigned}</option>
+                          {memberOptions}
+                          {selectedIssue.assigneeUserId &&
+                            !members.some(
+                              (member) => member.userId === selectedIssue.assigneeUserId,
+                            ) && (
+                              <option value={selectedIssue.assigneeUserId}>
+                                {selectedIssue.assigneeUserId}
+                              </option>
                             )}
-                            {run.mode === 'server' &&
-                              run.workflowState &&
-                              run.workflowState.steps.length > 0 && (
-                                <div className="mt-2 rounded-md bg-[var(--surface-2)] p-2 text-xs text-[var(--text-secondary)]">
-                                  <p>
-                                    {run.workflowState.currentStepIndex >=
-                                    run.workflowState.steps.length
-                                      ? t.approveFinal
-                                      : `${t.stepProgress} ${run.workflowState.currentStepIndex + 1} ${t.of} ${run.workflowState.steps.length}`}
-                                  </p>
-                                  <ol className="mt-2 space-y-1">
-                                    {run.workflowState.steps.map((step, index) => {
-                                      const completed = run.workflowState?.results.some(
-                                        (result) =>
-                                          result.stepId === step.id &&
-                                          (result.kind === undefined || result.kind === 'result'),
-                                      );
-                                      return (
-                                        <li
-                                          key={step.id}
-                                          className={cn(
-                                            'flex items-center gap-2',
-                                            completed && 'text-emerald-400',
-                                            index === run.workflowState?.currentStepIndex &&
-                                              (run.status.startsWith('waiting_') ||
-                                                run.status === 'running') &&
-                                              'text-amber-300',
-                                          )}
-                                        >
-                                          <i
-                                            className={cn(
-                                              'ti',
-                                              completed
-                                                ? 'ti-circle-check-filled'
-                                                : index === run.workflowState?.currentStepIndex &&
-                                                    (run.status.startsWith('waiting_') ||
-                                                      run.status === 'running')
-                                                  ? 'ti-circle-dot'
-                                                  : 'ti-circle',
-                                            )}
-                                            aria-hidden="true"
-                                          />
-                                          <span>{step.name}</span>
-                                        </li>
-                                      );
-                                    })}
-                                  </ol>
-                                </div>
+                        </Select>
+                      </label>
+                    </div>
+                    <section aria-label={t.runs}>
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <h3 className="text-sm font-semibold">{t.runs}</h3>
+                        {!isReadOnly &&
+                          selectedIssue.assigneeAgentId &&
+                          !selectedRuns.some((run) => activeRunStatuses.includes(run.status)) && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() =>
+                                void runAction(async () => {
+                                  await apiClient.startIssueRun(selectedIssue.id);
+                                  setSelectedRuns(await apiClient.getAgentRuns(selectedIssue.id));
+                                })
+                              }
+                            >
+                              {t.startRun}
+                            </Button>
+                          )}
+                      </div>
+                      {selectedDetailsLoading ? (
+                        <div className="space-y-3" role="status" aria-label={t.loadingDetails}>
+                          <div className="rounded-lg border border-[var(--border)] p-3">
+                            <Skeleton className="h-4 w-2/3 rounded-full" />
+                            <Skeleton className="mt-3 h-3 w-1/2 rounded-full" />
+                          </div>
+                          <div className="rounded-lg border border-[var(--border)] p-3">
+                            <Skeleton className="h-4 w-3/4 rounded-full" />
+                            <Skeleton className="mt-3 h-3 w-2/5 rounded-full" />
+                          </div>
+                        </div>
+                      ) : selectedRuns.length === 0 ? (
+                        <p className="text-sm text-[var(--text-muted)]">{t.noRuns}</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {selectedRuns.map((run) => (
+                            <article
+                              key={run.id}
+                              className="rounded-lg border border-[var(--border)] p-3 text-sm"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <strong>
+                                  #{run.attempt} · {t.runStatus[run.status]}
+                                </strong>
+                                <span className="text-xs text-[var(--text-muted)]">
+                                  {relativeDate(run.createdAt, locale)} ·{' '}
+                                  {run.costMicros === null ? '—' : money(run.costMicros, locale)}
+                                </span>
+                              </div>
+                              {run.provider && (
+                                <p className="mt-1 text-xs text-[var(--text-muted)]">
+                                  {run.provider}
+                                  {run.model ? ` / ${run.model}` : ''}
+                                  {run.inputTokens !== null
+                                    ? ` · ${run.inputTokens} / ${run.outputTokens} tokens`
+                                    : ''}
+                                </p>
                               )}
-                            {run.output && (
-                              <MarkdownViewer
-                                content={run.output}
-                                showModeToggle={false}
-                                className="mt-2 min-w-0 break-words text-sm"
-                              />
-                            )}
-                            {!isReadOnly && run.status === 'waiting_review' && (
-                              <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
-                                <p className="mb-2 text-xs text-amber-200">{t.waitingForReview}</p>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    void runAction(async () => {
-                                      await apiClient.continueAgentRun(run.id, {
-                                        action: 'approve',
-                                      });
-                                      setSelectedRuns(
-                                        await apiClient.getAgentRuns(selectedIssue.id),
-                                      );
-                                    })
-                                  }
-                                >
-                                  <i className="ti ti-check mr-2" aria-hidden="true" />
-                                  {run.workflowState &&
-                                  run.workflowState.currentStepIndex <
-                                    run.workflowState.steps.length
-                                    ? t.approveAndContinue
-                                    : t.approveFinal}
-                                </Button>
-                                <div className="mt-3 border-t border-amber-500/20 pt-3">
-                                  <label className="sr-only" htmlFor={`run-revision-${run.id}`}>
-                                    {t.revisionPlaceholder}
-                                  </label>
-                                  <Textarea
-                                    id={`run-revision-${run.id}`}
-                                    value={workflowAnswerDraft}
-                                    onChange={(event) => setWorkflowAnswerDraft(event.target.value)}
-                                    placeholder={t.revisionPlaceholder}
-                                    rows={2}
-                                    disabled={busy}
-                                  />
+                              {run.mode === 'server' &&
+                                run.workflowState &&
+                                run.workflowState.steps.length > 0 && (
+                                  <div className="mt-2 rounded-md bg-[var(--surface-2)] p-2 text-xs text-[var(--text-secondary)]">
+                                    <p>
+                                      {run.workflowState.currentStepIndex >=
+                                      run.workflowState.steps.length
+                                        ? t.approveFinal
+                                        : `${t.stepProgress} ${run.workflowState.currentStepIndex + 1} ${t.of} ${run.workflowState.steps.length}`}
+                                    </p>
+                                    <ol className="mt-2 space-y-1">
+                                      {run.workflowState.steps.map((step, index) => {
+                                        const completed = run.workflowState?.results.some(
+                                          (result) =>
+                                            result.stepId === step.id &&
+                                            (result.kind === undefined || result.kind === 'result'),
+                                        );
+                                        return (
+                                          <li
+                                            key={step.id}
+                                            className={cn(
+                                              'flex items-center gap-2',
+                                              completed && 'text-emerald-400',
+                                              index === run.workflowState?.currentStepIndex &&
+                                                (run.status.startsWith('waiting_') ||
+                                                  run.status === 'running') &&
+                                                'text-amber-300',
+                                            )}
+                                          >
+                                            <i
+                                              className={cn(
+                                                'ti',
+                                                completed
+                                                  ? 'ti-circle-check-filled'
+                                                  : index === run.workflowState?.currentStepIndex &&
+                                                      (run.status.startsWith('waiting_') ||
+                                                        run.status === 'running')
+                                                    ? 'ti-circle-dot'
+                                                    : 'ti-circle',
+                                              )}
+                                              aria-hidden="true"
+                                            />
+                                            <span>{step.name}</span>
+                                          </li>
+                                        );
+                                      })}
+                                    </ol>
+                                  </div>
+                                )}
+                              {run.output && (
+                                <MarkdownViewer
+                                  content={run.output}
+                                  showModeToggle={false}
+                                  className="mt-2 min-w-0 break-words text-sm"
+                                />
+                              )}
+                              {!isReadOnly && run.status === 'waiting_review' && (
+                                <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                                  <p className="mb-2 text-xs text-amber-200">
+                                    {t.waitingForReview}
+                                  </p>
                                   <Button
                                     type="button"
-                                    variant="outline"
                                     size="sm"
-                                    className="mt-2"
-                                    disabled={busy || !workflowAnswerDraft.trim()}
+                                    disabled={busy}
                                     onClick={() =>
                                       void runAction(async () => {
                                         await apiClient.continueAgentRun(run.id, {
-                                          action: 'revise',
-                                          answer: workflowAnswerDraft.trim(),
+                                          action: 'approve',
                                         });
-                                        setWorkflowAnswerDraft('');
                                         setSelectedRuns(
                                           await apiClient.getAgentRuns(selectedIssue.id),
                                         );
                                       })
                                     }
                                   >
-                                    <i className="ti ti-edit mr-2" aria-hidden="true" />
-                                    {t.requestRevision}
+                                    <i className="ti ti-check mr-2" aria-hidden="true" />
+                                    {run.workflowState &&
+                                    run.workflowState.currentStepIndex <
+                                      run.workflowState.steps.length
+                                      ? t.approveAndContinue
+                                      : t.approveFinal}
                                   </Button>
+                                  <div className="mt-3 border-t border-amber-500/20 pt-3">
+                                    <label className="sr-only" htmlFor={`run-revision-${run.id}`}>
+                                      {t.revisionPlaceholder}
+                                    </label>
+                                    <Textarea
+                                      id={`run-revision-${run.id}`}
+                                      value={workflowAnswerDraft}
+                                      onChange={(event) =>
+                                        setWorkflowAnswerDraft(event.target.value)
+                                      }
+                                      placeholder={t.revisionPlaceholder}
+                                      rows={2}
+                                      disabled={busy}
+                                    />
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="mt-2"
+                                      disabled={busy || !workflowAnswerDraft.trim()}
+                                      onClick={() =>
+                                        void runAction(async () => {
+                                          await apiClient.continueAgentRun(run.id, {
+                                            action: 'revise',
+                                            answer: workflowAnswerDraft.trim(),
+                                          });
+                                          setWorkflowAnswerDraft('');
+                                          setSelectedRuns(
+                                            await apiClient.getAgentRuns(selectedIssue.id),
+                                          );
+                                        })
+                                      }
+                                    >
+                                      <i className="ti ti-edit mr-2" aria-hidden="true" />
+                                      {t.requestRevision}
+                                    </Button>
+                                  </div>
                                 </div>
-                              </div>
-                            )}
-                            {!isReadOnly && run.status === 'waiting_input' && (
-                              <form
-                                className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/10 p-3"
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  if (!workflowAnswerDraft.trim()) return;
-                                  void runAction(async () => {
-                                    await apiClient.continueAgentRun(run.id, {
-                                      action: 'answer',
-                                      answer: workflowAnswerDraft.trim(),
+                              )}
+                              {!isReadOnly && run.status === 'waiting_input' && (
+                                <form
+                                  className="mt-3 rounded-md border border-sky-500/30 bg-sky-500/10 p-3"
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    if (!workflowAnswerDraft.trim()) return;
+                                    void runAction(async () => {
+                                      await apiClient.continueAgentRun(run.id, {
+                                        action: 'answer',
+                                        answer: workflowAnswerDraft.trim(),
+                                      });
+                                      setWorkflowAnswerDraft('');
+                                      setSelectedRuns(
+                                        await apiClient.getAgentRuns(selectedIssue.id),
+                                      );
                                     });
-                                    setWorkflowAnswerDraft('');
-                                    setSelectedRuns(await apiClient.getAgentRuns(selectedIssue.id));
-                                  });
-                                }}
-                              >
-                                <p className="mb-2 text-xs text-sky-200">{t.waitingForAnswer}</p>
-                                <p className="mb-3 whitespace-pre-wrap text-sm">
-                                  {run.workflowState?.question}
-                                </p>
-                                <label className="sr-only" htmlFor={`run-answer-${run.id}`}>
-                                  {t.answerQuestion}
-                                </label>
-                                <Textarea
-                                  id={`run-answer-${run.id}`}
-                                  value={workflowAnswerDraft}
-                                  onChange={(event) => setWorkflowAnswerDraft(event.target.value)}
-                                  placeholder={t.answerPlaceholder}
-                                  rows={3}
-                                  disabled={busy}
-                                />
+                                  }}
+                                >
+                                  <p className="mb-2 text-xs text-sky-200">{t.waitingForAnswer}</p>
+                                  <p className="mb-3 whitespace-pre-wrap text-sm">
+                                    {run.workflowState?.question}
+                                  </p>
+                                  <label className="sr-only" htmlFor={`run-answer-${run.id}`}>
+                                    {t.answerQuestion}
+                                  </label>
+                                  <Textarea
+                                    id={`run-answer-${run.id}`}
+                                    value={workflowAnswerDraft}
+                                    onChange={(event) => setWorkflowAnswerDraft(event.target.value)}
+                                    placeholder={t.answerPlaceholder}
+                                    rows={3}
+                                    disabled={busy}
+                                  />
+                                  <Button
+                                    type="submit"
+                                    size="sm"
+                                    className="mt-2"
+                                    disabled={busy || !workflowAnswerDraft.trim()}
+                                  >
+                                    <i className="ti ti-send mr-2" aria-hidden="true" />
+                                    {t.submitAnswer}
+                                  </Button>
+                                </form>
+                              )}
+                              {run.error && <p className="mt-2 text-red-400">{run.error}</p>}
+                              {!isReadOnly && activeRunStatuses.includes(run.status) && (
                                 <Button
-                                  type="submit"
+                                  type="button"
+                                  variant="outline"
                                   size="sm"
                                   className="mt-2"
-                                  disabled={busy || !workflowAnswerDraft.trim()}
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void runAction(async () => {
+                                      await apiClient.cancelAgentRun(run.id);
+                                      setSelectedRuns(
+                                        await apiClient.getAgentRuns(selectedIssue.id),
+                                      );
+                                    })
+                                  }
                                 >
-                                  <i className="ti ti-send mr-2" aria-hidden="true" />
-                                  {t.submitAnswer}
+                                  {t.cancelRun}
                                 </Button>
-                              </form>
-                            )}
-                            {run.error && <p className="mt-2 text-red-400">{run.error}</p>}
-                            {!isReadOnly && activeRunStatuses.includes(run.status) && (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="mt-2"
-                                disabled={busy}
-                                onClick={() =>
-                                  void runAction(async () => {
-                                    await apiClient.cancelAgentRun(run.id);
-                                    setSelectedRuns(await apiClient.getAgentRuns(selectedIssue.id));
-                                  })
-                                }
-                              >
-                                {t.cancelRun}
-                              </Button>
-                            )}
-                          </article>
-                        ))}
-                      </div>
-                    )}
-                  </section>
-                  <div className="border-t border-[var(--border)] pt-4">
-                    <h3 className="mb-3 text-sm font-semibold">{t.comments}</h3>
-                    <div className="space-y-3">
-                      {selectedDetailsLoading ? (
-                        <div className="space-y-3" role="status" aria-label={t.loadingDetails}>
-                          <div className="rounded-lg bg-[var(--surface-2)] p-3">
-                            <Skeleton className="h-3 w-1/3 rounded-full" />
-                            <Skeleton className="mt-3 h-3 w-full rounded-full" />
-                            <Skeleton className="mt-2 h-3 w-2/3 rounded-full" />
-                          </div>
-                          <div className="rounded-lg bg-[var(--surface-2)] p-3">
-                            <Skeleton className="h-3 w-1/4 rounded-full" />
-                            <Skeleton className="mt-3 h-3 w-4/5 rounded-full" />
-                          </div>
+                              )}
+                            </article>
+                          ))}
                         </div>
-                      ) : (
-                        selectedComments.map((comment) => (
-                          <div
-                            key={comment.id}
-                            className="rounded-lg bg-[var(--surface-2)] p-3 text-sm"
-                          >
-                            <div className="mb-1 flex justify-between text-xs text-[var(--text-muted)]">
-                              <span>
-                                {comment.authorId === currentUserId
-                                  ? t.mine
-                                  : (agents.find((agent) => agent.id === comment.authorId)?.name ??
-                                    comment.authorId.slice(0, 8))}
-                              </span>
-                              <span>{relativeDate(comment.createdAt, locale)}</span>
-                            </div>
-                            <MarkdownViewer
-                              content={comment.body}
-                              showModeToggle={false}
-                              className="min-w-0 break-words text-sm"
-                            />
-                          </div>
-                        ))
                       )}
-                    </div>
-                    {!isReadOnly && (
-                      <form
-                        className="mt-3 flex gap-2"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          if (!commentText.trim()) return;
-                          void (async () => {
-                            setBusy(true);
-                            setCommentError(null);
-                            try {
-                              const result = await apiClient.addIssueComment(
-                                selectedIssue.id,
-                                commentText.trim(),
-                              );
-                              setSelectedComments((current) => [...current, result.comment]);
-                              setCommentText('');
-                              const run = result.run;
-                              if (run) setSelectedRuns((current) => [run, ...current]);
-                              await reload();
-                              if (result.automationError) setCommentError(result.automationError);
-                            } catch (reason) {
-                              setCommentError(
-                                reason instanceof Error ? reason.message : t.saveError,
-                              );
-                            } finally {
-                              setBusy(false);
-                            }
-                          })();
-                        }}
-                      >
-                        <Input
-                          value={commentText}
-                          onChange={(event) => setCommentText(event.target.value)}
-                          placeholder={t.commentPlaceholder}
-                          aria-label={t.commentPlaceholder}
-                        />
-                        <Button type="submit" disabled={busy || !commentText.trim()}>
-                          {t.addComment}
-                        </Button>
-                      </form>
-                    )}
-                    {commentError && (
-                      <p role="alert" className="mt-2 text-sm text-red-400">
-                        {commentError}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-2 border-t border-[var(--border)] pt-4">
-                    {selectedInbox && (
-                      <>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={busy}
-                          onClick={() =>
-                            changeInbox(selectedIssue.id, { read: !selectedInbox.readAt })
-                          }
-                        >
-                          {selectedInbox.readAt ? t.markUnread : t.markRead}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={busy}
-                          onClick={() =>
-                            changeInbox(selectedIssue.id, { archived: !selectedInbox.archivedAt })
-                          }
-                        >
-                          {selectedInbox.archivedAt ? t.restore : t.archive}
-                        </Button>
-                      </>
-                    )}
-                    {canDelete && (
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        disabled={busy}
-                        className="ml-auto"
-                        onClick={() => {
-                          if (window.confirm(t.deleteConfirm))
-                            void runAction(async () => {
-                              await apiClient.deleteIssue(selectedIssue.id);
-                              setSelectedId(null);
-                            });
-                        }}
-                      >
-                        {t.delete}
-                      </Button>
-                    )}
-                  </div>
-                </aside>
-              </div>
+                    </section>
+                  </aside>
+                </div>
+              )}
             </div>
           )}
         </div>

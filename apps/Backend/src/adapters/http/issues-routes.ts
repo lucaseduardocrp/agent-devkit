@@ -9,6 +9,11 @@ import type { AgentService } from '../../modules/agents/application/agent-servic
 import type { WorkspaceService } from '../../modules/workspaces/application/workspace-service.js';
 import type { Issue, IssueStore, IssueChanges } from '../../modules/issues/issue-store.js';
 import type { RunService } from '../../modules/issues/run-service.js';
+import type { IssueBriefService } from '../../modules/issues/agent-brief/brief-service.js';
+import {
+  BRIEF_EFFORTS,
+  BRIEF_REFERENCE_KINDS,
+} from '../../modules/issues/agent-brief/brief-types.js';
 import type { E2eArtifactStore } from '../../modules/e2e/application/artifact-store.js';
 import type { ImageAttachmentScope } from '../../modules/shared/image-attachment.js';
 import { validateAttachments } from './attachments-routes.js';
@@ -34,6 +39,12 @@ const issueFields = z.object({
   attachments: z.array(z.unknown()).max(20).optional(),
   status: status.optional(),
   priority: priority.optional(),
+  type: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9-]{0,40}$/)
+    .optional(),
   assigneeAgentId: z.string().uuid().nullable().optional(),
   assigneeUserId: z.string().uuid().nullable().optional(),
 });
@@ -41,6 +52,50 @@ const issueCreateFields = issueFields.extend({ runMode: z.enum(['server', 'host'
 const updateFields = issueCreateFields
   .partial()
   .refine((value) => Object.keys(value).some((key) => key !== 'runMode'));
+const briefText = (max: number) => z.string().trim().max(max);
+const briefEdits = z
+  .object({
+    recommendation: z.object({
+      provider: briefText(100),
+      model: briefText(200),
+      effort: z.enum(BRIEF_EFFORTS),
+      rationale: briefText(2000),
+      estimatedCostUsd: z.number().finite().min(0).nullable(),
+      alternatives: z
+        .array(
+          z.object({
+            provider: briefText(100),
+            model: briefText(200),
+            effort: z.enum(BRIEF_EFFORTS),
+            reason: briefText(500),
+          }),
+        )
+        .max(10),
+    }),
+    readFirst: z
+      .array(
+        z.object({
+          kind: z.enum(BRIEF_REFERENCE_KINDS),
+          label: briefText(300),
+          ref: briefText(500),
+          reason: briefText(500),
+        }),
+      )
+      .max(30),
+    considerations: z.array(briefText(500)).max(30),
+    prompt: z.object({
+      system: briefText(8000),
+      task: briefText(30000),
+      outputFormat: briefText(2000),
+    }),
+    budget: z.object({
+      maxInputTokens: z.number().int().min(0).max(2_000_000),
+      maxOutputTokens: z.number().int().min(0).max(500_000),
+    }),
+  })
+  .partial()
+  .refine((value) => Object.keys(value).length > 0);
+const regenerateFields = z.object({ force: z.boolean().default(false) });
 const commentFields = z.object({ body: z.string().trim().min(1).max(10000) });
 const stateFields = z
   .object({ read: z.boolean().optional(), archived: z.boolean().optional() })
@@ -78,6 +133,9 @@ const usageFields = z.object({
   outputTokens: tokenCount,
   estimated: z.boolean().default(true),
 });
+
+/** Issue fields the brief engine reads; changing status or assignment does not regenerate it. */
+const BRIEF_INPUTS = ['title', 'description', 'attachments', 'type', 'priority'] as const;
 
 function workspaceId(request: Request): string {
   const id = request.context?.workspaceId;
@@ -129,6 +187,12 @@ async function validateAssignee(
   }
 }
 
+function requireBriefs(briefs: IssueBriefService | undefined): IssueBriefService {
+  if (!briefs)
+    throw new ApplicationError('BRIEFS_UNAVAILABLE', 'Agent briefs are not available.', 501);
+  return briefs;
+}
+
 export function createIssuesRouter(
   store: IssueStore,
   agents: AgentService,
@@ -136,6 +200,7 @@ export function createIssuesRouter(
   runs: RunService,
   contextResolver?: RequestContextResolver,
   imageStore?: E2eArtifactStore,
+  briefs?: IssueBriefService,
 ): Router {
   const router = Router();
   if (contextResolver)
@@ -185,6 +250,7 @@ export function createIssuesRouter(
         null,
         issueFiles(issue),
       );
+      await briefs?.refresh(request.context!, issue);
       let automationError: string | undefined;
       let run;
       if (issue.assigneeAgentId && ['todo', 'in_progress'].includes(issue.status)) {
@@ -262,6 +328,8 @@ export function createIssuesRouter(
         issueFiles(existing),
         issueFiles(updated),
       );
+      if (updated && BRIEF_INPUTS.some((field) => changes[field] !== undefined))
+        await briefs?.refresh(request.context!, updated);
       let automationError: string | undefined;
       let run;
       const shouldStart =
@@ -283,6 +351,36 @@ export function createIssuesRouter(
         issue: await store.get(workspaceId(request), existing.id),
         ...(run ? { run } : {}),
         ...(automationError ? { automationError } : {}),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+  router.get('/issues/:id/brief', requireAuth, async (request, response, next) => {
+    try {
+      const issue = await findIssue(store, request);
+      response.json({ brief: (await briefs?.get(workspaceId(request), issue.id)) ?? null });
+    } catch (error) {
+      next(error);
+    }
+  });
+  router.put('/issues/:id/brief', requireAuth, async (request, response, next) => {
+    try {
+      requireWrite(request);
+      const issue = await findIssue(store, request);
+      const edits = parseBody(briefEdits, request);
+      response.json({ brief: await requireBriefs(briefs).edit(request.context!, issue, edits) });
+    } catch (error) {
+      next(error);
+    }
+  });
+  router.post('/issues/:id/brief/regenerate', requireAuth, async (request, response, next) => {
+    try {
+      requireWrite(request);
+      const issue = await findIssue(store, request);
+      const { force } = parseBody(regenerateFields, request);
+      response.json({
+        brief: await requireBriefs(briefs).regenerate(request.context!, issue, force),
       });
     } catch (error) {
       next(error);

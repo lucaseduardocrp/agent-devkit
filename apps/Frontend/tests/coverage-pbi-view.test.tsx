@@ -4,6 +4,11 @@ import type { ApiClient, AuditHistoryPage } from '../src/lib/api-client.js';
 import { PbiView } from '../src/features/pbi/PbiView.js';
 import type { PbiItem, PbiLink, PbiPushContract } from '../src/features/pbi/pbi-types.js';
 
+const openFilters = () => {
+  const toggle = screen.getByRole('button', { name: /^(Filters|Filtros)/ });
+  if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+};
+
 const root: PbiItem = {
   id: 'root',
   workspaceId: 'ws',
@@ -75,6 +80,7 @@ function mockClient() {
     getWorkspaceMembers: vi
       .fn()
       .mockResolvedValue([member('user-1', { name: 'Ana Souza', email: 'ana@example.test' })]),
+    getPbiItem: vi.fn().mockResolvedValue(root),
     getPbiContext: vi.fn().mockResolvedValue({ item: root, descendants: [] }),
     getPbiComments: vi.fn().mockResolvedValue([]),
     createPbiItem: vi.fn().mockResolvedValue(card),
@@ -137,6 +143,7 @@ describe('PbiView coverage: stored preferences', () => {
       expect(screen.getByRole('columnheader', { name })).toBeInTheDocument();
     const cols = screen.getByRole('treegrid').querySelectorAll('col');
     expect(cols[3]?.style.width).toBe('420px');
+    openFilters();
     expect(screen.getByRole('option', { name: 'Filtros salvos' })).not.toHaveProperty(
       'disabled',
       true,
@@ -170,6 +177,7 @@ describe('PbiView coverage: stored preferences', () => {
     expect(cols[1]?.style.width).toBe('64px');
     expect(cols[2]?.style.width).toBe('72px');
     expect(cols[3]?.style.width).toBe('900px');
+    openFilters();
     const saved = screen.getByRole('combobox', { name: 'Filtros salvos' });
     expect(
       within(saved)
@@ -182,6 +190,7 @@ describe('PbiView coverage: stored preferences', () => {
     localStorage.setItem('adk:pbi-saved-filters:ws', JSON.stringify({ id: 'x' }));
     renderView(mockClient());
     await screen.findByRole('button', { name: 'Release PBI' });
+    openFilters();
     const saved = screen.getByRole('combobox', { name: 'Filtros salvos' });
     expect(within(saved).getAllByRole('option')).toHaveLength(1);
   });
@@ -340,6 +349,7 @@ describe('PbiView coverage: rows', () => {
     fireEvent.keyDown(cardRow, { key: 'Enter' });
     expect(cardRow).not.toHaveAttribute('aria-expanded');
     // Local items are counted under the local source filter only.
+    openFilters();
     fireEvent.change(screen.getByRole('combobox', { name: 'Origem' }), {
       target: { value: 'local' },
     });
@@ -397,6 +407,7 @@ describe('PbiView coverage: loading and actions', () => {
     ]);
     renderView(api);
     await screen.findByRole('button', { name: 'Current PBI' });
+    openFilters();
     expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Iteração' }).value).toBe(
       'Sprint 2',
     );
@@ -428,6 +439,7 @@ describe('PbiView coverage: loading and actions', () => {
     ]);
     renderView(api);
     await screen.findByRole('button', { name: 'Release PBI' });
+    openFilters();
     const assignee = screen.getByRole('combobox', { name: 'Responsável' });
     await waitFor(() =>
       expect(
@@ -550,6 +562,55 @@ describe('PbiView coverage: loading and actions', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(api.deletePbiItem).not.toHaveBeenCalled();
   });
+
+  it('deletes an item from its modal', async () => {
+    const api = mockClient();
+    renderView(api);
+    fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Excluir' }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Excluir' }),
+    );
+    await waitFor(() => expect(api.deletePbiItem).toHaveBeenCalledWith('root'));
+  });
+
+  it('opens a partial item at once with a skeleton until the full item loads', async () => {
+    const api = mockClient();
+    let finish: (item: PbiItem) => void = () => undefined;
+    api.getPbiItems.mockResolvedValue([{ ...root, partial: true }]);
+    api.getPbiItem.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    renderView(api);
+    fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('status', { name: 'Carregando item...' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Salvar item' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    finish({ ...root, description: 'Full text' });
+    await waitFor(() =>
+      expect(within(dialog).queryByRole('status', { name: 'Carregando item...' })).toBeNull(),
+    );
+  });
+
+  it('closes the modal and shows the error when the full item fails to load', async () => {
+    const api = mockClient();
+    api.getPbiItems.mockResolvedValue([{ ...root, partial: true }]);
+    api.getPbiItem.mockRejectedValueOnce(new Error('HTTP 500'));
+    renderView(api);
+    fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
+    expect(await screen.findByText('HTTP 500')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('pulls only from the chosen integration', async () => {
+    const api = mockClient();
+    renderView(api);
+    await screen.findByRole('button', { name: 'Release PBI' });
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: /Pull apenas de Trello/ }));
+    await waitFor(() => expect(api.pullPbiBoards).toHaveBeenCalledWith('trello'));
+  });
 });
 
 describe('PbiView coverage: saved filters', () => {
@@ -559,6 +620,7 @@ describe('PbiView coverage: saved filters', () => {
   it('sorts presets, overwrites by name and ignores blank names', async () => {
     renderView(mockClient());
     await screen.findByRole('button', { name: 'Release PBI' });
+    openFilters();
     const query = screen.getByRole('textbox', { name: 'Filtrar PBIs' });
     const saveAs = (name: string) => {
       fireEvent.click(screen.getByRole('button', { name: 'Salvar filtro' }));
@@ -701,7 +763,7 @@ describe('PbiView coverage: item editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Release PBI' }));
     let editor = within(screen.getByRole('dialog')).getByRole('textbox', { name: 'Descrição' });
     expect(editor.textContent?.replace(/\s+/g, ' ').trim()).toBe('Plain bold text');
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Fechar' }));
     fireEvent.click(screen.getByRole('button', { name: 'Html PBI' }));
     editor = within(screen.getByRole('dialog')).getByRole('textbox', { name: 'Descrição' });
     expect(editor.querySelector('b')).toBeNull();
@@ -804,7 +866,7 @@ describe('PbiView coverage: item editor', () => {
       expect(within(dialog).queryByText('Sincronizando cards...')).not.toBeInTheDocument(),
     );
     expect(within(dialog).getByText('Nenhum card vinculado a este PBI.')).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fechar' }));
     // The synced PBI is expanded, so the table shows that it has no cards.
     expect(screen.getByText('Nenhum card vinculado a este PBI.')).toBeInTheDocument();
   });
@@ -820,7 +882,7 @@ describe('PbiView coverage: item editor', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
     const dialog = screen.getByRole('dialog');
     expect(await within(dialog).findByText('Azure offline')).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fechar' }));
     fireEvent.click(screen.getByRole('button', { name: 'Release PBI' }));
     expect(
       await within(screen.getByRole('dialog')).findByText('Não foi possível sincronizar os cards.'),

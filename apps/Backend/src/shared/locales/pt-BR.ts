@@ -49,6 +49,7 @@ export const ptBR = {
   HUB_FILE_MISMATCH: 'O arquivo baixado do ADK Hub não confere com o índice e não foi instalado.',
   HUB_AGENT_NOT_FROM_HUB: 'Este agente não foi instalado pelo ADK Hub.',
   ISSUE_NOT_FOUND: 'Issue não encontrada.',
+  BRIEFS_UNAVAILABLE: 'Os briefs de agente não estão disponíveis.',
   PBI_NOT_FOUND: 'PBI ou card não encontrado.',
   PBI_HIERARCHY: 'A hierarquia de PBIs e cards é inválida.',
   PBI_PROVIDER_CONFIG: 'A integração do board precisa ser configurada: {detail}',

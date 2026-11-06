@@ -126,6 +126,17 @@ const cases: Record<string, [unknown, string]> = {
   issues_update: [{ issueId: 'i1', title: 'Fix bug' }, 'PATCH /issues/i1'],
   issues_delete: [{ issueId: 'i1' }, 'DELETE /issues/i1'],
   issues_comment: [{ issueId: 'i1', body: 'Working on it' }, 'POST /issues/i1/comments'],
+  issues_brief_get: [{ issueId: 'i1' }, 'GET /issues/i1/brief'],
+  issues_brief_update: [
+    { issueId: 'i1', edits: { considerations: ['Check the cache'] } },
+    'PUT /issues/i1/brief',
+  ],
+  issues_brief_regenerate: [{ issueId: 'i1' }, 'POST /issues/i1/brief/regenerate'],
+  work_item_types_get: [{}, 'GET /work-item-types'],
+  work_item_types_save: [
+    { types: [{ key: 'bug', label: 'Bug', color: 'red', icon: 'bug' }] },
+    'PUT /work-item-types',
+  ],
   issues_inbox: [{}, 'GET /inbox'],
   issues_inbox_update: [{ issueId: 'i1', read: true }, 'PATCH /inbox/i1'],
   issues_dashboard: [{}, 'GET /dashboard'],
