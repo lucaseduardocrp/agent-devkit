@@ -1,5 +1,7 @@
-import { fireEvent, render, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RunStreamHandlers } from '../src/features/agents/use-run-stream.js';
+import type { AgentRun, AgentRunEvent, Issue } from '../src/features/issues/issue-types.js';
 import { AgentsView } from '../src/features/agents/AgentsView.js';
 import { AgentModal } from '../src/features/agents/AgentModal.js';
 import { AGENT_TEMPLATES } from '../src/features/agents/agent-templates.js';
@@ -477,6 +479,8 @@ describe('AgentsView', () => {
         updatedAt: '2026-01-01T00:00:00Z',
       },
     ]);
+    // Keeps the network out of the suite: the stream stays open and silent unless a test drives it.
+    vi.spyOn(client, 'streamRunEvents').mockImplementation(() => new Promise(() => undefined));
     vi.spyOn(client, 'executeAgent').mockResolvedValue({
       content: '## Execution Output\nTest result',
       agent: { id: 'agent-qa', name: 'QA Engineer', role: 'QA' },
@@ -504,10 +508,10 @@ describe('AgentsView', () => {
     expect(getByText('Sistema')).toBeInTheDocument();
   });
 
-  it('loads issue runs when the map is opened and refreshes on demand', async () => {
+  it('loads issue runs when the map is opened, without a manual refresh', async () => {
     const getIssues = vi.spyOn(client, 'getIssues').mockResolvedValue([]);
     const getAgentRuns = vi.spyOn(client, 'getAgentRuns').mockResolvedValue([]);
-    const { getByTestId, getByRole } = render(
+    const { getByTestId, queryByRole } = render(
       <AgentsView apiClient={client} activeWorkspaceId="ws-1" />,
     );
 
@@ -517,8 +521,158 @@ describe('AgentsView', () => {
     await waitFor(() => expect(getByTestId('topology-agent-agent-qa')).toBeInTheDocument());
     await waitFor(() => expect(getAgentRuns).toHaveBeenCalledOnce());
     expect(client.getAgents).toHaveBeenCalledTimes(2);
-    fireEvent.click(getByRole('button', { name: 'Atualizar' }));
-    await waitFor(() => expect(getIssues).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getIssues).toHaveBeenCalledOnce());
+    expect(queryByRole('button', { name: 'Atualizar' })).not.toBeInTheDocument();
+  });
+
+  describe('live runs', () => {
+    const issue: Issue = {
+      id: 'issue-1',
+      workspaceId: 'ws-1',
+      number: 95,
+      title: 'Approve exchanges',
+      description: '',
+      status: 'in_progress',
+      priority: 'medium',
+      assigneeAgentId: 'agent-qa',
+      assigneeUserId: null,
+      createdBy: 'user',
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    };
+    const event = (patch: Partial<AgentRunEvent> = {}): AgentRunEvent => ({
+      id: 'run-1',
+      issueId: issue.id,
+      agentId: 'agent-qa',
+      status: 'queued',
+      mode: 'host',
+      attempt: 1,
+      error: null,
+      provider: null,
+      model: null,
+      inputTokens: null,
+      outputTokens: null,
+      costMicros: null,
+      createdAt: '2026-01-01',
+      startedAt: null,
+      finishedAt: null,
+      ...patch,
+    });
+
+    async function openLiveMap() {
+      let handlers: RunStreamHandlers | undefined;
+      vi.spyOn(client, 'streamRunEvents').mockImplementation((given) => {
+        handlers = given;
+        return new Promise<void>(() => undefined);
+      });
+      const getIssues = vi.spyOn(client, 'getIssues').mockResolvedValue([issue]);
+      const getAgentRuns = vi.spyOn(client, 'getAgentRuns').mockResolvedValue([]);
+      const view = render(<AgentsView apiClient={client} activeWorkspaceId="ws-1" />);
+      await waitFor(() => expect(client.getAgents).toHaveBeenCalledOnce());
+      fireEvent.click(view.getByTestId('tab-map'));
+      await waitFor(() => expect(handlers).toBeDefined());
+      await waitFor(() => expect(getAgentRuns).toHaveBeenCalledOnce());
+      return { view, getIssues, getAgentRuns, stream: () => handlers! };
+    }
+
+    it('follows the runs of the workspace as the stream reports them', async () => {
+      const { view, getAgentRuns, getIssues, stream } = await openLiveMap();
+      expect(view.getByTestId('topology-live')).toHaveTextContent('Conectando…');
+
+      // The stream opens: the map loads the current state and goes live.
+      act(() => stream().onReady());
+      expect(view.getByTestId('topology-live')).toHaveTextContent('Ao vivo');
+      await waitFor(() => expect(getAgentRuns).toHaveBeenCalledTimes(2));
+
+      // A task arrives for a known issue: it shows with its title, without reloading the issues.
+      const issueLoads = getIssues.mock.calls.length;
+      act(() => stream().onRun(event()));
+      expect(view.getByTestId('topology-run-run-1')).toHaveTextContent('#95 Approve exchanges');
+      expect(getIssues).toHaveBeenCalledTimes(issueLoads);
+
+      // The run starts: the agent shows as running.
+      act(() => stream().onRun(event({ status: 'running' })));
+      expect(view.getByRole('button', { name: 'QA Engineer: Rodando' })).toBeInTheDocument();
+    });
+
+    it('loads the issues when a task arrives for one the map does not know', async () => {
+      const { view, getIssues, stream } = await openLiveMap();
+      const before = getIssues.mock.calls.length;
+      getIssues.mockResolvedValue([
+        issue,
+        { ...issue, id: 'issue-2', number: 96, title: 'New one' },
+      ]);
+      act(() => stream().onRun(event({ id: 'run-2', issueId: 'issue-2' })));
+      await waitFor(() =>
+        expect(view.getByTestId('topology-run-run-2')).toHaveTextContent('#96 New one'),
+      );
+      expect(getIssues.mock.calls.length).toBe(before + 1);
+    });
+
+    it('keeps the run when issues cannot be loaded and does not load them twice at once', async () => {
+      const { view, getIssues, stream } = await openLiveMap();
+      const before = getIssues.mock.calls.length;
+      let fail!: () => void;
+      getIssues.mockImplementation(
+        () => new Promise<readonly Issue[]>((_resolve, reject) => (fail = () => reject(new Error('x')))),
+      );
+      act(() => {
+        stream().onRun(event({ id: 'run-2', issueId: 'issue-2' }));
+        stream().onRun(event({ id: 'run-3', issueId: 'issue-3' }));
+      });
+      expect(getIssues.mock.calls.length).toBe(before + 1);
+      await act(async () => fail());
+      expect(view.getByTestId('topology-run-run-2')).toHaveTextContent('#issue-2');
+      expect(view.getByTestId('topology-run-run-3')).toBeInTheDocument();
+    });
+
+    it('keeps what the stream reported while the current state was loading', async () => {
+      const { view, getAgentRuns, stream } = await openLiveMap();
+      let finishLoad!: (runs: readonly AgentRun[]) => void;
+      getAgentRuns.mockImplementation(
+        () => new Promise<readonly AgentRun[]>((resolve) => (finishLoad = resolve)),
+      );
+
+      act(() => stream().onReady());
+      await waitFor(() => expect(getAgentRuns).toHaveBeenCalledTimes(2));
+      // The load started before this run existed; the stream tells about it before the load ends.
+      act(() => stream().onRun(event({ id: 'run-late' })));
+      await act(async () => finishLoad([]));
+      expect(view.getByTestId('topology-run-run-late')).toBeInTheDocument();
+    });
+
+    describe('reconciliation', () => {
+      beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+      afterEach(() => vi.useRealTimers());
+
+      it('polls every ten seconds while offline and only once a minute while live', async () => {
+        const { getAgentRuns, stream } = await openLiveMap();
+        await act(async () => void (await vi.advanceTimersByTimeAsync(10_000)));
+        expect(getAgentRuns).toHaveBeenCalledTimes(2);
+
+        act(() => stream().onReady());
+        await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+        const live = getAgentRuns.mock.calls.length;
+        await act(async () => void (await vi.advanceTimersByTimeAsync(30_000)));
+        expect(getAgentRuns.mock.calls.length).toBe(live);
+        await act(async () => void (await vi.advanceTimersByTimeAsync(30_000)));
+        expect(getAgentRuns.mock.calls.length).toBe(live + 1);
+      });
+    });
+
+    it('does not open the stream for members who cannot see issues', async () => {
+      const stream = vi.spyOn(client, 'streamRunEvents');
+      vi.spyOn(client, 'getAgents').mockResolvedValue([]);
+      const view = render(
+        <PermissionsProvider access={accessWith({ agents: 'view', issues: 'none' })}>
+          <AgentsView apiClient={client} activeWorkspaceId="ws-1" isReadOnly />
+        </PermissionsProvider>,
+      );
+      fireEvent.click(view.getByTestId('tab-map'));
+      await view.findByText('Nenhum agente cadastrado');
+      expect(stream).not.toHaveBeenCalled();
+      expect(view.queryByTestId('topology-live')).not.toBeInTheDocument();
+    });
   });
 
   it('handles load error with Error and non-Error and allows retrying', async () => {

@@ -697,17 +697,41 @@ describe('WorkView issue detail', () => {
     const dialog = await openDetail();
     expect(within(dialog).getByRole('option', { name: 'ghost-user' })).toBeInTheDocument();
 
-    const change = async (name: string, value: string, expected: object) => {
-      const select = within(dialog).getByRole('combobox', { name });
-      await waitIdle(select);
-      fireEvent.change(select, { target: { value } });
-      await waitFor(() => expect(spies.updateIssue).toHaveBeenLastCalledWith('issue-1', expected));
-    };
-    await change('Status', 'done', { status: 'done' });
-    await change('Prioridade', 'low', { priority: 'low' });
-    await change('Agente', '', { assigneeAgentId: null });
-    await change('Responsável', 'user-b', { assigneeUserId: 'user-b' });
-    await change('Responsável', '', { assigneeUserId: null });
+    const change = (name: string, value: string) =>
+      fireEvent.change(within(dialog).getByRole('combobox', { name }), { target: { value } });
+    await waitIdle(within(dialog).getByRole('combobox', { name: 'Status' }));
+    change('Status', 'done');
+    change('Prioridade', 'low');
+    change('Agente', '');
+    change('Responsável', 'user-b');
+    change('Responsável', '');
+    // The card is a draft: nothing is sent until the user saves, and then in one request.
+    expect(spies.updateIssue).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar' }));
+    await waitFor(() =>
+      expect(spies.updateIssue).toHaveBeenCalledWith('issue-1', {
+        status: 'done',
+        priority: 'low',
+        assigneeAgentId: null,
+        assigneeUserId: null,
+      }),
+    );
+    expect(spies.updateIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not save when a changed field goes back to its stored value', async () => {
+    const { api, spies } = createApi();
+    renderView(api);
+    const dialog = await openDetail();
+    const status = within(dialog).getByRole('combobox', { name: 'Status' });
+    await waitIdle(status);
+    const stored = (status as HTMLSelectElement).value;
+    fireEvent.change(status, { target: { value: 'done' } });
+    const save = within(dialog).getByRole('button', { name: 'Salvar' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.change(status, { target: { value: stored } });
+    expect(save.disabled).toBe(true);
+    expect(spies.updateIssue).not.toHaveBeenCalled();
   });
 
   it('shows a generic save error when an update fails without an Error', async () => {
@@ -718,7 +742,54 @@ describe('WorkView issue detail', () => {
     fireEvent.change(within(dialog).getByRole('combobox', { name: 'Status' }), {
       target: { value: 'done' },
     });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar' }));
     expect(await screen.findByText('Não foi possível salvar.')).toBeInTheDocument();
+  });
+
+  describe('closing with unsaved changes', () => {
+    const openChanged = async () => {
+      const ctx = createApi();
+      renderView(ctx.api);
+      const dialog = await openDetail();
+      fireEvent.change(within(dialog).getByRole('combobox', { name: 'Status' }), {
+        target: { value: 'done' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Fechar' }));
+      return { ...ctx, dialog, alert: await screen.findByRole('alertdialog') };
+    };
+
+    it('keeps editing on cancel', async () => {
+      const { alert, dialog, spies } = await openChanged();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Cancelar' }));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(dialog).toBeInTheDocument();
+      expect(spies.updateIssue).not.toHaveBeenCalled();
+    });
+
+    it('discards the changes and closes', async () => {
+      const { alert, dialog, spies } = await openChanged();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Descartar alterações' }));
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+      expect(spies.updateIssue).not.toHaveBeenCalled();
+    });
+
+    it('saves the changes and closes', async () => {
+      const { alert, dialog, spies } = await openChanged();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Salvar alterações' }));
+      await waitFor(() =>
+        expect(spies.updateIssue).toHaveBeenCalledWith('issue-1', { status: 'done' }),
+      );
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    });
+
+    it('closes at once when nothing changed', async () => {
+      const { api } = createApi();
+      renderView(api);
+      const dialog = await openDetail();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Fechar' }));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    });
   });
 
   it('edits the title and description, and can cancel editing', async () => {

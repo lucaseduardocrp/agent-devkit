@@ -262,5 +262,20 @@ describe('MCP server', () => {
     );
     await context.api.request({ method: 'GET', path: '/knowledge/stats' });
     expect(requests[0]!.headers['authorization']).toBe('Bearer request-token');
+    // A request token means the hosted HTTP transport, where file paths are not the user's.
+    expect(context.allowLocalFiles).toBe(false);
+  });
+
+  it('only reads local files on the stdio transport, which has no request token', () => {
+    const { fetcher } = backend();
+    const context = createToolContext({
+      apiUrl: API,
+      timeoutMs: 1000,
+      registry: new ToolRegistry([]),
+      session: new Session(new MemorySessionStore({ token: 'stored' }), { apiUrl: API }),
+      skills: [],
+      fetch: fetcher,
+    });
+    expect(context.allowLocalFiles).toBe(true);
   });
 });

@@ -130,6 +130,10 @@ const hubName = z
   .trim()
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
   .max(64);
+const skillNames = z
+  .array(hubName)
+  .max(10)
+  .describe('ADK Hub skill names, e.g. test-design; the server reads each SKILL.md from the hub.');
 const role = z.enum(['QA', 'DOCUMENTATION', 'REFACTOR', 'CUSTOM']);
 const agentFields = {
   parentAgentId: z
@@ -156,6 +160,9 @@ const agentFields = {
     ),
   temperature: z.number().min(0).max(2).optional(),
   isDefault: z.boolean().optional().describe('Default agent used by Brain questions.'),
+  skills: skillNames
+    .optional()
+    .describe('Full list of hub skills the agent uses; on update, existing ones keep their copy.'),
 };
 
 export const agentsModule: McpModule = {
@@ -228,6 +235,7 @@ export const agentsModule: McpModule = {
                 'loadtests',
                 'audit',
                 'workspaces',
+                'notifications',
               ]),
               toolName: z
                 .string()
@@ -253,6 +261,99 @@ export const agentsModule: McpModule = {
             }),
           )
           .max(20),
+        canvas: z
+          .object({
+            nodes: z
+              .array(
+                z.object({
+                  id: z.string().trim().min(1).max(100),
+                  kind: z
+                    .enum(['trigger', 'step', 'approval', 'action', 'condition', 'delay', 'rule'])
+                    .describe(
+                      'Node type. `step` nodes reuse the id of an entry of `steps`; `action` is a module action, `condition` branches through the ports "true" and "false", `delay` waits.',
+                    ),
+                  x: z.number().finite(),
+                  y: z.number().finite(),
+                  trigger: z
+                    .object({
+                      kind: z.enum(['issue-assigned', 'product-event', 'schedule']),
+                      events: z
+                        .array(
+                          z.enum(['pbi.created', 'pbi.moved', 'spec.published', 'issue.commented']),
+                        )
+                        .max(10)
+                        .optional(),
+                      cron: z.string().trim().min(1).max(120).optional(),
+                    })
+                    .optional(),
+                  action: z
+                    .object({
+                      toolset: z.enum([
+                        'all',
+                        'agents',
+                        'integrations',
+                        'brain',
+                        'issues',
+                        'pbi',
+                        'spec',
+                        'testplans',
+                        'design',
+                        'e2e',
+                        'releasenotes',
+                        'integrationtests',
+                        'loadtests',
+                        'audit',
+                        'workspaces',
+                        'notifications',
+                      ]),
+                      toolName: z
+                        .string()
+                        .trim()
+                        .regex(/^[a-z][a-z0-9_]{2,63}$/)
+                        .optional(),
+                      provider: z.string().trim().min(1).max(100).optional(),
+                      notification: z
+                        .object({
+                          channels: z.array(z.string().trim().min(1).max(50)).max(10).default([]),
+                          userIds: z.array(z.string().uuid()).max(50).default([]),
+                          roles: z
+                            .array(z.enum(['assignee', 'proofreader']))
+                            .max(2)
+                            .default([]),
+                          subject: z.string().max(200).default(''),
+                          message: z.string().max(5000).default(''),
+                        })
+                        .optional()
+                        .describe(
+                          'Only for the notifications_send action: which channels (see notifications_list_channels), which members and which issue roles to tell, and the subject and message (templates such as {{issue.title}}; blank uses the issue title and the previous result).',
+                        ),
+                    })
+                    .optional(),
+                  condition: z
+                    .object({
+                      operator: z.enum(['contains', 'not-contains', 'matches']),
+                      value: z.string().max(500),
+                    })
+                    .optional(),
+                  delay: z.object({ minutes: z.number().finite().min(0).max(60) }).optional(),
+                }),
+              )
+              .max(100),
+            edges: z
+              .array(
+                z.object({
+                  id: z.string().trim().min(1).max(100),
+                  from: z.string().trim().min(1).max(100),
+                  fromPort: z.enum(['true', 'false']).optional(),
+                  to: z.string().trim().min(1).max(100),
+                }),
+              )
+              .max(400),
+          })
+          .optional()
+          .describe(
+            'The editor flow (layout, trigger, conditions, module actions). Omitting it drops a saved canvas: send it back whenever the workflow has one. `steps` stays the plain ordered list.',
+          ),
       },
       run: async (workflow, { api }) =>
         json(
@@ -286,6 +387,9 @@ export const agentsModule: McpModule = {
         ...agentFields,
         name: agentFields.name.optional(),
         instructions: agentFields.instructions.optional(),
+        refreshSkills: skillNames
+          .optional()
+          .describe('Skills to read again from the hub, to bring them to the current version.'),
       },
       run: async ({ agentId: target, ...body }, { api }) =>
         json(await api.request({ method: 'PUT', path: `/agents/${segment(target)}`, body })),

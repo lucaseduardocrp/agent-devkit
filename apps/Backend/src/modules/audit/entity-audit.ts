@@ -79,6 +79,7 @@ export function issueSnapshot(issue: Issue): EntitySnapshot {
     description: issue.description,
     assigneeAgentId: issue.assigneeAgentId,
     assigneeUserId: issue.assigneeUserId,
+    proofreaderUserId: issue.proofreaderUserId,
     pbiItemId: issue.pbiItemId,
   };
 }

@@ -65,6 +65,9 @@ describe('Sidebar', () => {
     fireEvent.click(getByRole('button', { name: 'Integrações' }));
     expect(onSelect).toHaveBeenCalledWith('connect');
 
+    fireEvent.click(getByTestId('sidebar-notifications-button'));
+    expect(onSelect).toHaveBeenCalledWith('notifications');
+
     fireEvent.click(getByTestId('sidebar-settings-footer-button'));
     expect(onSelect).toHaveBeenCalledWith('settings');
   });

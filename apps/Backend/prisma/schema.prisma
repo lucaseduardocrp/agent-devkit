@@ -156,6 +156,9 @@ model WorkspaceRecord {
   pbiLinks         PbiExternalLinkRecord[]
   pbiRelations     PbiRelationRecord[]
   fieldMappings    FieldMappingTemplateRecord[]
+  notificationRules NotificationRuleRecord[]
+  notificationDeliveries NotificationDeliveryRecord[]
+  notificationContacts NotificationContactRecord[]
   releaseNotes     ReleaseNoteRecord[]
   e2eCreations     E2eCreationRecord[]
   apiCollections   ApiCollectionRecord[]
@@ -193,6 +196,8 @@ model IssueRecord {
   type            String   @default("")
   assigneeAgentId String?  @map("assignee_agent_id")
   assigneeUserId  String?  @map("assignee_user_id")
+  /// Reviewer of the work: the issue also appears in this user's inbox.
+  proofreaderUserId String? @map("proofreader_user_id")
   createdBy       String   @map("created_by")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
@@ -252,6 +257,74 @@ model PbiItemRecord {
 
   @@index([workspaceId, parentId, position], map: "pbi_items_workspace_parent_position_idx")
   @@map("pbi_items")
+}
+
+/// A notification waiting to be delivered, or delivered recently (the outbox of modules/notifications).
+/// Written before any sending, so a restart cannot lose it; a worker delivers and retries it.
+model NotificationDeliveryRecord {
+  id            String    @id @default(uuid())
+  workspaceId   String    @map("workspace_id")
+  channel       String
+  /// { userId, name, email }
+  recipient     Json
+  /// { title, text, url? }
+  message       Json
+  /// pending | sending | sent | failed
+  status        String    @default("pending")
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+  /// Who holds the delivery while it is being sent, and until when (a crashed holder expires).
+  claimToken    String?   @map("claim_token")
+  claimedUntil  DateTime? @map("claimed_until")
+  lastError     String?   @map("last_error")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  sentAt        DateTime? @map("sent_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt], map: "notification_deliveries_due_idx")
+  @@map("notification_deliveries")
+}
+
+/// "When this happens, tell these people through these channels." See modules/notifications.
+model NotificationRuleRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  name        String
+  enabled     Boolean  @default(true)
+  /// A key of the notification event catalog, e.g. issue.assigned.
+  event       String
+  /// Ids of registered channels, e.g. ["email"].
+  channels    Json     @default("[]")
+  /// { subject: boolean, userIds: string[] }
+  recipients  Json     @default("{}")
+  subject     String   @default("")
+  message     String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, event, enabled], map: "notification_rules_event_idx")
+  @@map("notification_rules")
+}
+
+/// Where an admin reaches a member on a channel (the e-mail to use, a chat id...).
+model NotificationContactRecord {
+  id          String   @id @default(uuid())
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  /// Id of a registered channel, e.g. email.
+  channel     String
+  address     String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace WorkspaceRecord @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, channel], map: "notification_contacts_workspace_user_channel_key")
+  @@index([workspaceId], map: "notification_contacts_workspace_idx")
+  @@map("notification_contacts")
 }
 
 model FieldMappingTemplateRecord {

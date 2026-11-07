@@ -78,7 +78,18 @@ describe('attachment type detection', () => {
     expect(detectAttachmentType(zip, 'bundle.zip')?.mimeType).toBe('application/zip');
     expect(detectAttachmentType(Buffer.from('a,b\n1,2'), 'data.csv')?.mimeType).toBe('text/csv');
     expect(detectAttachmentType(Buffer.from('a\u0000b'), 'data.txt')).toBeNull();
-    expect(detectAttachmentType(Buffer.from('<script>'), 'page.html')).toBeNull();
+    expect(detectAttachmentType(Buffer.from('<html></html>'), 'page.html')).toEqual({
+      mimeType: 'text/html',
+      kind: 'document',
+    });
+    expect(detectAttachmentType(Buffer.from('{"a":1}'), 'data.json')?.mimeType).toBe(
+      'application/json',
+    );
+    expect(detectAttachmentType(Buffer.from('a: 1'), 'config.yml')?.mimeType).toBe(
+      'application/yaml',
+    );
+    expect(detectAttachmentType(Buffer.from('<html>\u0000</html>'), 'page.html')).toBeNull();
+    expect(detectAttachmentType(Buffer.from('MZ\u0090\u0000'), 'tool.exe')).toBeNull();
   });
 });
 
@@ -125,9 +136,9 @@ describe('attachments routes', () => {
     const store = new InMemoryE2eArtifactStore();
     const { app } = build({ store });
     await request(app)
-      .post('/attachments/files?scope=issue&name=page.html')
+      .post('/attachments/files?scope=issue&name=tool.exe')
       .set('content-type', 'application/octet-stream')
-      .send(Buffer.from('<html></html>'))
+      .send(Buffer.from('MZ\u0090\u0000'))
       .expect(415);
     const upload = await request(app)
       .post('/attachments/files?scope=issue&name=a.png')
@@ -136,6 +147,20 @@ describe('attachments routes', () => {
       .expect(201);
     const other = build({ store, context: { ...context, ownerId: 'ws-2', workspaceId: 'ws-2' } });
     await request(other.app).get(upload.body.attachment.url).expect(404);
+  });
+
+  it('keeps HTML as a sandboxed download, never rendered inline', async () => {
+    const { app } = build();
+    const upload = await request(app)
+      .post('/attachments/files?scope=issue&name=review.html')
+      .set('content-type', 'application/octet-stream')
+      .send(Buffer.from('<html><script>alert(1)</script></html>'))
+      .expect(201);
+    expect(upload.body.attachment).toMatchObject({ kind: 'document', mimeType: 'text/html' });
+    const file = await request(app).get(upload.body.attachment.url).expect(200);
+    expect(file.headers['content-disposition']).toContain('attachment');
+    expect(file.headers['content-security-policy']).toContain('sandbox');
+    expect(file.headers['x-content-type-options']).toBe('nosniff');
   });
 
   it('validates attachments sent with an item', async () => {

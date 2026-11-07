@@ -50,6 +50,7 @@ import type {
   InboxItem,
   DashboardSummary,
   AgentRun,
+  AgentRunEvent,
   CostRate,
   CostSummary,
 } from '../features/issues/issue-types.js';
@@ -95,6 +96,16 @@ import type {
   TestManagementProvider,
   TestManagementProviderId,
 } from '../features/e2e/e2e-types.js';
+import { createSseParser } from './sse.js';
+import type {
+  NotificationChannelDto,
+  NotificationContactDto,
+  NotificationPeoplePage,
+  NotificationDeliveryResultDto,
+  NotificationEventDto,
+  NotificationRuleDto,
+  NotificationRuleInput,
+} from '../features/notifications/notification-types.js';
 import { ptBR } from './i18n/locales/pt-BR.js';
 import { enUS } from './i18n/locales/en-US.js';
 import type {
@@ -108,6 +119,8 @@ import type {
 export interface ServerCapabilities {
   /** A local install: runs on the ADK workers reach http://localhost on the user's computer. */
   readonly workersReachLocalhost: boolean;
+  /** Where a new E2E run executes unless the form says otherwise. */
+  readonly defaultExecutionTarget: 'remote' | 'local';
 }
 
 export interface HealthResponse {
@@ -464,6 +477,7 @@ const AGENT_WORKFLOW_TOOLSETS = new Set([
   'loadtests',
   'audit',
   'workspaces',
+  'notifications',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1117,6 +1131,124 @@ export class ApiClient {
     const query = issueId ? `?issueId=${encodeURIComponent(issueId)}` : '';
     return (await this.issueRequest<{ runs: AgentRun[] }>(`/runs${query}`)).runs;
   }
+  /**
+   * Follows the runs of the workspace as they change (server-sent events). Resolves when the server
+   * closes the stream and rejects when it cannot be opened; `signal` stops it. It uses fetch, not
+   * EventSource, because the session token and the workspace travel in headers.
+   */
+  public async streamRunEvents(
+    handlers: { readonly onReady: () => void; readonly onRun: (run: AgentRunEvent) => void },
+    signal: AbortSignal,
+  ): Promise<void> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/runs/stream`, {
+      signal,
+      headers: { accept: 'text/event-stream' },
+    });
+    if (!response.ok) return this.handleErrorResponse(response);
+    if (!response.body) throw new Error(this.message('networkError'));
+    const decoder = new TextDecoder();
+    const parse = createSseParser(({ event, data }) => {
+      if (event === 'ready') handlers.onReady();
+      if (event !== 'run') return;
+      try {
+        handlers.onRun(JSON.parse(data) as AgentRunEvent);
+      } catch {
+        // A malformed event is skipped; the next snapshot corrects the run.
+      }
+    });
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      parse(decoder.decode(value, { stream: true }));
+    }
+  }
+  public async getNotificationChannels(
+    signal?: AbortSignal,
+  ): Promise<readonly NotificationChannelDto[]> {
+    return (
+      await this.issueRequest<{ channels: NotificationChannelDto[] }>('/notifications/channels', {
+        signal,
+      })
+    ).channels;
+  }
+  public async getNotificationEvents(
+    signal?: AbortSignal,
+  ): Promise<readonly NotificationEventDto[]> {
+    return (
+      await this.issueRequest<{ events: NotificationEventDto[] }>('/notifications/events', {
+        signal,
+      })
+    ).events;
+  }
+  public async getNotificationRules(signal?: AbortSignal): Promise<readonly NotificationRuleDto[]> {
+    return (
+      await this.issueRequest<{ rules: NotificationRuleDto[] }>('/notifications/rules', { signal })
+    ).rules;
+  }
+  /** Creates a rule, or replaces the one given in `id`. */
+  public async saveNotificationRule(
+    input: NotificationRuleInput,
+    id?: string,
+  ): Promise<NotificationRuleDto> {
+    return (
+      await this.issueRequest<{ rule: NotificationRuleDto }>(
+        id ? `/notifications/rules/${encodeURIComponent(id)}` : '/notifications/rules',
+        {
+          method: id ? 'PUT' : 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(input),
+        },
+      )
+    ).rule;
+  }
+  public async deleteNotificationRule(id: string): Promise<void> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/notifications/rules/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) return this.handleErrorResponse(response);
+  }
+  /** One page of the workspace's people by name or e-mail, with the addresses (admins only). */
+  public async getNotificationPeople(
+    query: { readonly search: string; readonly offset: number; readonly limit: number },
+    signal?: AbortSignal,
+  ): Promise<NotificationPeoplePage> {
+    const params = new URLSearchParams({
+      offset: String(query.offset),
+      limit: String(query.limit),
+    });
+    if (query.search) params.set('search', query.search);
+    return this.issueRequest<NotificationPeoplePage>(`/notifications/people?${params}`, { signal });
+  }
+  /** Sets (or, with an empty text, removes) the addresses of one member; returns all of theirs. */
+  public async saveNotificationContacts(
+    userId: string,
+    contacts: Readonly<Record<string, string>>,
+  ): Promise<readonly NotificationContactDto[]> {
+    return (
+      await this.issueRequest<{ contacts: NotificationContactDto[] }>(
+        `/notifications/contacts/${encodeURIComponent(userId)}`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ contacts }),
+        },
+      )
+    ).contacts;
+  }
+  /** Sends a test message to the signed-in person, on the spot. */
+  public async sendTestNotification(
+    channel: string,
+  ): Promise<readonly NotificationDeliveryResultDto[]> {
+    return (
+      await this.issueRequest<{ results: NotificationDeliveryResultDto[] }>('/notifications/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ channel }),
+      })
+    ).results;
+  }
   public async startIssueRun(issueId: string): Promise<AgentRun> {
     return (
       await this.issueRequest<{ run: AgentRun }>(`/issues/${encodeURIComponent(issueId)}/runs`, {
@@ -1298,9 +1430,12 @@ export class ApiClient {
   /** Servers older than the call answer 404: they have none of the capabilities. */
   public async getCapabilities(signal?: AbortSignal): Promise<ServerCapabilities> {
     const response = await this.fetchWithAuth(`${this.baseUrl}/capabilities`, { signal });
-    if (!response.ok) return { workersReachLocalhost: false };
+    if (!response.ok) return { workersReachLocalhost: false, defaultExecutionTarget: 'remote' };
     const body = (await response.json()) as Partial<ServerCapabilities>;
-    return { workersReachLocalhost: body.workersReachLocalhost === true };
+    return {
+      workersReachLocalhost: body.workersReachLocalhost === true,
+      defaultExecutionTarget: body.defaultExecutionTarget === 'local' ? 'local' : 'remote',
+    };
   }
 
   public async getReadiness(signal?: AbortSignal): Promise<ReadinessResponse> {

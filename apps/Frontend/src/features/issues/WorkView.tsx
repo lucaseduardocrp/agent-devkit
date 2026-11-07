@@ -9,12 +9,15 @@ import { Select } from '../../components/ui/select.js';
 import { Pagination, PagingSentinel, usePaging } from '../../components/ui/pagination.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Modal } from '../../components/ui/modal.js';
+import { UnsavedChangesDialog } from '../../components/ui/unsaved-changes-dialog.js';
 import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/skeleton.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import type { CustomAgentDto } from '../agents/agent-types.js';
 import type { PbiItem } from '../pbi/pbi-types.js';
 import type { WorkspaceMember } from '../workspaces/workspace-types.js';
 import { AgentBriefTab } from './AgentBriefTab.js';
+import type { BriefReference } from './agent-brief-types.js';
+import type { ReferenceFocus } from '../shared/reference-focus.js';
 import { HistoryViewer } from '../audit/HistoryViewer.js';
 import { usePermissions } from '../workspaces/permissions.js';
 import {
@@ -79,9 +82,8 @@ function formatIssueDescription(value: string): string {
   const parser = new DOMParser();
   let parsed = parser.parseFromString(value, 'text/html');
   // Some imported work items contain HTML that was escaped before being stored.
-  const text = parsed.body.textContent;
-  if (!/<\/?[a-z][^>]*>/i.test(value) && /<\/?[a-z][^>]*>/i.test(text))
-    parsed = parser.parseFromString(text, 'text/html');
+  if (!/<\/?[a-z][^>]*>/i.test(value) && /<\/?[a-z][^>]*>/i.test(parsed.body.textContent ?? ''))
+    parsed = parser.parseFromString(parsed.body.textContent ?? value, 'text/html');
   for (const element of [...parsed.body.querySelectorAll<HTMLElement>('*')]) {
     if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'MATH'].includes(element.tagName)) {
       element.remove();
@@ -112,7 +114,6 @@ function formatIssueDescription(value: string): string {
         continue;
       element.removeAttribute(attribute.name);
     }
-    if (element.tagName === 'IMG' && !element.hasAttribute('src')) element.remove();
   }
   return parsed.body.innerHTML;
 }
@@ -215,6 +216,13 @@ const copy = {
     noType: 'Sem tipo',
     assignee: 'Responsável',
     unassigned: 'Sem responsável',
+    proofreader: 'Revisor',
+    unsavedTitle: 'Deseja sair sem salvar?',
+    unsavedBody:
+      'Você tem alterações não salvas. Você pode salvar, descartar ou cancelar para continuar editando.',
+    discardChanges: 'Descartar alterações',
+    saveChanges: 'Salvar alterações',
+    noProofreader: 'Sem revisor',
     agent: 'Agente',
     noAgent: 'Sem agente',
     create: 'Criar issue',
@@ -364,6 +372,13 @@ const copy = {
     noType: 'No type',
     assignee: 'Assignee',
     unassigned: 'Unassigned',
+    proofreader: 'Proofreader',
+    unsavedTitle: 'Are you sure you want to leave?',
+    unsavedBody:
+      'You have unsaved changes. You can save your changes, discard them, or cancel to continue editing.',
+    discardChanges: 'Discard Changes',
+    saveChanges: 'Save Changes',
+    noProofreader: 'No proofreader',
     agent: 'Agent',
     noAgent: 'No agent',
     create: 'Create issue',
@@ -542,6 +557,11 @@ export interface WorkViewProps {
   onNewIssueHandled?: () => void;
   onInboxCountChange?: (count: number) => void;
   onOpenIssues?: () => void;
+  /** Goes to the module of a reference the agent reads first (Brain, PBIs, Specs...). */
+  onOpenReference?: (reference: BriefReference) => void;
+  /** An item another module sent the user to; opened once its data is there. */
+  readonly focus?: ReferenceFocus | null;
+  readonly onFocusHandled?: () => void;
 }
 
 export function WorkView({
@@ -555,6 +575,9 @@ export function WorkView({
   onNewIssueHandled,
   onInboxCountChange,
   onOpenIssues,
+  onOpenReference,
+  focus,
+  onFocusHandled,
 }: WorkViewProps) {
   const { locale } = useI18n();
   const t = copy[locale];
@@ -758,9 +781,33 @@ export function WorkView({
   }, [newIssueRequest, onNewIssueHandled]);
 
   const selectedIssue = issues.find((issue) => issue.id === selectedId) ?? null;
+  // Changes to the card's fields stay in this draft until the user saves: nothing is sent to the
+  // server per interaction.
+  const [sidebarDraft, setSidebarDraft] = useState<IssueChanges>({});
+  const [confirmClose, setConfirmClose] = useState(false);
+  /** The issue as it will be once saved: the stored one with the draft applied. */
+  const issueView = { ...selectedIssue, ...sidebarDraft } as Issue;
+  const detailsDirty =
+    !!selectedIssue &&
+    editingDetails &&
+    (detailDraft.title !== selectedIssue.title ||
+      detailDraft.description !== selectedIssue.description ||
+      JSON.stringify(detailDraft.attachments) !== JSON.stringify(selectedIssue.attachments ?? []));
+  const hasUnsaved = Object.keys(sidebarDraft).length > 0 || detailsDirty;
   const issueDescriptionRef = useRef<HTMLDivElement>(null);
   useInlineImages(issueDescriptionRef, selectedIssue?.description);
   const selectedInbox = inbox.find((item) => item.issue.id === selectedId);
+
+  // Another module sent the user to an issue: open it as if it had been clicked in the list.
+  const handledFocus = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.kind !== 'issue' || handledFocus.current === focus.nonce) return;
+    const issue = issues.find((candidate) => candidate.id === focus.ref);
+    if (!issue) return;
+    handledFocus.current = focus.nonce;
+    void openIssue(issue);
+    onFocusHandled?.();
+  }, [focus, issues, onFocusHandled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openIssue = async (issue: Issue) => {
     setDetailTab('details');
@@ -772,6 +819,8 @@ export function WorkView({
     setSelectedDetailsLoading(true);
     discardDrafts(detailDraft);
     setEditingDetails(false);
+    setSidebarDraft({});
+    setConfirmClose(false);
     setDetailDraft({
       title: issue.title,
       description: issue.description,
@@ -852,10 +901,60 @@ export function WorkView({
     });
   };
 
-  const updateIssue = (issueId: string, changes: IssueChanges) => {
-    void runAction(async () => {
-      await apiClient.updateIssue(issueId, changes);
+  /** Records a field change in the draft; going back to the stored value removes it. */
+  const updateIssue = (changes: IssueChanges) => {
+    if (!selectedIssue) return;
+    setSidebarDraft((current) => {
+      const next: Record<string, unknown> = { ...current, ...changes };
+      for (const [key, value] of Object.entries(changes))
+        if (((selectedIssue as unknown as Record<string, unknown>)[key] ?? '') === (value ?? ''))
+          delete next[key];
+      return next;
     });
+  };
+
+  /** Sends every pending change of the open card (fields and details) in one request. */
+  const saveIssue = async (): Promise<boolean> => {
+    if (!selectedIssue || !hasUnsaved) return true;
+    if (detailsDirty && !detailDraft.title.trim()) return false;
+    setBusy(true);
+    setError(null);
+    try {
+      if (detailsDirty)
+        await saveWithDrafts(
+          apiClient,
+          'issue',
+          { description: detailDraft.description, attachments: detailDraft.attachments },
+          (files) =>
+            apiClient.updateIssue(selectedIssue.id, {
+              ...sidebarDraft,
+              title: detailDraft.title.trim(),
+              ...files,
+            }),
+        );
+      else await apiClient.updateIssue(selectedIssue.id, sidebarDraft);
+      setEditingDetails(false);
+      setSidebarDraft({});
+      await reload();
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t.saveError);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const closeDetail = () => {
+    cancelDetailEdit();
+    setSidebarDraft({});
+    setConfirmClose(false);
+    setSelectedId(null);
+  };
+  /** Closing with unsaved changes asks what to do with them first. */
+  const requestCloseDetail = () => {
+    if (hasUnsaved) setConfirmClose(true);
+    else closeDetail();
   };
 
   const agentOptions = agents.map((agent) => (
@@ -1546,7 +1645,7 @@ export function WorkView({
                 value={filters.assignee}
                 onChange={(event) => setFilter('assignee', event.target.value)}
                 aria-label={t.assignee}
-                containerClassName="max-w-48"
+                containerClassName="w-72 max-w-full flex-none"
               >
                 <option value="">{t.allAssignees}</option>
                 <option value="none">{t.noAssignee}</option>
@@ -1562,7 +1661,7 @@ export function WorkView({
                 value={filters.agent}
                 onChange={(event) => setFilter('agent', event.target.value)}
                 aria-label={t.agent}
-                containerClassName="max-w-44"
+                containerClassName="w-80 max-w-full flex-none"
               >
                 <option value="">{t.allAgents}</option>
                 <option value="none">{t.noAgent}</option>
@@ -1901,8 +2000,8 @@ export function WorkView({
               onPaste={formImages.onPaste}
               onDrop={formImages.onDrop}
             />
+            <ImageInputStatus state={formImages} />
           </label>
-          <ImageInputStatus state={formImages} />
           <AttachmentPanel
             apiClient={apiClient}
             scope="issue"
@@ -1993,10 +2092,7 @@ export function WorkView({
 
       <Modal
         open={Boolean(selectedId)}
-        onClose={() => {
-          cancelDetailEdit();
-          setSelectedId(null);
-        }}
+        onClose={requestCloseDetail}
         labelledBy="issue-detail-title"
       >
         <div className="flex h-[min(90vh,900px)] w-[min(96vw,1800px)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)]">
@@ -2021,7 +2117,7 @@ export function WorkView({
                     if (window.confirm(t.deleteConfirm))
                       void runAction(async () => {
                         await apiClient.deleteIssue(selectedIssue.id);
-                        setSelectedId(null);
+                        closeDetail();
                       });
                   }}
                 >
@@ -2037,7 +2133,7 @@ export function WorkView({
                   entityTitle={`#${selectedIssue.number} ${selectedIssue.title}`}
                   resolveValue={(key, value) => {
                     if (typeof value !== 'string') return undefined;
-                    if (key === 'assigneeUserId') {
+                    if (key === 'assigneeUserId' || key === 'proofreaderUserId') {
                       const member = members.find((entry) => entry.userId === value);
                       return member ? memberLabel(member) : value;
                     }
@@ -2051,11 +2147,22 @@ export function WorkView({
                   }}
                 />
               )}
+              {selectedIssue && !isReadOnly && (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={busy || !hasUnsaved}
+                  isLoading={busy}
+                  onClick={() => void saveIssue()}
+                >
+                  {t.save}
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                onClick={() => setSelectedId(null)}
+                onClick={requestCloseDetail}
                 aria-label={t.close}
               >
                 <i className="ti ti-x" aria-hidden="true" />
@@ -2112,6 +2219,8 @@ export function WorkView({
                   issueId={selectedIssue.id}
                   issueVersion={selectedIssue.updatedAt}
                   isReadOnly={isReadOnly}
+                  issueAttachments={selectedIssue.attachments}
+                  {...(onOpenReference ? { onOpenModule: onOpenReference } : {})}
                 />
               ) : (
                 <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
@@ -2142,22 +2251,7 @@ export function WorkView({
                           className="mt-2 space-y-3"
                           onSubmit={(event) => {
                             event.preventDefault();
-                            void runAction(async () => {
-                              await saveWithDrafts(
-                                apiClient,
-                                'issue',
-                                {
-                                  description: detailDraft.description,
-                                  attachments: detailDraft.attachments,
-                                },
-                                (files) =>
-                                  apiClient.updateIssue(selectedIssue.id, {
-                                    title: detailDraft.title.trim(),
-                                    ...files,
-                                  }),
-                              );
-                              setEditingDetails(false);
-                            });
+                            void saveIssue();
                           }}
                         >
                           <label className="block space-y-1 text-sm">
@@ -2182,8 +2276,8 @@ export function WorkView({
                               onPaste={detailImages.onPaste}
                               onDrop={detailImages.onDrop}
                             />
+                            <ImageInputStatus state={detailImages} />
                           </label>
-                          <ImageInputStatus state={detailImages} />
                           <div className="flex gap-2">
                             <Button
                               type="submit"
@@ -2372,11 +2466,9 @@ export function WorkView({
                         <span>{t.status}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.status}
+                          value={issueView.status}
                           onChange={(event) =>
-                            updateIssue(selectedIssue.id, {
-                              status: event.target.value as IssueStatus,
-                            })
+                            updateIssue({ status: event.target.value as IssueStatus })
                           }
                         >
                           {statusOrder.map((key) => (
@@ -2390,11 +2482,9 @@ export function WorkView({
                         <span>{t.priority}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.priority}
+                          value={issueView.priority}
                           onChange={(event) =>
-                            updateIssue(selectedIssue.id, {
-                              priority: event.target.value as IssuePriority,
-                            })
+                            updateIssue({ priority: event.target.value as IssuePriority })
                           }
                         >
                           {priorityOrder.map((key) => (
@@ -2408,10 +2498,8 @@ export function WorkView({
                         <span>{t.type}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.type ?? ''}
-                          onChange={(event) =>
-                            updateIssue(selectedIssue.id, { type: event.target.value })
-                          }
+                          value={issueView.type ?? ''}
+                          onChange={(event) => updateIssue({ type: event.target.value })}
                         >
                           <option value="">{t.noType}</option>
                           {workItemTypes.map((type) => (
@@ -2425,11 +2513,9 @@ export function WorkView({
                         <span>{t.agent}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.assigneeAgentId ?? ''}
+                          value={issueView.assigneeAgentId ?? ''}
                           onChange={(event) =>
-                            updateIssue(selectedIssue.id, {
-                              assigneeAgentId: event.target.value || null,
-                            })
+                            updateIssue({ assigneeAgentId: event.target.value || null })
                           }
                         >
                           <option value="">{t.noAgent}</option>
@@ -2440,21 +2526,40 @@ export function WorkView({
                         <span>{t.assignee}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.assigneeUserId ?? ''}
+                          value={issueView.assigneeUserId ?? ''}
                           onChange={(event) =>
-                            updateIssue(selectedIssue.id, {
-                              assigneeUserId: event.target.value || null,
-                            })
+                            updateIssue({ assigneeUserId: event.target.value || null })
                           }
                         >
                           <option value="">{t.unassigned}</option>
                           {memberOptions}
-                          {selectedIssue.assigneeUserId &&
+                          {issueView.assigneeUserId &&
                             !members.some(
-                              (member) => member.userId === selectedIssue.assigneeUserId,
+                              (member) => member.userId === issueView.assigneeUserId,
                             ) && (
-                              <option value={selectedIssue.assigneeUserId}>
-                                {selectedIssue.assigneeUserId}
+                              <option value={issueView.assigneeUserId}>
+                                {issueView.assigneeUserId}
+                              </option>
+                            )}
+                        </Select>
+                      </label>
+                      <label className="space-y-1 text-sm">
+                        <span>{t.proofreader}</span>
+                        <Select
+                          disabled={isReadOnly || busy}
+                          value={issueView.proofreaderUserId ?? ''}
+                          onChange={(event) =>
+                            updateIssue({ proofreaderUserId: event.target.value || null })
+                          }
+                        >
+                          <option value="">{t.noProofreader}</option>
+                          {memberOptions}
+                          {issueView.proofreaderUserId &&
+                            !members.some(
+                              (member) => member.userId === issueView.proofreaderUserId,
+                            ) && (
+                              <option value={issueView.proofreaderUserId}>
+                                {issueView.proofreaderUserId}
                               </option>
                             )}
                         </Select>
@@ -2716,6 +2821,20 @@ export function WorkView({
             </div>
           )}
         </div>
+        <UnsavedChangesDialog
+          open={confirmClose}
+          isSaving={busy}
+          labels={{
+            title: t.unsavedTitle,
+            description: t.unsavedBody,
+            cancel: t.cancel,
+            discard: t.discardChanges,
+            save: t.saveChanges,
+          }}
+          onCancel={() => setConfirmClose(false)}
+          onDiscard={closeDetail}
+          onSave={() => void saveIssue().then((saved) => saved && closeDetail())}
+        />
       </Modal>
     </div>
   );

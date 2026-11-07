@@ -41,7 +41,14 @@ import { PrismaPbiStore } from '../modules/pbi/pbi-store.js';
 import { PrismaPbiRelationStore } from '../modules/pbi/pbi-relations.js';
 import { PrismaFieldMappingStore } from '../modules/field-mapping/prisma-field-mapping.js';
 import { PrismaReleaseNoteStore } from '../modules/release-notes/release-note-store.js';
+import { PrismaNotificationOutbox } from '../modules/notifications/adapters/prisma-outbox.js';
+import type { NotificationOutboxWorker } from '../modules/notifications/application/outbox-worker.js';
+import { PrismaNotificationContactStore } from '../modules/notifications/adapters/prisma-contact-store.js';
+import { PrismaNotificationRuleStore } from '../modules/notifications/adapters/prisma-rule-store.js';
 import { PrismaRunStore } from '../modules/issues/run-store.js';
+import { runEventPayload } from '../modules/issues/eventing-run-store.js';
+import { PostgresEventBus } from '../modules/realtime/postgres-event-bus.js';
+import pg from 'pg';
 import { PrismaUsageStore } from '../modules/issues/usage-store.js';
 import { loadRuntimeConfig } from '../shared/config.js';
 import { createCache } from '../shared/cache.js';
@@ -59,7 +66,10 @@ import { PrismaDesignSettingsStore } from '../modules/design/adapters/prisma-des
 import { PrismaE2eStore } from '../modules/e2e/adapters/prisma-e2e-store.js';
 import { PrismaE2eJobQueue } from '../modules/e2e/adapters/prisma-e2e-queue.js';
 import { PrismaE2eRunnerTaskStore } from '../modules/e2e/adapters/prisma-runner-task-store.js';
-import { createE2eArtifactStore } from '../modules/e2e/adapters/artifact-store-factory.js';
+import {
+  createAttachmentStore,
+  createE2eArtifactStore,
+} from '../modules/e2e/adapters/artifact-store-factory.js';
 import { HttpE2eDispatcher } from '../modules/e2e/adapters/e2e-dispatchers.js';
 import { PrismaApiTestStore } from '../modules/apitests/adapters/prisma-api-test-store.js';
 import {
@@ -197,6 +207,9 @@ if (e2eWorkerUrl && (!database || e2eWorkerToken.length < 16))
 // Videos: Cloudflare R2 when configured, else Postgres, else local disk (development).
 const e2eArtifacts = createE2eArtifactStore(process.env, database?.client);
 console.log(`[E2E] Test videos are stored in ${e2eArtifacts.kind}.`);
+// Attachments and images are kept apart from the E2E artifacts.
+const attachments = createAttachmentStore(process.env, e2eArtifacts);
+console.log(`[Attachments] Files are stored in ${attachments.kind}.`);
 
 const ffmpegPath = resolveFfmpegPath();
 if (!ffmpegPath)
@@ -204,7 +217,28 @@ if (!ffmpegPath)
     '[E2E] FFmpeg not found; test videos will be served as WebM (not playable in VS Code).',
   );
 
+// Live updates reach every API process that shares this database (replicas, a local API next to
+// the hosted one): Postgres LISTEN/NOTIFY when there is a database, this process's memory otherwise.
+const runStore = database ? new PrismaRunStore(database.client) : undefined;
+const eventBus =
+  database && config.databaseUrl && runStore
+    ? new PostgresEventBus({
+        createClient: () => new pg.Client({ connectionString: config.databaseUrl }),
+        resolve: async (workspaceId, _type, runId) => {
+          const run = await runStore.get(workspaceId, runId);
+          return run ? runEventPayload(run) : null;
+        },
+      })
+    : undefined;
+await eventBus?.start();
+
+const e2eDefaultExecution = process.env['E2E_DEFAULT_EXECUTION']?.trim().toLowerCase();
+if (e2eDefaultExecution && !['local', 'remote'].includes(e2eDefaultExecution))
+  throw new Error('E2E_DEFAULT_EXECUTION must be "local" or "remote".');
+
 const app = createApp({
+  e2eDefaultExecution: e2eDefaultExecution === 'local' ? 'local' : 'remote',
+  eventBus,
   cache,
   auditPersistence: database ? new PrismaAuditPersistence(database.client) : undefined,
   knowledgeSearch: knowledge.search,
@@ -233,7 +267,11 @@ const app = createApp({
   pbiRelationStore: database ? new PrismaPbiRelationStore(database.client) : undefined,
   fieldMappingStore: database ? new PrismaFieldMappingStore(database.client) : undefined,
   releaseNoteStore: database ? new PrismaReleaseNoteStore(database.client) : undefined,
-  runStore: database ? new PrismaRunStore(database.client) : undefined,
+  runStore,
+  emailSender: emailSender ?? undefined,
+  notificationRules: database ? new PrismaNotificationRuleStore(database.client) : undefined,
+  notificationContacts: database ? new PrismaNotificationContactStore(database.client) : undefined,
+  notificationOutbox: database ? new PrismaNotificationOutbox(database.client) : undefined,
   usageStore: database ? new PrismaUsageStore(database.client) : undefined,
   savedTestPlans,
   testSuites,
@@ -244,6 +282,7 @@ const app = createApp({
   e2eQueue: database ? new PrismaE2eJobQueue(database.client) : undefined,
   e2eRunnerTasks: database ? new PrismaE2eRunnerTaskStore(database.client) : undefined,
   e2eArtifacts: e2eArtifacts.store,
+  attachmentStore: attachments.store,
   // With a worker URL the API only enqueues; jobs run on the on-demand worker service.
   e2eDispatcher: e2eWorkerUrl
     ? new HttpE2eDispatcher({ url: e2eWorkerUrl, token: e2eWorkerToken })
@@ -262,6 +301,10 @@ const app = createApp({
     : [],
 });
 
+// Delivers the notifications waiting in the outbox, including those a restart left behind.
+const notificationWorker = app.locals['notificationWorker'] as NotificationOutboxWorker;
+notificationWorker.start();
+
 const server = app.listen(config.port, () => {
   console.log(`Backend listening on port ${config.port}`);
 });
@@ -269,7 +312,7 @@ const server = app.listen(config.port, () => {
 // Files uploaded for an item that was never saved (the save failed or the tab closed
 // mid-save) are pending; once they are an hour old nothing can claim them anymore.
 const sweepUploads = () =>
-  sweepPendingFiles(e2eArtifacts.store).then(
+  sweepPendingFiles(attachments.store).then(
     (removed) => {
       if (removed) console.log(`[Attachments] Removed ${removed} unsaved upload(s).`);
     },
@@ -280,6 +323,8 @@ setInterval(() => void sweepUploads(), 30 * 60_000).unref();
 
 async function shutdown(): Promise<void> {
   server.close();
+  await notificationWorker.stop();
+  await eventBus?.close();
   await cache.close();
   await database?.close();
 }

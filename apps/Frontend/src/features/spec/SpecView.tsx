@@ -45,12 +45,17 @@ const getDefaultSections = (t: Translate): readonly SpecTemplateSectionDto[] => 
 type SpecPage = 'create' | 'settings';
 type ToastState = { message: string; variant: 'success' | 'error' };
 
+import type { ReferenceFocus } from '../shared/reference-focus.js';
+
 export interface SpecViewProps {
   readonly apiClient: ApiClient;
   readonly activeWorkspaceId: string | null;
   readonly canManageTemplates?: boolean;
   readonly isReadOnly?: boolean;
   readonly canPublishToBrain?: boolean;
+  /** An item another module sent the user to; opened once its data is there. */
+  readonly focus?: ReferenceFocus | null;
+  readonly onFocusHandled?: () => void;
 }
 
 const emptySections = (templateSections: readonly SpecTemplateSectionDto[]) =>
@@ -66,6 +71,8 @@ export function SpecView({
   canManageTemplates = true,
   isReadOnly = false,
   canPublishToBrain = true,
+  focus,
+  onFocusHandled,
 }: SpecViewProps) {
   const { t } = useI18n();
   const { runActivity } = useActivityRunner();
@@ -138,6 +145,17 @@ export function SpecView({
     setIsSpecEditing(false);
     setPage('create');
   }, []);
+
+  // Another module sent the user to a specification: open it once the list has it.
+  const handledFocus = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.kind !== 'spec' || handledFocus.current === focus.nonce) return;
+    const target = specs.find((candidate) => candidate.id === focus.ref);
+    if (!target) return;
+    handledFocus.current = focus.nonce;
+    openSpec(target);
+    onFocusHandled?.();
+  }, [focus, specs, openSpec, onFocusHandled]);
 
   const reload = useCallback(async () => {
     const sequence = ++reloadSequence.current;

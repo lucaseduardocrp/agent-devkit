@@ -75,6 +75,8 @@ function creation(overrides: Partial<E2eCreationSummary> = {}): E2eCreationSumma
 
 function api(list: readonly E2eCreationSummary[] | Error = [creation()]) {
   return {
+    apiUrl: 'https://api.adk.example.com',
+    getE2eRunners: vi.fn().mockResolvedValue([]),
     getE2eCreations: vi.fn(() =>
       list instanceof Error ? Promise.reject(list) : Promise.resolve(list),
     ),
@@ -128,6 +130,44 @@ describe('E2eView', () => {
     const view = render(<E2eView apiClient={asClient(client)} />);
     expect(await view.findByText('No meu computador')).toBeInTheDocument();
     expect(view.getByText(/Aguardando o seu computador/)).toBeInTheDocument();
+  });
+
+  describe('waiting for a local runner', () => {
+    const panel = (view: ReturnType<typeof render>) => view.queryByTestId('e2e-local-runner-wait');
+
+    it('shows whether the computer is connected while a local run waits', async () => {
+      const client = api([
+        creation({ executionTarget: 'local', status: 'queued', passed: 0, tests: [] }),
+      ]);
+      const view = render(<E2eView apiClient={asClient(client)} />);
+      expect(await view.findByTestId('e2e-local-runner-wait')).toBeInTheDocument();
+      // Nobody connected: the panel explains how to start the runner.
+      await waitFor(() => expect(client.getE2eRunners).toHaveBeenCalled());
+      expect(view.getByTestId('e2e-local-runner-wait')).toHaveTextContent('devkit runner');
+    });
+
+    it('stays out of the way for runs on the ADK worker and for finished local runs', async () => {
+      const remote = render(
+        <E2eView
+          apiClient={asClient(
+            api([creation({ executionTarget: 'remote', status: 'running', tests: [] })]),
+          )}
+        />,
+      );
+      await remote.findByText('ama');
+      expect(panel(remote)).toBeNull();
+      remote.unmount();
+
+      const done = render(
+        <E2eView
+          apiClient={asClient(
+            api([creation({ executionTarget: 'local', status: 'completed', tests: [] })]),
+          )}
+        />,
+      );
+      await done.findByText('ama');
+      expect(panel(done)).toBeNull();
+    });
   });
 
   it('lists runs with pass counts and expands the newest one', async () => {

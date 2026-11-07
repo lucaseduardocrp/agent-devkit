@@ -53,6 +53,8 @@ export interface BriefReference {
   /** Id, path or URL that lets the agent open it. */
   ref: string;
   reason: string;
+  /** The exact passage that matched (Brain pages), so a person can open that part of the text. */
+  excerpt?: string;
 }
 
 export interface BriefPrompt {

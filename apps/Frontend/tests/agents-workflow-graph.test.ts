@@ -13,10 +13,13 @@ import {
   edgePath,
   findChainTail,
   findNode,
+  fitViewport,
   inputPort,
   moveNode,
   newWorkflowId,
   nextNodePosition,
+  isNotificationAction,
+  nodeProblem,
   nodeSize,
   nodePorts,
   normalizeGraph,
@@ -365,5 +368,106 @@ describe('rule nodes', () => {
     const next = addNode(graph, 'r9', 'rule');
     const placed = next.nodes.find((node) => node.id === 'r9')!;
     expect(placed.y).toBeGreaterThan(graph.nodes.find((node) => node.id === 'a')!.y);
+  });
+});
+
+describe('fitViewport', () => {
+  const options = { padding: 32, minZoom: 0.2 };
+  const at = (id: string, x: number, y: number) =>
+    ({ id, kind: 'step', x, y }) as Parameters<typeof fitViewport>[0][number];
+
+  it('has nothing to fit without nodes or a measured surface', () => {
+    expect(fitViewport([], { width: 800, height: 400 }, options)).toBeNull();
+    expect(fitViewport([at('a', 0, 0)], { width: 0, height: 400 }, options)).toBeNull();
+    expect(fitViewport([at('a', 0, 0)], { width: 800, height: 0 }, options)).toBeNull();
+  });
+
+  it('keeps a small flow at 100% and centres it', () => {
+    // One 232 x 112 node in an 800 x 400 surface: centred at (284, 144), so offset by its origin.
+    expect(fitViewport([at('a', 100, 50)], { width: 800, height: 400 }, options)).toEqual({
+      zoom: 1,
+      x: 284 - 100,
+      y: 144 - 50,
+    });
+  });
+
+  it('zooms out until a wide flow fits whole', () => {
+    const wide = [at('a', 0, 0), at('b', 2468, 0)]; // spans 2700 px
+    const view = fitViewport(wide, { width: 1350, height: 600 }, options)!;
+    // (1350 - 2 * 32) / 2700 = 0.476, rounded down.
+    expect(view.zoom).toBe(0.47);
+    expect(2700 * view.zoom + view.x).toBeLessThanOrEqual(1350);
+    expect(view.x).toBeGreaterThanOrEqual(0);
+  });
+
+  it('fits the height too, and never goes below the minimum zoom', () => {
+    expect(
+      fitViewport([at('a', 0, 0), at('b', 0, 888)], { width: 800, height: 536 }, options)!.zoom,
+    ).toBe(0.47);
+    expect(
+      fitViewport([at('a', 0, 0), at('b', 100000, 0)], { width: 800, height: 400 }, options)!.zoom,
+    ).toBe(0.2);
+  });
+});
+
+describe('the notification settings of an action node', () => {
+  const notification = {
+    channels: ['email'],
+    userIds: ['11111111-1111-4111-8111-111111111111'],
+    roles: ['assignee' as const],
+    subject: 'Done: {{issue.title}}',
+    message: '',
+  };
+  const canvasWith = (action: Record<string, unknown>) =>
+    ({
+      nodes: [
+        { id: 'start', kind: 'trigger', x: 0, y: 0 },
+        { id: 'a', kind: 'step', x: 300, y: 0 },
+        { id: 'tell', kind: 'action', x: 600, y: 0, action },
+      ],
+      edges: [
+        { id: 'e1', from: 'start', to: 'a' },
+        { id: 'e2', from: 'a', to: 'tell' },
+      ],
+    }) as AgentWorkflowDto['canvas'];
+
+  it('keeps who to tell and what to say when the canvas is read and edited', () => {
+    const graph = normalizeGraph(
+      workflowOf(
+        [step('a')],
+        canvasWith({ toolset: 'notifications', toolName: 'notifications_send', notification }),
+      ),
+    );
+    const node = graph.nodes.find((candidate) => candidate.id === 'tell')!;
+    expect(node.kind === 'action' && node.action).toEqual({
+      toolset: 'notifications',
+      toolName: 'notifications_send',
+      notification,
+    });
+    // An edit that moves the node keeps its settings.
+    const moved = moveNode(graph, 'tell', 640, 20).nodes.find(
+      (candidate) => candidate.id === 'tell',
+    )!;
+    expect(moved.kind === 'action' && moved.action.notification).toEqual(notification);
+    // And it is not a node with a problem: it names the action it runs.
+    expect(nodeProblem(node)).toBeNull();
+  });
+
+  it('flags a notification node until it has a channel and someone to tell', () => {
+    const base = { id: 'n', kind: 'action' as const, x: 0, y: 0 };
+    const send = { toolset: 'notifications' as const, toolName: 'notifications_send' };
+    const problem = (config?: Partial<typeof notification>) =>
+      nodeProblem({
+        ...base,
+        action: { ...send, ...(config ? { notification: { ...notification, ...config } } : {}) },
+      });
+
+    expect(problem()).toBe('notification');
+    expect(problem({ channels: [] })).toBe('notification');
+    expect(problem({ userIds: [], roles: [] })).toBe('notification');
+    expect(problem({ userIds: [] })).toBeNull();
+    expect(problem({ roles: [] })).toBeNull();
+    expect(isNotificationAction(send)).toBe(true);
+    expect(isNotificationAction({ toolset: 'notifications' })).toBe(false);
   });
 });

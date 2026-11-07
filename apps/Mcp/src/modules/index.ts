@@ -13,6 +13,7 @@ import {
 } from './field-mappings/tools.js';
 import { integrationsModule } from './integrations/tools.js';
 import { issuesModule } from './issues/tools.js';
+import { notificationsModule } from './notifications/tools.js';
 import { pbiModule } from './pbi/tools.js';
 import { releaseNotesModule } from './release-notes/tools.js';
 import { specModule } from './spec/tools.js';
@@ -42,6 +43,7 @@ export const modules: readonly McpModule[] = [
   loadTestsModule,
   releaseNotesModule,
   auditModule,
+  notificationsModule,
 ];
 
 /** Backend routes that are intentionally not exposed as tools, with the reason. */
@@ -76,12 +78,10 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Internal call from the ADK API to the E2E worker service (worker token, not a user route); e2e_create and e2e_run enqueue work and wake it.',
   'POST /WikiWebhook/azure-devops':
     'Inbound Azure DevOps service hook, called by Azure and not by users; brain_sync covers manual sync.',
-  'POST /attachments/files':
-    'Binary upload from the web app, which keeps pasted and attached files as drafts until the item is saved; no file bytes go through the model.',
+  'GET /runs/stream':
+    'Server-sent events for the web app (Agent map, run flow); a model asks issues_runs or issues_run_get when it needs a run.',
   'GET /attachments/files/:id':
     'Binary download of a stored attachment for the web app; no file bytes go through the model.',
-  'DELETE /attachments/files/:id':
-    'Discards an unsaved upload of the web app; saved files are deleted with the item that holds them.',
   'GET /attachments/images/:scope/:id':
     'Binary image stream of attachments saved before generic attachments, kept for the web app.',
   'GET /attachments/proxy':

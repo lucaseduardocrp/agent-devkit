@@ -153,7 +153,7 @@ describe('IssueBriefService', () => {
       source,
       pageId,
       chunkIndex,
-      content: '',
+      content: `${source} passage ${chunkIndex}`,
       createdAt: '',
     });
     const search = vi
@@ -196,6 +196,10 @@ describe('IssueBriefService', () => {
       'brain:Payments',
       'brain:Refunds',
     ]);
+    // A Brain reference keeps the passage that matched, so a person can open that exact part.
+    expect(
+      brief.readFirst.filter((item) => item.kind === 'brain').map((item) => item.excerpt),
+    ).toEqual(['Checkout guide passage 0', 'Payments passage 0', 'Refunds passage 0']);
     expect(search).toHaveBeenCalledWith('Checkout Pay', context);
   });
 
@@ -288,6 +292,46 @@ describe('briefRunContext', () => {
       readFirst: [{ kind: 'file', label: 'a.ts', ref: 'src/a.ts', reason: 'entry point' }],
     });
     expect(withReads).toContain('1. [file] a.ts (src/a.ts) - entry point');
+  });
+
+  it('asks a host run to confirm the recommended model, and tells it to just run when it matches', async () => {
+    const { issues, service } = setup();
+    const issue = await issues.create(ws, 'u', { title: 'Run' });
+    const brief = await service.generate(context, issue);
+    const recommended = {
+      ...brief,
+      recommendation: {
+        ...brief.recommendation,
+        provider: 'claude',
+        model: 'claude-sonnet-5-5',
+        effort: 'high' as const,
+      },
+    };
+    const host = briefRunContext(recommended, { host: true });
+    expect(host).toContain('Model check (do this before any work):');
+    expect(host).toContain('Recommended for this issue: claude/claude-sonnet-5-5, effort high.');
+    expect(host).toContain('do not ask anything: carry out the work');
+    expect(host).toContain('ask the user ONE question');
+    expect(host).toContain('continue with the model and effort currently selected');
+    expect(host).toContain('Note: run with <current model / effort> instead of the recommended');
+    // The check comes before the brief itself.
+    expect(host.indexOf('Model check')).toBeLessThan(host.indexOf('Execution brief'));
+    // Server runs use the configured model, so they carry no check.
+    expect(briefRunContext(recommended)).not.toContain('Model check');
+  });
+
+  it('skips the model check when nothing is recommended or the host itself is', async () => {
+    const { issues, service } = setup();
+    const issue = await issues.create(ws, 'u', { title: 'Run' });
+    const brief = await service.generate(context, issue);
+    const withModel = (provider: string, model: string) => ({
+      ...brief,
+      recommendation: { ...brief.recommendation, provider, model },
+    });
+    expect(briefRunContext(withModel('', ''), { host: true })).not.toContain('Model check');
+    expect(briefRunContext(withModel('mcp', 'Anthropic/ClaudeAI'), { host: true })).not.toContain(
+      'Model check',
+    );
   });
 });
 

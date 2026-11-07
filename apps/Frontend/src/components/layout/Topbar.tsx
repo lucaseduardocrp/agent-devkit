@@ -40,6 +40,7 @@ const titleKeys: Record<NavTab, TranslationKey> = {
   integrationTests: 'nav.integrationTests',
   loadTests: 'nav.loadTests',
   connect: 'nav.connect',
+  notifications: 'nav.notifications',
   settings: 'nav.settings',
   workspaces: 'nav.workspaces',
 };

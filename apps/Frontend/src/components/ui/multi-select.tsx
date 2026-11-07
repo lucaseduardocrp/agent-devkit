@@ -1,6 +1,7 @@
 import { useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { cn } from '../../lib/utils.js';
 import { useI18n } from '../../lib/i18n/index.js';
+import { useInfiniteList, type InfiniteListProps } from './use-infinite-list.js';
 
 export interface MultiSelectOption {
   readonly value: string;
@@ -20,6 +21,11 @@ export function MultiSelect({
   emptyMessage,
   disabled = false,
   invalid = false,
+  pageSize,
+  hasMore,
+  loadingMore = false,
+  onLoadMore,
+  loadingMessage = 'Loading…',
 }: {
   /** Id of the search input, for an external `<label htmlFor>`. */
   readonly id?: string;
@@ -31,7 +37,9 @@ export function MultiSelect({
   readonly emptyMessage: string;
   readonly disabled?: boolean;
   readonly invalid?: boolean;
-}) {
+  /** Text of the row shown while the next page loads. */
+  readonly loadingMessage?: string;
+} & InfiniteListProps) {
   const { t } = useI18n();
   const listId = useId();
   const input = useRef<HTMLInputElement>(null);
@@ -52,6 +60,27 @@ export function MultiSelect({
         )
       : options;
   }, [options, query]);
+  const list = useRef<HTMLUListElement>(null);
+  // Only the first page is drawn; the next ones come in as the list is scrolled.
+  const { visible, onScroll } = useInfiniteList(filtered, {
+    list,
+    resetKey: query,
+    active: open,
+    activeIndex,
+    ...(pageSize === undefined ? {} : { pageSize }),
+    ...(hasMore === undefined ? {} : { hasMore }),
+    loadingMore,
+    ...(onLoadMore ? { onLoadMore } : {}),
+  });
+  const loadingRow = loadingMore ? (
+    <li
+      role="status"
+      className="flex items-center gap-2 px-3 py-2 text-xs text-[var(--text-muted)]"
+    >
+      <i className="ti ti-loader-2 animate-spin" aria-hidden="true" />
+      {loadingMessage}
+    </li>
+  ) : null;
   const toggle = (value: string) => {
     // The search is done once an option is picked; the list stays open for the next one.
     setQuery('');
@@ -71,13 +100,13 @@ export function MultiSelect({
       setOpen(true);
       setActiveIndex((index) =>
         event.key === 'ArrowDown'
-          ? Math.min(index + 1, Math.max(filtered.length - 1, 0))
+          ? Math.min(index + 1, Math.max(visible.length - 1, 0))
           : Math.max(index - 1, 0),
       );
     }
-    if (event.key === 'Enter' && open && filtered[activeIndex]) {
+    if (event.key === 'Enter' && open && visible[activeIndex]) {
       event.preventDefault();
-      toggle(filtered[activeIndex].value);
+      toggle(visible[activeIndex].value);
     }
   };
 
@@ -135,7 +164,7 @@ export function MultiSelect({
           aria-expanded={open}
           aria-controls={listId}
           aria-activedescendant={
-            open && filtered[activeIndex] ? `${listId}-${activeIndex}` : undefined
+            open && visible[activeIndex] ? `${listId}-${activeIndex}` : undefined
           }
           aria-invalid={invalid || undefined}
           value={query}
@@ -157,14 +186,16 @@ export function MultiSelect({
       </div>
       {open && !disabled && (
         <ul
+          ref={list}
+          onScroll={onScroll}
           id={listId}
           role="listbox"
           aria-label={label}
           aria-multiselectable="true"
           className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface-1)] py-1 shadow-lg"
         >
-          {filtered.length ? (
-            filtered.map((option, index) => (
+          {visible.length ? (
+            visible.map((option, index) => (
               <li key={option.value} role="presentation">
                 <button
                   type="button"
@@ -199,9 +230,10 @@ export function MultiSelect({
                 </button>
               </li>
             ))
-          ) : (
+          ) : loadingRow ? null : (
             <li className="px-3 py-2 text-sm text-[var(--text-muted)]">{emptyMessage}</li>
           )}
+          {loadingRow}
         </ul>
       )}
     </div>

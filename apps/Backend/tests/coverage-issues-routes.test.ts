@@ -113,6 +113,32 @@ beforeEach(() => {
   workspaces = { listMembers: vi.fn().mockResolvedValue([{ userId: memberId }]) };
 });
 
+describe('issue routes: proofreader', () => {
+  it('requires a workspace member and shows the issue in both inboxes', async () => {
+    const app = build();
+    await request(app)
+      .post('/issues')
+      .send({ title: 'Review me', proofreaderUserId: strangerId })
+      .expect(400);
+    const created = await request(app)
+      .post('/issues')
+      .send({ title: 'Review me', assigneeUserId: memberId })
+      .expect(201);
+    const id = created.body.issue.id as string;
+    // No proofreader yet: an issue that never ran stays out of the inbox.
+    context = { ...admin, actorId: memberId };
+    expect((await request(app).get('/inbox').expect(200)).body.items).toEqual([]);
+    context = admin;
+    await request(app).patch(`/issues/${id}`).send({ proofreaderUserId: memberId }).expect(200);
+    context = { ...admin, actorId: memberId };
+    const items = (await request(app).get('/inbox').expect(200)).body.items;
+    expect(items).toMatchObject([{ issue: { id, proofreaderUserId: memberId }, runs: [] }]);
+    // An unrelated user does not see it.
+    context = { ...admin, actorId: strangerId };
+    expect((await request(app).get('/inbox').expect(200)).body.items).toEqual([]);
+  });
+});
+
 describe('issue routes: context and permissions', () => {
   it('forwards resolver failures and missing workspace or actor context', async () => {
     context = new ApplicationError('UNAUTHORIZED', 'No session.', 401);

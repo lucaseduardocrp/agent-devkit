@@ -13,6 +13,7 @@ import { E2eConfigForm, type E2eSavedCasesSeed } from './E2eConfigForm.js';
 import { E2eTestDetail } from './E2eTestDetail.js';
 import { E2eCreationStatusLabel, E2eTestStatusLabel } from './E2eStatus.js';
 import { E2eImportCasesDialog, E2eReportingDialog, E2eReportStrip } from './E2eTestManagement.js';
+import { E2eLocalRunnerPanel } from './E2eLocalRunnerPanel.js';
 import { isCreationActive, needsPolling, type E2eCreationSummary } from './e2e-types.js';
 
 const POLL_MS = 3000;
@@ -99,6 +100,13 @@ export function E2eView({
   }, [load, screen.kind]);
 
   const hasActive = Boolean(creations?.some(needsPolling));
+  // A local run waits for `devkit runner`: while one is waiting, show whether the computer is
+  // connected and how to connect it, instead of leaving the run queued without explanation.
+  const hasActiveLocal = Boolean(
+    creations?.some(
+      (creation) => creation.executionTarget === 'local' && isCreationActive(creation.status),
+    ),
+  );
   useEffect(() => {
     if (screen.kind !== 'list' || !hasActive) return;
     const timer = window.setInterval(() => void load(), POLL_MS);
@@ -257,6 +265,11 @@ export function E2eView({
         </Select>
       </div>
 
+      {hasActiveLocal && (
+        <div data-testid="e2e-local-runner-wait">
+          <E2eLocalRunnerPanel apiClient={apiClient} />
+        </div>
+      )}
       {notice && (
         <p
           className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300"

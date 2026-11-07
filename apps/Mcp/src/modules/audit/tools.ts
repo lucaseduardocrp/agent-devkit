@@ -15,15 +15,18 @@ export const auditModule: McpModule = {
       access: 'read',
       routes: ['GET /audit/history'],
       input: {
-        entityType: z.enum([
-          'document',
-          'specification',
-          'template',
-          'testplan',
-          'pbi',
-          'issue',
-          'release_note',
-        ]),
+        entityType: z
+          .enum([
+            'document',
+            'specification',
+            'template',
+            'testplan',
+            'pbi',
+            'issue',
+            'release_note',
+            'testcase',
+          ])
+          .describe('testcase history needs entityId as <planId>:<caseId>.'),
         entityId: z.string().min(1).max(4096).optional().describe('Restrict to one entity.'),
         page,
         pageSize: pageSize(50),

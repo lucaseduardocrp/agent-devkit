@@ -19,6 +19,7 @@ export const TOOLSETS = [
   'integrationtests',
   'loadtests',
   'audit',
+  'notifications',
 ] as const;
 export type Toolset = (typeof TOOLSETS)[number];
 
@@ -38,6 +39,11 @@ export interface ToolContext {
   readonly api: AdkApi;
   readonly session: Session;
   readonly apiUrl: string;
+  /**
+   * The server runs on the user's own computer (stdio), so a tool may read files the user points
+   * to. Never true for the hosted HTTP transport, where paths would be the server's, not theirs.
+   */
+  readonly allowLocalFiles?: boolean;
   /** Requests an explicit decision from the connected user interface. */
   readonly requestApproval?: (message: string) => Promise<boolean>;
 }

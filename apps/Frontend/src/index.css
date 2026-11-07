@@ -709,3 +709,9 @@ textarea {
 .entity-actions-menu button[data-destructive]:focus-visible {
   background: color-mix(in srgb, var(--fill-danger) 12%, transparent);
 }
+
+/* The passage a link from another module points at (see highlight-passage.ts). */
+::highlight(adk-passage) {
+  background-color: rgb(251 191 36 / 0.35);
+  color: inherit;
+}

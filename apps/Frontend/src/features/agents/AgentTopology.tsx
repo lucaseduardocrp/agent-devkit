@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { SkeletonCard } from '../../components/ui/skeleton.js';
@@ -6,6 +6,7 @@ import { useI18n } from '../../lib/i18n/index.js';
 import type { AgentRun, Issue } from '../issues/issue-types.js';
 import type { AgentWorkflowDto, CustomAgentDto } from './agent-types.js';
 import { AgentRunFlowModal } from './AgentRunFlowModal.js';
+import type { LiveStatus } from './use-run-stream.js';
 
 interface AgentTopologyProps {
   readonly agents: readonly CustomAgentDto[];
@@ -14,10 +15,29 @@ interface AgentTopologyProps {
   readonly isLoading: boolean;
   readonly error: string | null;
   readonly onRefresh: () => void;
+  /** Whether the map is following the runs live; absent when it can only poll. */
+  readonly liveStatus?: LiveStatus;
+  /** Takes the user to the issue of a run, from the run flow. */
+  readonly onOpenIssue?: (issueId: string) => void;
   /** The workspace workflow, shown on the canvas of the run modal. */
   readonly workflow: AgentWorkflowDto;
   /** Without it the empty map does not invite the member to create agents. */
   readonly canCreateAgents?: boolean;
+}
+
+/** How long a task that just arrived stays highlighted. */
+const ARRIVAL_HIGHLIGHT_MS = 4_000;
+
+/** The step a running run is on, when the workflow has named steps for it. */
+function currentStepName(run: AgentRun): string | null {
+  const state = run.workflowState;
+  if (!state || run.status !== 'running') return null;
+  const step = state.currentNodeId
+    ? state.steps.find((candidate) => candidate.id === state.currentNodeId)
+    : state.canvas
+      ? undefined
+      : state.steps[state.currentStepIndex];
+  return step?.name ?? null;
 }
 
 const NODE_WIDTH = 224;
@@ -39,6 +59,8 @@ export function AgentTopology({
   isLoading,
   error,
   onRefresh,
+  liveStatus,
+  onOpenIssue,
   workflow,
   canCreateAgents = true,
 }: AgentTopologyProps): React.JSX.Element {
@@ -101,12 +123,40 @@ export function AgentTopology({
     const issue = issueById.get(run.issueId);
     return issue ? `#${issue.number} ${issue.title}` : `#${run.issueId.slice(0, 8)}`;
   };
+  // A task that reaches the queue while the map is live is highlighted and announced. Changes that
+  // come from loading the map (first view, reconnecting, refresh) are not arrivals.
+  const [arrivedRunIds, setArrivedRunIds] = useState<readonly string[]>([]);
+  const [announcement, setAnnouncement] = useState('');
+  const view = useRef<{ ids: ReadonlySet<string>; loading: boolean; live: boolean } | null>(null);
+  useEffect(() => {
+    const previous = view.current;
+    const live = liveStatus === 'live';
+    view.current = { ids: new Set(activeRuns.map((run) => run.id)), loading: isLoading, live };
+    if (!previous || previous.loading || isLoading || !previous.live || !live) return;
+    const arrived = activeRuns.filter((run) => run.status === 'queued' && !previous.ids.has(run.id));
+    if (arrived.length === 0) return;
+    setArrivedRunIds(arrived.map((run) => run.id));
+    setAnnouncement(
+      t('agents.newTaskAnnouncement', {
+        agent: agentById.get(arrived[0]!.agentId)?.name ?? '',
+        task: taskLabel(arrived[0]!),
+      }),
+    );
+    const timer = setTimeout(() => setArrivedRunIds([]), ARRIVAL_HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+    // taskLabel and t only format the message; the effect follows the runs and the live state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRuns, isLoading, liveStatus]);
+
   const runningCount = activeRuns.filter((run) => run.status === 'running').length;
   const waitingCount = activeRuns.filter((run) => run.status.startsWith('waiting_')).length;
   const queuedCount = activeRuns.length - runningCount - waitingCount;
 
   return (
     <section className="space-y-4" data-testid="agent-topology">
+      <div aria-live="polite" className="sr-only" data-testid="topology-announcement">
+        {announcement}
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="sr-only">{t('agents.map')}</h2>
         <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -122,11 +172,22 @@ export function AgentTopology({
           <Badge variant="outline">
             {waitingCount} {t('agents.waitingForUser')}
           </Badge>
+          {liveStatus && (
+            <Badge variant={liveStatus === 'live' ? 'success' : 'outline'} data-testid="topology-live">
+              <span
+                aria-hidden="true"
+                className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${
+                  liveStatus === 'live' ? 'animate-pulse bg-emerald-400' : 'bg-amber-400'
+                }`}
+              />
+              {liveStatus === 'live'
+                ? t('agents.liveLive')
+                : liveStatus === 'connecting'
+                  ? t('agents.liveConnecting')
+                  : t('agents.liveOffline')}
+            </Badge>
+          )}
         </div>
-        <Button type="button" variant="outline" onClick={onRefresh} disabled={isLoading}>
-          <i className="ti ti-refresh mr-2" aria-hidden="true" />
-          {t('agents.refreshMap')}
-        </Button>
       </div>
 
       <div
@@ -140,6 +201,10 @@ export function AgentTopology({
         <span className="flex items-center gap-2">
           <span className="h-0 w-7 border-t-2 border-dashed border-emerald-400" />
           {t('agents.activeRun')}
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="h-0 w-7 border-t-2 border-dashed border-amber-400" />
+          {t('agents.pendingRun')}
         </span>
       </div>
 
@@ -290,7 +355,9 @@ export function AgentTopology({
                     setSelectedRunId(run.id);
                     setSelectedAgentId(run.agentId);
                   }}
-                  className="absolute flex h-[84px] flex-col items-start justify-center gap-1 overflow-hidden rounded-xl border border-emerald-400/40 bg-[var(--surface-1)] px-4 text-left shadow-sm hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fill-accent)]"
+                  className={`absolute flex h-[84px] flex-col items-start justify-center gap-1 overflow-hidden rounded-xl border border-emerald-400/40 bg-[var(--surface-1)] px-4 text-left shadow-sm hover:bg-[var(--surface-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fill-accent)] ${
+                    arrivedRunIds.includes(run.id) ? 'animate-pulse ring-2 ring-emerald-400' : ''
+                  }`}
                   style={{
                     left: layout.issueX,
                     top: PADDING + index * ROW_HEIGHT,
@@ -309,7 +376,8 @@ export function AgentTopology({
                   </span>
                   <span className="w-full truncate text-xs text-[var(--text-secondary)]">
                     {agentById.get(run.agentId)?.name ?? ''} ·{' '}
-                    {run.mode === 'host' ? t('agents.clientModel') : t('agents.server')}
+                    {currentStepName(run) ??
+                      (run.mode === 'host' ? t('agents.clientModel') : t('agents.server'))}
                   </span>
                 </button>
               );
@@ -325,6 +393,7 @@ export function AgentTopology({
         agents={agents}
         workflow={workflow}
         initialRunId={selectedRunId}
+        {...(onOpenIssue ? { onOpenIssue } : {})}
         onClose={() => {
           setSelectedAgentId(null);
           setSelectedRunId(null);

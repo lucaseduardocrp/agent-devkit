@@ -18,6 +18,8 @@ import type {
   KnowledgePushInput,
 } from '../../lib/api-client.js';
 import { MarkdownViewer } from './MarkdownViewer.js';
+import { clearPassageHighlight, highlightPassage } from '../shared/highlight-passage.js';
+import type { ReferenceFocus } from '../shared/reference-focus.js';
 import { stripLeadingTitleHeading } from './markdown-parser.js';
 import { BrainGraph } from './BrainGraph.js';
 import { createBrainGraphState } from './brain-graph-model.js';
@@ -43,6 +45,9 @@ export interface BrainViewProps {
   readonly initialDocuments?: readonly KnowledgeDocumentDto[];
   readonly isReadOnly?: boolean;
   readonly className?: string;
+  /** An item another module sent the user to; opened once its data is there. */
+  readonly focus?: ReferenceFocus | null;
+  readonly onFocusHandled?: () => void;
 }
 
 export interface OpenTabItem {
@@ -140,6 +145,8 @@ export function BrainView({
   initialDocuments,
   isReadOnly = false,
   className,
+  focus,
+  onFocusHandled,
 }: BrainViewProps) {
   const { t, formatDate } = useI18n();
   const { runActivity } = useActivityRunner();
@@ -955,6 +962,37 @@ export function BrainView({
 
   const wordCount = fullTextContent.trim().split(/\s+/).filter(Boolean).length;
   const charCount = fullTextContent.length;
+
+  // Another module sent the user to a page: open its tab and, when it came with the passage
+  // that matched, show the page at that passage.
+  const docContent = useRef<HTMLDivElement>(null);
+  const [passage, setPassage] = useState<{ docId: string; text: string } | null>(null);
+  const handledFocus = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.kind !== 'brain' || handledFocus.current === focus.nonce) return;
+    const target = documents.find((candidate) => candidate.pageId === focus.ref);
+    if (!target) return;
+    handledFocus.current = focus.nonce;
+    openDocumentTab(target);
+    setPassage(focus.excerpt ? { docId: target.id, text: focus.excerpt } : null);
+    onFocusHandled?.();
+  }, [focus, documents, onFocusHandled]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const container = docContent.current;
+    if (!passage || !container || activeDoc?.id !== passage.docId) return;
+    // The page renders after the tab opens, so look for the passage until it is there.
+    let frame = 0;
+    let attempts = 0;
+    const look = () => {
+      if (highlightPassage(container, passage.text) || attempts++ > 30) return;
+      frame = requestAnimationFrame(look);
+    };
+    look();
+    return () => {
+      cancelAnimationFrame(frame);
+      clearPassageHighlight();
+    };
+  }, [passage, activeDoc?.id, fullTextContent]);
 
   return (
     <div
@@ -1969,15 +2007,17 @@ export function BrainView({
                       </div>
 
                       {/* MARKDOWN VIEWER */}
-                      <MarkdownViewer
-                        content={fullTextContent}
-                        documentTitle={activeDoc.title}
-                        sourceUrl={
-                          activeDoc.source.startsWith('http') ? activeDoc.source : undefined
-                        }
-                        showModeToggle={true}
-                        onWikilinkClick={handleOpenWikilink}
-                      />
+                      <div ref={docContent}>
+                        <MarkdownViewer
+                          content={fullTextContent}
+                          documentTitle={activeDoc.title}
+                          sourceUrl={
+                            activeDoc.source.startsWith('http') ? activeDoc.source : undefined
+                          }
+                          showModeToggle={true}
+                          onWikilinkClick={handleOpenWikilink}
+                        />
+                      </div>
                       <AttachmentPanel scope="brain" attachments={docAttachments} />
                     </div>
                   ) : (

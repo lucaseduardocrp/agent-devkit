@@ -262,7 +262,7 @@ export function createAttachmentsRouter(
         if (!detected)
           throw new ApplicationError(
             'ATTACHMENT_TYPE_UNSUPPORTED',
-            'Supported files: images (PNG, JPEG, WebP, GIF), videos (MP4, WebM, MOV) and documents (PDF, Word, Excel, PowerPoint, ZIP, TXT, CSV, Markdown).',
+            'Supported files: images (PNG, JPEG, WebP, GIF), videos (MP4, WebM, MOV) and documents (PDF, Word, Excel, PowerPoint, ZIP, TXT, CSV, TSV, Markdown, HTML, JSON, XML, YAML).',
             415,
           );
         if (bytes.length > attachmentLimits[detected.kind])

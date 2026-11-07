@@ -49,6 +49,11 @@ export interface TestCase {
   readonly metadata?: Record<string, unknown>;
 }
 
+import type { ReferenceFocus } from '../shared/reference-focus.js';
+
+/** Saved plans listed per page. */
+const SAVED_PLANS_PAGE_SIZE = 8;
+
 export interface TestPlansViewProps {
   readonly apiClient?: ApiClient;
   readonly workspaces?: readonly UserWorkspaceMembership[];
@@ -58,6 +63,9 @@ export interface TestPlansViewProps {
   readonly initialTab?: 'saved' | 'create';
   /** Hides creation and editing; set when the member cannot edit test plans. */
   readonly isReadOnly?: boolean;
+  /** An item another module sent the user to; opened once its data is there. */
+  readonly focus?: ReferenceFocus | null;
+  readonly onFocusHandled?: () => void;
   /** Opens a new E2E run that automates saved cases; absent when the member cannot. */
   readonly onAutomate?: (selection: AutomateSelection) => void;
   /** Opens the integrations, where test management platforms are configured. */
@@ -156,6 +164,8 @@ export function TestPlansView({
   isReadOnly = false,
   onAutomate,
   onOpenIntegrations,
+  focus,
+  onFocusHandled,
 }: TestPlansViewProps) {
   const { t, formatDate } = useI18n();
   const { runActivity } = useActivityRunner();
@@ -216,6 +226,30 @@ export function TestPlansView({
   const [isLoadingSavedPlans, setIsLoadingSavedPlans] = useState(false);
   const [savedPlansError, setSavedPlansError] = useState<string | null>(null);
   const [selectedSavedId, setSelectedSavedId] = useState<string | null>(null);
+
+  // Another module sent the user to a saved plan: show the saved tab, on the page that has it.
+  const handledFocus = useRef(0);
+  const searchedFocus = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.kind !== 'testplan' || handledFocus.current === focus.nonce) return;
+    setActiveTab('saved');
+    if (savedPlans.some((plan) => plan.id === focus.ref)) {
+      handledFocus.current = focus.nonce;
+      setSelectedSavedId(focus.ref);
+      onFocusHandled?.();
+      return;
+    }
+    // The plan is on another page of the list: find which one, once per request.
+    if (searchedFocus.current === focus.nonce || !apiClient) return;
+    searchedFocus.current = focus.nonce;
+    void apiClient.getAllSavedTestPlans().then(
+      (all) => {
+        const position = all.findIndex((plan) => plan.id === focus.ref);
+        if (position >= 0) setSavedPlansPage(Math.floor(position / SAVED_PLANS_PAGE_SIZE) + 1);
+      },
+      () => undefined,
+    );
+  }, [focus, savedPlans, apiClient, onFocusHandled]);
   const [savedTitle, setSavedTitle] = useState('');
   const [selectedSuiteId, setSelectedSuiteId] = useState<string>('');
   const [testSuites, setTestSuites] = useState<readonly TestSuiteDto[]>([]);
@@ -315,7 +349,7 @@ export function TestPlansView({
     setIsLoadingSavedPlans(true);
     setSavedPlansError(null);
     try {
-      const result = await apiClient.getSavedTestPlans(savedPlansPage, 8);
+      const result = await apiClient.getSavedTestPlans(savedPlansPage, SAVED_PLANS_PAGE_SIZE);
       setSavedPlans(result.items);
       setSavedPlansTotal(result.total);
       setSavedPlansTotalPages(result.totalPages);

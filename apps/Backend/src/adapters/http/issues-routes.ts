@@ -9,6 +9,9 @@ import type { AgentService } from '../../modules/agents/application/agent-servic
 import type { WorkspaceService } from '../../modules/workspaces/application/workspace-service.js';
 import type { Issue, IssueStore, IssueChanges } from '../../modules/issues/issue-store.js';
 import type { RunService } from '../../modules/issues/run-service.js';
+import type { EventBus } from '../../modules/realtime/event-bus.js';
+import { issueNotificationData } from '../../modules/notifications/application/issue-notifications.js';
+import type { NotificationService } from '../../modules/notifications/application/notification-service.js';
 import type { IssueBriefService } from '../../modules/issues/agent-brief/brief-service.js';
 import {
   BRIEF_EFFORTS,
@@ -47,6 +50,7 @@ const issueFields = z.object({
     .optional(),
   assigneeAgentId: z.string().uuid().nullable().optional(),
   assigneeUserId: z.string().uuid().nullable().optional(),
+  proofreaderUserId: z.string().uuid().nullable().optional(),
 });
 const issueCreateFields = issueFields.extend({ runMode: z.enum(['server', 'host']).optional() });
 const updateFields = issueCreateFields
@@ -79,6 +83,7 @@ const briefEdits = z
           label: briefText(300),
           ref: briefText(500),
           reason: briefText(500),
+          excerpt: briefText(1200).optional(),
         }),
       )
       .max(30),
@@ -115,6 +120,13 @@ const completionFields = z.object({
   inputTokens: z.number().int().min(0).optional(),
   outputTokens: z.number().int().min(0).optional(),
 });
+const stepReportFields = z.object({
+  nodeId: z.string().trim().min(1).max(100),
+  status: z.enum(['started', 'completed']),
+  summary: z.string().trim().max(2000).optional(),
+});
+/** Comment line that keeps proxies and load balancers from closing an idle stream. */
+export const STREAM_HEARTBEAT_MS = 25_000;
 const continueRunFields = z
   .object({
     action: z.enum(['approve', 'answer', 'revise']),
@@ -179,12 +191,33 @@ async function validateAssignee(
   changes: IssueChanges,
 ): Promise<void> {
   if (changes.assigneeAgentId) await agents.getAgent(wsId, changes.assigneeAgentId);
-  if (changes.assigneeUserId) {
+  if (changes.assigneeUserId || changes.proofreaderUserId) {
     const members = await workspaces.listMembers(wsId, actor);
-    if (!members.some((member) => member.userId === changes.assigneeUserId)) {
+    if (
+      changes.assigneeUserId &&
+      !members.some((member) => member.userId === changes.assigneeUserId)
+    ) {
       throw new ApplicationError('VALIDATION_ERROR', 'Assignee must be a workspace member.', 400);
     }
+    if (
+      changes.proofreaderUserId &&
+      !members.some((member) => member.userId === changes.proofreaderUserId)
+    ) {
+      throw new ApplicationError(
+        'VALIDATION_ERROR',
+        'Proofreader must be a workspace member.',
+        400,
+      );
+    }
   }
+}
+
+/** Newest run of an inbox item, or the issue's last update when it has no run yet. */
+function lastActivity(item: {
+  issue: { updatedAt: Date };
+  runs: readonly { createdAt: Date }[];
+}): number {
+  return new Date(item.runs[0]?.createdAt ?? item.issue.updatedAt).getTime();
 }
 
 function requireBriefs(briefs: IssueBriefService | undefined): IssueBriefService {
@@ -201,7 +234,39 @@ export function createIssuesRouter(
   contextResolver?: RequestContextResolver,
   imageStore?: E2eArtifactStore,
   briefs?: IssueBriefService,
+  events?: EventBus,
+  notifications?: Pick<NotificationService, 'dispatch' | 'issueUrl'>,
 ): Router {
+  /**
+   * Tells the people an issue was just handed to (assignee, proofreader) when rules ask for it.
+   * Not awaited: delivering can take seconds (SMTP) and must never delay or fail the request.
+   */
+  const announceAssignment = (
+    request: Request,
+    issue: Issue,
+    previous: Pick<Issue, 'assigneeUserId' | 'proofreaderUserId'> | null,
+  ) => {
+    if (!notifications) return;
+    const url = notifications.issueUrl(workspaceId(request), issue.id);
+    const base = {
+      workspaceId: workspaceId(request),
+      actorId: actorId(request),
+      data: issueNotificationData(issue),
+      ...(url ? { url } : {}),
+    };
+    if (issue.assigneeUserId && issue.assigneeUserId !== previous?.assigneeUserId)
+      void notifications.dispatch({
+        ...base,
+        type: 'issue.assigned',
+        subjectUserId: issue.assigneeUserId,
+      });
+    if (issue.proofreaderUserId && issue.proofreaderUserId !== previous?.proofreaderUserId)
+      void notifications.dispatch({
+        ...base,
+        type: 'issue.proofreader_assigned',
+        subjectUserId: issue.proofreaderUserId,
+      });
+  };
   const router = Router();
   if (contextResolver)
     router.use(
@@ -251,6 +316,7 @@ export function createIssuesRouter(
         issueFiles(issue),
       );
       await briefs?.refresh(request.context!, issue);
+      announceAssignment(request, issue, null);
       let automationError: string | undefined;
       let run;
       if (issue.assigneeAgentId && ['todo', 'in_progress'].includes(issue.status)) {
@@ -319,8 +385,14 @@ export function createIssuesRouter(
           changes.assigneeUserId === undefined || changes.assigneeUserId === existing.assigneeUserId
             ? null
             : changes.assigneeUserId,
+        proofreaderUserId:
+          changes.proofreaderUserId === undefined ||
+          changes.proofreaderUserId === existing.proofreaderUserId
+            ? null
+            : changes.proofreaderUserId,
       });
       const updated = await store.update(workspaceId(request), existing.id, changes);
+      if (updated) announceAssignment(request, updated, existing);
       await syncItemFilesSafely(
         imageStore,
         workspaceId(request),
@@ -458,20 +530,27 @@ export function createIssuesRouter(
         store.inboxStates(wsId, userId),
         runs.assignedTo(wsId, userId),
       ]);
-      // The inbox is private: it lists only the issues with runs executed while the issue was
-      // assigned to this user, newest run first, and only those runs.
+      // The inbox is private: it lists the issues with runs executed while the issue was
+      // assigned to this user (only those runs), plus issues under review: the proofreader and
+      // the assignee of an issue that has a proofreader both see it, even before any run.
+      // Newest activity first.
       const runsByIssue = new Map<string, typeof assigned>();
       for (const run of assigned)
         runsByIssue.set(run.issueId, [...(runsByIssue.get(run.issueId) ?? []), run]);
       const stateByIssue = new Map(states.map((state) => [state.issueId, state]));
       response.json({
         items: issues
-          .filter((issue) => runsByIssue.has(issue.id))
+          .filter(
+            (issue) =>
+              runsByIssue.has(issue.id) ||
+              issue.proofreaderUserId === userId ||
+              (!!issue.proofreaderUserId && issue.assigneeUserId === userId),
+          )
           .map((issue) => {
             const state = stateByIssue.get(issue.id);
             return {
               issue,
-              runs: runsByIssue.get(issue.id)!.map((run) => ({
+              runs: (runsByIssue.get(issue.id) ?? []).map((run) => ({
                 id: run.id,
                 agentId: run.agentId,
                 status: run.status,
@@ -484,10 +563,7 @@ export function createIssuesRouter(
                 state?.archivedAt && state.archivedAt >= issue.updatedAt ? state.archivedAt : null,
             };
           })
-          .sort(
-            (a, b) =>
-              new Date(b.runs[0]!.createdAt).getTime() - new Date(a.runs[0]!.createdAt).getTime(),
-          ),
+          .sort((a, b) => lastActivity(b) - lastActivity(a)),
       });
     } catch (error) {
       next(error);
@@ -573,6 +649,36 @@ export function createIssuesRouter(
       next(error);
     }
   });
+  // Server-sent events: every change of a run of the workspace, as it happens. Declared before
+  // /runs/:id so "stream" is not taken for a run id.
+  router.get('/runs/stream', requireAuth, (request, response, next) => {
+    try {
+      const workspace = workspaceId(request);
+      if (!events)
+        throw new ApplicationError('REALTIME_UNAVAILABLE', 'Live updates are not available.', 501);
+      response.status(200).set({
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        // no-transform keeps the compression middleware from buffering the stream.
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      response.flushHeaders();
+      response.write('retry: 3000\n\nevent: ready\ndata: {}\n\n');
+      const unsubscribe = events.subscribe(workspace, (event) => {
+        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
+      });
+      const heartbeat = setInterval(() => response.write(': keep-alive\n\n'), STREAM_HEARTBEAT_MS);
+      const close = () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      };
+      request.on('close', close);
+      response.on('error', close);
+    } catch (error) {
+      next(error);
+    }
+  });
   router.get('/runs/:id', requireAuth, async (request, response, next) => {
     try {
       response.json({ run: await runs.get(workspaceId(request), request.params['id'] as string) });
@@ -596,6 +702,21 @@ export function createIssuesRouter(
       requireWrite(request);
       response.json({
         run: await runs.checkout(workspaceId(request), request.params['id'] as string),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+  router.post('/runs/:id/steps', requireAuth, async (request, response, next) => {
+    try {
+      requireWrite(request);
+      const report = parseBody(stepReportFields, request);
+      response.json({
+        run: await runs.reportStep(workspaceId(request), request.params['id'] as string, {
+          nodeId: report.nodeId,
+          status: report.status,
+          ...(report.summary ? { summary: report.summary } : {}),
+        }),
       });
     } catch (error) {
       next(error);

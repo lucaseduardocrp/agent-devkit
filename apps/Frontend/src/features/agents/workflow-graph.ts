@@ -50,6 +50,14 @@ export interface WorkflowActionConfig {
   readonly toolName?: string;
   /** Integration provider to run the action against, when the action takes one. */
   readonly provider?: string;
+  /** Who to tell and what to say, for the `notifications_send` action. Kept as it was saved. */
+  readonly notification?: {
+    readonly channels: readonly string[];
+    readonly userIds: readonly string[];
+    readonly roles: readonly ('assignee' | 'proofreader')[];
+    readonly subject: string;
+    readonly message: string;
+  };
 }
 
 export interface WorkflowConditionConfig {
@@ -141,6 +149,16 @@ export const MAX_DELAY_MINUTES = 60;
 
 export const DEFAULT_TRIGGER: WorkflowTriggerConfig = { kind: 'issue-assigned' };
 export const DEFAULT_ACTION: WorkflowActionConfig = { toolset: 'pbi' };
+/** What the palette's notification node starts as: the notifications module's one action. */
+export const NOTIFICATION_ACTION: WorkflowActionConfig = {
+  toolset: 'notifications',
+  toolName: 'notifications_send',
+};
+
+/** Whether an action node tells people, which the canvas shows as a notification node. */
+export function isNotificationAction(action: WorkflowActionConfig): boolean {
+  return action.toolset === 'notifications' && action.toolName === 'notifications_send';
+}
 export const DEFAULT_CONDITION: WorkflowConditionConfig = { operator: 'contains', value: '' };
 export const DEFAULT_DELAY: WorkflowDelayConfig = { minutes: 5 };
 
@@ -160,6 +178,44 @@ export function nodeSize(kind: WorkflowNodeKind): {
   readonly height: number;
 } {
   return NODE_SIZES[kind];
+}
+
+export interface WorkflowViewport {
+  readonly x: number;
+  readonly y: number;
+  readonly zoom: number;
+}
+
+/**
+ * The viewport that shows every node at once: as large as fits (never above 100%, never below
+ * `minZoom`), centred in the surface. Null while the surface or the graph has no size to fit.
+ */
+export function fitViewport(
+  nodes: readonly WorkflowNode[],
+  surface: { readonly width: number; readonly height: number },
+  { padding, minZoom }: { readonly padding: number; readonly minZoom: number },
+): WorkflowViewport | null {
+  if (nodes.length === 0 || surface.width <= 0 || surface.height <= 0) return null;
+  const left = Math.min(...nodes.map((node) => node.x));
+  const top = Math.min(...nodes.map((node) => node.y));
+  const right = Math.max(...nodes.map((node) => node.x + nodeSize(node.kind).width));
+  const bottom = Math.max(...nodes.map((node) => node.y + nodeSize(node.kind).height));
+  // Rounded down, like the zoom buttons round: the label and the layout use the same number.
+  const zoom = Math.max(
+    minZoom,
+    Math.floor(
+      Math.min(
+        1,
+        (surface.width - padding * 2) / (right - left),
+        (surface.height - padding * 2) / (bottom - top),
+      ) * 100,
+    ) / 100,
+  );
+  return {
+    zoom,
+    x: (surface.width - (right - left) * zoom) / 2 - left * zoom,
+    y: (surface.height - (bottom - top) * zoom) / 2 - top * zoom,
+  };
 }
 
 /** The outputs a node offers: a condition has a true and a false one, everything else has one. */
@@ -203,13 +259,14 @@ export function createNode(
   id: string,
   kind: WorkflowNodeKind,
   position: WorkflowPoint,
+  action: WorkflowActionConfig = DEFAULT_ACTION,
 ): WorkflowNode {
   const base = { id, x: position.x, y: position.y };
   switch (kind) {
     case 'trigger':
       return { ...base, kind, trigger: DEFAULT_TRIGGER };
     case 'action':
-      return { ...base, kind, action: DEFAULT_ACTION };
+      return { ...base, kind, action };
     case 'condition':
       return { ...base, kind, condition: DEFAULT_CONDITION };
     case 'delay':
@@ -516,9 +573,14 @@ export function nextNodePosition(graph: WorkflowGraph, kind: WorkflowNodeKind): 
   return { x, y: LAYOUT_ORIGIN.y + (NODE_SIZES.step.height - nodeSize(kind).height) / 2 };
 }
 
-export function addNode(graph: WorkflowGraph, id: string, kind: WorkflowNodeKind): WorkflowGraph {
+export function addNode(
+  graph: WorkflowGraph,
+  id: string,
+  kind: WorkflowNodeKind,
+  action?: WorkflowActionConfig,
+): WorkflowGraph {
   return {
-    nodes: [...graph.nodes, createNode(id, kind, nextNodePosition(graph, kind))],
+    nodes: [...graph.nodes, createNode(id, kind, nextNodePosition(graph, kind), action)],
     edges: graph.edges,
   };
 }
@@ -589,8 +651,16 @@ export function countApprovalGates(steps: readonly AgentWorkflowStepDto[]): numb
 }
 
 /** What is wrong with a node, so the canvas can mark it and saving can be refused. */
-export function nodeProblem(node: WorkflowNode): 'action' | 'condition' | 'delay' | 'cron' | null {
+export function nodeProblem(
+  node: WorkflowNode,
+): 'action' | 'notification' | 'condition' | 'delay' | 'cron' | null {
   if (node.kind === 'action' && !node.action.toolName?.trim()) return 'action';
+  // The runner refuses a notification that has no channel or nobody to tell.
+  if (node.kind === 'action' && isNotificationAction(node.action)) {
+    const config = node.action.notification;
+    if (!config || config.channels.length === 0) return 'notification';
+    if (config.userIds.length === 0 && config.roles.length === 0) return 'notification';
+  }
   if (node.kind === 'condition' && !node.condition.value.trim()) return 'condition';
   if (node.kind === 'delay' && (node.delay.minutes <= 0 || node.delay.minutes > MAX_DELAY_MINUTES))
     return 'delay';

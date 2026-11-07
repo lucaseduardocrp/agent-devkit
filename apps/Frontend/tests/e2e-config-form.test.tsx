@@ -129,13 +129,16 @@ function setup(
     savedPlans?: unknown[] | Error | Promise<unknown[]>;
     /** A local install: the ADK workers open http://localhost on the user's computer. */
     workersReachLocalhost?: boolean;
+    /** Where the server runs new E2E runs unless the form says otherwise. */
+    defaultExecutionTarget?: 'remote' | 'local';
   } = {},
 ) {
   const client = {
     apiUrl: 'https://api.adk.example.com',
-    getCapabilities: vi
-      .fn()
-      .mockResolvedValue({ workersReachLocalhost: options.workersReachLocalhost ?? false }),
+    getCapabilities: vi.fn().mockResolvedValue({
+      workersReachLocalhost: options.workersReachLocalhost ?? false,
+      defaultExecutionTarget: options.defaultExecutionTarget ?? 'remote',
+    }),
     getE2eRunners: vi.fn().mockResolvedValue(options.runners ?? []),
     getAgents: vi.fn(() =>
       options.agents instanceof Error
@@ -1182,6 +1185,32 @@ describe('E2eSavedCasePicker', () => {
     setup({ initialSavedCases: { suiteId: 'root' }, savedPlans: failing.promise }).view.unmount();
     failing.reject('gone');
     await act(() => Promise.resolve());
+  });
+});
+
+describe('E2eConfigForm default execution', () => {
+  const selected = (view: ReturnType<typeof setup>['view'], name: string) =>
+    view.getByRole('radio', { name }).getAttribute('aria-checked') === 'true';
+
+  it('starts a new run on the user computer when the server prefers it', async () => {
+    const { view, client } = setup({ defaultExecutionTarget: 'local' });
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    await waitFor(() => expect(selected(view, 'Meu computador')).toBe(true));
+    expect(selected(view, 'Servidores do ADK')).toBe(false);
+  });
+
+  it('keeps the ADK workers for a new run when that is the default', async () => {
+    const { view, client } = setup({ defaultExecutionTarget: 'remote' });
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    expect(selected(view, 'Servidores do ADK')).toBe(true);
+  });
+
+  it('does not move a run being edited to the default', async () => {
+    const { view, client } = setup({ creationId: 'c1', defaultExecutionTarget: 'local' });
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    await waitFor(() => expect(client.getE2eCreation).toHaveBeenCalled());
+    await view.findByDisplayValue('ama');
+    expect(selected(view, 'Servidores do ADK')).toBe(true);
   });
 });
 

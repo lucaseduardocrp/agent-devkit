@@ -19,6 +19,7 @@ import { Select } from '../../components/ui/select.js';
 import { Pagination, PagingSentinel, usePaging } from '../../components/ui/pagination.js';
 import { Modal } from '../../components/ui/modal.js';
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog.js';
+import { UnsavedChangesDialog } from '../../components/ui/unsaved-changes-dialog.js';
 import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/skeleton.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { parseMarkdownBlocks, renderInlineContent } from '../brain/markdown-parser.js';
@@ -56,6 +57,8 @@ import {
   useRichTextImageInput,
 } from '../shared/media.js';
 
+import type { ReferenceFocus } from '../shared/reference-focus.js';
+
 interface Props {
   apiClient: ApiClient;
   workspaceId: string | null;
@@ -64,6 +67,9 @@ interface Props {
   isReadOnly?: boolean;
   onOpenIssues?: () => void;
   onOpenTestPlans?: () => void;
+  /** An item another module sent the user to; opened once its data is there. */
+  readonly focus?: ReferenceFocus | null;
+  readonly onFocusHandled?: () => void;
 }
 type ItemForm = PbiFields & { id?: string };
 const columnIds = [
@@ -104,7 +110,7 @@ function readColumns(workspaceId: string | null): ColumnId[] {
       const valid = columnIds.filter(
         (id) => id === 'title' || id === 'actions' || selected.has(id),
       );
-      return valid;
+      return valid.length ? valid : defaultColumns;
     }
   } catch {
     // Storage can be unavailable in private browsing.
@@ -328,10 +334,6 @@ function sanitizeHtml(value: string): string {
         continue;
       if (attribute.name !== 'style') element.removeAttribute(attribute.name);
     }
-    if (element.tagName === 'IMG' && !element.hasAttribute('src')) {
-      element.remove();
-      continue;
-    }
     const styles: string[] = [];
     for (let index = 0; index < element.style.length; index++) {
       const property = element.style.item(index);
@@ -353,7 +355,7 @@ function formatDescription(value: string): string {
   const decoded =
     typeof DOMParser === 'undefined'
       ? value
-      : new DOMParser().parseFromString(value, 'text/html').body.textContent;
+      : (new DOMParser().parseFromString(value, 'text/html').body.textContent ?? value);
   const html = renderToStaticMarkup(
     <>
       {parseMarkdownBlocks(decoded).map((block, index) => {
@@ -634,6 +636,8 @@ export function PbiView({
   isReadOnly: readOnlyProp = false,
   onOpenIssues,
   onOpenTestPlans,
+  focus,
+  onFocusHandled,
 }: Props) {
   const { locale, t } = useI18n();
   const permissions = usePermissions();
@@ -740,10 +744,20 @@ export function PbiView({
   const [deleteItem, setDeleteItem] = useState<PbiItem | null>(null);
   const descriptionEditorRef = useRef<HTMLDivElement>(null);
   const formOpen = Boolean(form);
+  // The card is a draft: nothing is sent until the user saves. The baseline is what the form held
+  // once it finished loading, so closing can tell whether anything changed.
+  const formRef = useRef<HTMLFormElement>(null);
+  const baseline = useRef<string | null>(null);
+  const [confirmClose, setConfirmClose] = useState(false);
   useInlineImages(descriptionEditorRef, form?.description);
   const descriptionImages = useRichTextImageInput('pbi', descriptionEditorRef, (html) =>
-    setForm((current) => ({ ...current!, description: sanitizeHtml(html) })),
+    setForm((current) => (current ? { ...current, description: sanitizeHtml(html) } : current)),
   );
+
+  // Snapshot of the card once it is open and fully loaded; cleared when it closes.
+  useEffect(() => {
+    baseline.current = form && !formLoadingId ? JSON.stringify(form) : null;
+  }, [formOpen, formLoadingId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     mounted.current = true;
@@ -995,7 +1009,7 @@ export function PbiView({
           normalizeSearch(
             [
               item.title,
-              descriptionText.get(item.id)!,
+              descriptionText.get(item.id) ?? '',
               ...item.links.map((link) => link.externalId),
             ].join(' '),
           ),
@@ -1051,7 +1065,7 @@ export function PbiView({
       return null;
     const selfMatches = (item: PbiItem): boolean => {
       const assignee = sourceText(item.sourceData.adkAssigneeUserId);
-      const text = searchIndex.get(item.id)!;
+      const text = searchIndex.get(item.id) ?? '';
       return (
         terms.every((term) => text.includes(term)) &&
         (!sourceFilter ||
@@ -1163,8 +1177,6 @@ export function PbiView({
     }
   };
   const pull = (providerId?: string) => {
-    // The pull buttons are disabled while pulling; this only guards a double call.
-    /* v8 ignore next */
     if (pulling) return;
     setPulling(true);
     const title = providerId
@@ -1199,16 +1211,35 @@ export function PbiView({
       });
   };
   /** Closing the form without saving drops what was typed, pasted and attached. */
-  const closeForm = (current: ItemForm) => {
-    const editorValue = editorHtml(descriptionEditorRef.current!);
-    discardDrafts({ ...current, description: editorValue });
+  const closeForm = () => {
+    if (form) {
+      const editorValue = descriptionEditorRef.current
+        ? editorHtml(descriptionEditorRef.current)
+        : form.description;
+      discardDrafts({ ...form, description: editorValue });
+    }
+    setConfirmClose(false);
     setForm(null);
+  };
+  /** Closing with unsaved changes asks what to do with them first. */
+  const requestCloseForm = () => {
+    if (
+      form &&
+      !isReadOnly &&
+      baseline.current !== null &&
+      JSON.stringify(form) !== baseline.current
+    )
+      setConfirmClose(true);
+    else closeForm();
   };
   const save = (event: FormEvent) => {
     event.preventDefault();
+    if (!form) return;
     void runAction(async () => {
-      const editorValue = editorHtml(descriptionEditorRef.current!);
-      const { id, kind, sourceData, ...fields } = form!;
+      const editorValue = descriptionEditorRef.current
+        ? editorHtml(descriptionEditorRef.current)
+        : (form.description ?? '');
+      const { id, kind, sourceData, ...fields } = form;
       const values = {
         ...fields,
         description: editorValue.trim() ? sanitizeHtml(editorValue) : '',
@@ -1241,6 +1272,7 @@ export function PbiView({
     templateId?: string,
     fieldValues?: Readonly<Record<string, FieldValue>>,
   ) => {
+    if (pushingIds.has(item.id)) return;
     setPushItem(null);
     setPushingIds((current) => new Set(current).add(item.id));
     void runActivity({ kind: 'push', title: `${c.publish}: ${item.title}` }, () =>
@@ -1337,6 +1369,15 @@ export function PbiView({
     const target = itemsRef.current.find((entry) => entry.id === id);
     if (target) editItem(target);
   };
+  // Another module sent the user to an item: open it once the list has it.
+  const handledFocus = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.kind !== 'pbi' || handledFocus.current === focus.nonce) return;
+    if (!items.some((entry) => entry.id === focus.ref)) return;
+    handledFocus.current = focus.nonce;
+    openItem(focus.ref);
+    onFocusHandled?.();
+  }, [focus, items, onFocusHandled]); // eslint-disable-line react-hooks/exhaustive-deps
   const createIssue = (item: PbiItem) =>
     void runAction(async () => {
       await apiClient.createIssueFromPbi(item.id);
@@ -2305,13 +2346,10 @@ export function PbiView({
         </div>
       )}
 
-      <Modal
-        open={Boolean(form)}
-        onClose={form ? () => closeForm(form) : undefined}
-        labelledBy="pbi-item-title"
-      >
+      <Modal open={Boolean(form)} onClose={requestCloseForm} labelledBy="pbi-item-title">
         {form && (
           <form
+            ref={formRef}
             onSubmit={save}
             className="flex h-[min(90vh,900px)] w-[min(96vw,1800px)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)]"
           >
@@ -2325,7 +2363,7 @@ export function PbiView({
                 variant="ghost"
                 size="icon"
                 aria-label={t('common.close')}
-                onClick={() => closeForm(form)}
+                onClick={requestCloseForm}
               >
                 <i className="ti ti-x" aria-hidden="true" />
               </Button>
@@ -2744,6 +2782,24 @@ export function PbiView({
             </div>
           </form>
         )}
+        <UnsavedChangesDialog
+          open={confirmClose}
+          isSaving={busy}
+          labels={{
+            title: t('common.unsavedTitle'),
+            description: t('common.unsavedBody'),
+            cancel: t('common.cancel'),
+            discard: t('common.discardChanges'),
+            save: t('common.saveChanges'),
+          }}
+          onCancel={() => setConfirmClose(false)}
+          onDiscard={closeForm}
+          onSave={() => {
+            // requestSubmit runs the form's own validation (required title) before saving.
+            setConfirmClose(false);
+            formRef.current?.requestSubmit();
+          }}
+        />
       </Modal>
       <PbiPushDialog
         apiClient={apiClient}
@@ -2788,25 +2844,24 @@ export function PbiView({
           </form>
         )}
       </Modal>
-      {canDelete && deleteItem && (
-        <ConfirmationDialog
-          open
-          title={c.deleteTitle}
-          description={c.deleteDescription.replace('{title}', deleteItem.title)}
-          confirmLabel={t('common.delete')}
-          cancelLabel={t('common.cancel')}
-          destructive
-          isLoading={busy}
-          onCancel={() => setDeleteItem(null)}
-          onConfirm={() => {
-            void runAction(async () => {
-              await apiClient.deletePbiItem(deleteItem.id);
-              setDeleteItem(null);
-              await load();
-            });
-          }}
-        />
-      )}
+      <ConfirmationDialog
+        open={canDelete && Boolean(deleteItem)}
+        title={c.deleteTitle}
+        description={c.deleteDescription.replace('{title}', deleteItem?.title ?? '')}
+        confirmLabel={t('common.delete')}
+        cancelLabel={t('common.cancel')}
+        destructive
+        isLoading={busy}
+        onCancel={() => setDeleteItem(null)}
+        onConfirm={() => {
+          if (!deleteItem) return;
+          void runAction(async () => {
+            await apiClient.deletePbiItem(deleteItem.id);
+            setDeleteItem(null);
+            await load();
+          });
+        }}
+      />
     </main>
   );
 }

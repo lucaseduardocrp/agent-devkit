@@ -9,6 +9,7 @@ describe('Topbar', () => {
       ['brain', 'Cérebro'],
       ['testplans', 'Planos de Teste'],
       ['connect', 'Integrações'],
+      ['notifications', 'Notificações'],
       ['settings', 'Configurações'],
       ['workspaces', 'Workspaces'],
     ];

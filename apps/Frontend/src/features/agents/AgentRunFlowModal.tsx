@@ -19,6 +19,8 @@ interface AgentRunFlowModalProps {
   readonly workflow: AgentWorkflowDto;
   /** Run to show first, when the modal opens from a task instead of an agent. */
   readonly initialRunId?: string | null;
+  /** Takes the user to the issue of the run; without it the modal offers no link. */
+  readonly onOpenIssue?: (issueId: string) => void;
   readonly onClose: () => void;
 }
 
@@ -34,6 +36,7 @@ export function AgentRunFlowModal({
   agents,
   workflow,
   initialRunId = null,
+  onOpenIssue,
   onClose,
 }: AgentRunFlowModalProps): React.JSX.Element {
   const { t } = useI18n();
@@ -50,10 +53,17 @@ export function AgentRunFlowModal({
     if (!state) return states;
     for (const node of graph.nodes) states[node.id] = 'pending';
     states[WORKFLOW_TRIGGER_NODE_ID] = 'done';
+    const active = run?.status === 'running' ? 'current' : waiting ? 'waiting' : 'pending';
+    if (state.canvas) {
+      // A flow is walked node by node: what the run recorded is done, the node it is on is current.
+      const recorded = new Set(state.results.map((result) => result.stepId));
+      for (const node of graph.nodes) if (recorded.has(node.id)) states[node.id] = 'done';
+      if (state.currentNodeId) states[state.currentNodeId] = active;
+      return states;
+    }
     state.steps.forEach((step, index) => {
       if (index < state.currentStepIndex) states[step.id] = 'done';
-      else if (index === state.currentStepIndex)
-        states[step.id] = run?.status === 'running' ? 'current' : waiting ? 'waiting' : 'pending';
+      else if (index === state.currentStepIndex) states[step.id] = active;
     });
     return states;
   }, [graph, state, run?.status, waiting]);
@@ -62,7 +72,13 @@ export function AgentRunFlowModal({
     const found = issues.find((item) => item.id === entry.issueId);
     return found ? `#${found.number} ${found.title}` : `#${entry.issueId.slice(0, 8)}`;
   };
-  const currentStep = state?.steps[state.currentStepIndex];
+  const currentStep = state
+    ? state.currentNodeId
+      ? state.steps.find((step) => step.id === state.currentNodeId)
+      : state.canvas
+        ? undefined
+        : state.steps[state.currentStepIndex]
+    : undefined;
 
   return (
     <Modal open={agent !== null} onClose={onClose} labelledBy="agent-run-flow-title">
@@ -123,6 +139,18 @@ export function AgentRunFlowModal({
 
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <span className="font-medium text-[var(--text-primary)]">{issueLabel(run)}</span>
+                {onOpenIssue && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    data-testid="run-flow-open-issue"
+                    onClick={() => onOpenIssue(run.issueId)}
+                  >
+                    <i className="ti ti-external-link mr-1.5" aria-hidden="true" />
+                    {t('agents.openIssue')}
+                  </Button>
+                )}
                 <Badge variant={run.status === 'running' ? 'success' : 'outline'}>
                   {run.status === 'running'
                     ? t('agents.statusRunning')
@@ -134,7 +162,8 @@ export function AgentRunFlowModal({
                   {run.mode === 'host' ? t('agents.clientModel') : t('agents.server')}
                   {run.model ? ` · ${run.model}` : ''}
                 </span>
-                {currentStep && (
+                {/* A queued run has not started: its first step is next, not running. */}
+                {currentStep && run.status !== 'queued' && (
                   <span
                     data-testid="run-flow-current-step"
                     className="text-xs text-[var(--text-accent)]"

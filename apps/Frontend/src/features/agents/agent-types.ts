@@ -29,7 +29,8 @@ export type AgentWorkflowToolset =
   | 'integrationtests'
   | 'loadtests'
   | 'audit'
-  | 'workspaces';
+  | 'workspaces'
+  | 'notifications';
 
 export interface AgentWorkflowRuleDto {
   readonly id: string;

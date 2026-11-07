@@ -34,6 +34,8 @@ export function cachedWorkspaceRepository(
     findMemberById: (memberId) => repository.findMemberById(memberId),
     listMembers: (workspaceId) =>
       read(workspaceId, 'members', () => repository.listMembers(workspaceId)),
+    // A page depends on the search typed, so it is not worth caching.
+    searchMembers: (workspaceId, query) => repository.searchMembers(workspaceId, query),
     async updateMember(memberId, input) {
       const member = await repository.updateMember(memberId, input);
       await invalidate(member.workspaceId);

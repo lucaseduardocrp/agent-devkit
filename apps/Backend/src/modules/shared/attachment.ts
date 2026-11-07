@@ -63,6 +63,11 @@ export const attachmentMimeTypes: Readonly<Record<string, AttachmentKind>> = {
   'text/plain': 'document',
   'text/csv': 'document',
   'text/markdown': 'document',
+  'text/html': 'document',
+  'text/tab-separated-values': 'document',
+  'application/json': 'document',
+  'application/xml': 'document',
+  'application/yaml': 'document',
 };
 
 const officeTypes: Readonly<Record<string, string>> = {
@@ -75,6 +80,15 @@ const textTypes: Readonly<Record<string, string>> = {
   log: 'text/plain',
   csv: 'text/csv',
   md: 'text/markdown',
+  // HTML is only ever served as a download inside a sandbox (see sendFile), never rendered
+  // on the ADK origin, so it is safe to keep as a document.
+  html: 'text/html',
+  htm: 'text/html',
+  tsv: 'text/tab-separated-values',
+  json: 'application/json',
+  xml: 'application/xml',
+  yaml: 'application/yaml',
+  yml: 'application/yaml',
 };
 
 function ascii(bytes: Uint8Array, start: number, end: number): string {

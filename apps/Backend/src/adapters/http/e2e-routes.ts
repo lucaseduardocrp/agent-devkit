@@ -16,6 +16,7 @@ import {
 import { TEST_MANAGEMENT_PROVIDERS } from '../../modules/test-management/domain/test-run.js';
 import { requireAuth, requireModulePermission } from './auth-middleware.js';
 import type { RequestContextResolver } from './compatibility-routes.js';
+import type { RequestContext } from '../../shared/context.js';
 import { parseBody, parseParams, parseQuery } from './validation.js';
 
 const createFields = z.object({
@@ -173,8 +174,32 @@ function actorId(request: Request): string | undefined {
   return request.context?.actorId;
 }
 
-export function createE2eRouter(service: E2eService, contextResolver?: RequestContextResolver) {
+/** What the router needs to tell whether the user's own computer can run a local run. */
+export interface LocalRunnerPresence {
+  hasOnlineRunner(context: RequestContext): Promise<boolean>;
+}
+
+export const NO_LOCAL_RUNNER_WARNING = {
+  code: 'NO_LOCAL_RUNNER',
+  message:
+    'No local runner is online for you, so this run waits (up to five minutes) for one. On your computer run "devkit runner" (first time: "devkit login", then "devkit e2e setup").',
+} as const;
+
+export function createE2eRouter(
+  service: E2eService,
+  contextResolver?: RequestContextResolver,
+  runners?: LocalRunnerPresence,
+) {
   const router = Router();
+  /**
+   * The answer for a run that was just started. A run meant for the user's computer waits for a
+   * runner, so when none is connected the answer says so instead of leaving it queued silently.
+   */
+  const started = async (request: Request, creation: { executionTarget?: string }) => {
+    if (creation.executionTarget !== 'local' || !runners) return { creation };
+    const online = await runners.hasOnlineRunner(request.context!).catch(() => true);
+    return online ? { creation } : { creation, warnings: [NO_LOCAL_RUNNER_WARNING] };
+  };
   const read = requireModulePermission('e2e', 'view');
   const write = requireModulePermission('e2e', 'edit');
   if (contextResolver)
@@ -418,7 +443,7 @@ export function createE2eRouter(service: E2eService, contextResolver?: RequestCo
   router.post('/e2e/creations', requireAuth, write, async (request, response, next) => {
     try {
       const creation = await service.create(request.context!, parseBody(newRunFields, request));
-      response.status(202).json({ creation });
+      response.status(202).json(await started(request, creation));
     } catch (error) {
       next(error);
     }
@@ -482,7 +507,9 @@ export function createE2eRouter(service: E2eService, contextResolver?: RequestCo
       const { id } = parseParams(idParams, request);
       response
         .status(202)
-        .json({ creation: await service.rerun(workspaceId(request), id, actorId(request)) });
+        .json(
+          await started(request, await service.rerun(workspaceId(request), id, actorId(request))),
+        );
     } catch (error) {
       next(error);
     }
@@ -496,9 +523,12 @@ export function createE2eRouter(service: E2eService, contextResolver?: RequestCo
       try {
         const { id } = parseParams(idParams, request);
         const { executionTarget } = parseBody(executionFields, request);
-        response.json({
-          creation: await service.setExecutionTarget(workspaceId(request), id, executionTarget),
-        });
+        response.json(
+          await started(
+            request,
+            await service.setExecutionTarget(workspaceId(request), id, executionTarget),
+          ),
+        );
       } catch (error) {
         next(error);
       }
@@ -527,9 +557,14 @@ export function createE2eRouter(service: E2eService, contextResolver?: RequestCo
     try {
       const { id } = parseParams(idParams, request);
       const { regenerate } = parseBody(rerunTestFields.default({ regenerate: false }), request);
-      response.status(202).json({
-        creation: await service.rerunTest(workspaceId(request), id, regenerate, actorId(request)),
-      });
+      response
+        .status(202)
+        .json(
+          await started(
+            request,
+            await service.rerunTest(workspaceId(request), id, regenerate, actorId(request)),
+          ),
+        );
     } catch (error) {
       next(error);
     }

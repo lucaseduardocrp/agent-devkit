@@ -20,6 +20,7 @@ export const NAV_TAB_MODULES: Readonly<Record<NavTab, PermissionModule | null>> 
   integrationTests: 'integrationTests',
   loadTests: 'loadTests',
   connect: 'integrations',
+  notifications: 'integrations',
   settings: null,
   workspaces: null,
 };
@@ -43,6 +44,7 @@ export const NAV_TAB_ORDER: readonly NavTab[] = [
   'integrationTests',
   'loadTests',
   'connect',
+  'notifications',
   'settings',
 ];
 

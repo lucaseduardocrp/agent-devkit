@@ -25,7 +25,8 @@ export type AgentWorkflowToolset =
   | 'integrationtests'
   | 'loadtests'
   | 'audit'
-  | 'workspaces';
+  | 'workspaces'
+  | 'notifications';
 
 export interface AgentWorkflowRule {
   readonly id: string;
@@ -56,11 +57,25 @@ export interface AgentWorkflowTriggerConfig {
   readonly cron?: string;
 }
 
+/** Who to tell, how, and what to say, for the `notify` action of the notifications module. */
+export interface AgentWorkflowNotificationConfig {
+  /** Ids of notification channels (e.g. "email"). */
+  readonly channels: readonly string[];
+  /** Members of the workspace to tell. */
+  readonly userIds: readonly string[];
+  /** And whoever holds these roles on the issue the run is about. */
+  readonly roles: readonly ('assignee' | 'proofreader')[];
+  /** Templates ({{issue.title}}...); blank uses the issue title / the previous step's result. */
+  readonly subject: string;
+  readonly message: string;
+}
+
 /** One MCP action of a module, run by the flow without going through an agent. */
 export interface AgentWorkflowActionConfig {
   readonly toolset: AgentWorkflowToolset;
   readonly toolName?: string;
   readonly provider?: string;
+  readonly notification?: AgentWorkflowNotificationConfig;
 }
 
 export type AgentWorkflowConditionOperator = 'contains' | 'not-contains' | 'matches';

@@ -3,6 +3,8 @@ import { ApiClient } from './lib/api-client.js';
 import { cn } from './lib/utils.js';
 import { WorkspaceLayout } from './components/layout/WorkspaceLayout.js';
 import type { NavTab } from './components/layout/Sidebar.js';
+import type { BriefReference } from './features/issues/agent-brief-types.js';
+import type { ReferenceFocus } from './features/shared/reference-focus.js';
 import { BrainView } from './features/brain/BrainView.js';
 import { AgentsView, type AgentsSection } from './features/agents/AgentsView.js';
 import { TestPlansView } from './features/testplans/TestPlansView.js';
@@ -24,6 +26,7 @@ import { I18nProvider, useI18n, type SupportedLocale } from './lib/i18n/index.js
 import { ActivityProvider } from './features/activities/ActivityCenter.js';
 import { DesignView } from './features/design/DesignView.js';
 import { WorkView } from './features/issues/WorkView.js';
+import { NotificationsView } from './features/notifications/NotificationsView.js';
 import { PbiView } from './features/pbi/PbiView.js';
 import { E2eView } from './features/e2e/E2eView.js';
 import { IntegrationTestsView } from './features/apitests/IntegrationTestsView.js';
@@ -46,9 +49,27 @@ type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 // In production (Railway or Vercel), VITE_API_BASE_URL must point at the deployed backend
 // (Railway), since the frontend and backend are served from different origins
 // there. Left unset, ApiClient falls back to http://localhost:3000 for local dev.
+/** The workspace and issue a notification link points at, when the address carries them. */
+function readDeepLink(): { readonly issue: string; readonly workspace?: string } | null {
+  const params = new URLSearchParams(window.location.search);
+  const issue = params.get('issue');
+  if (!issue) return null;
+  const workspace = params.get('workspace');
+  return { issue, ...(workspace ? { workspace } : {}) };
+}
+
 const defaultApiClient = new ApiClient({ baseUrl: import.meta.env.VITE_API_BASE_URL });
 
 /** The Agents submodules, as navigation tabs and as the section the view renders. */
+/** The module each kind of "read first" reference lives in; files have no module. */
+const REFERENCE_TABS: Readonly<Record<string, NavTab>> = {
+  pbi: 'pbis',
+  issue: 'issues',
+  brain: 'brain',
+  spec: 'spec',
+  testplan: 'testplans',
+};
+
 const AGENTS_SECTION_BY_TAB: Readonly<Record<string, AgentsSection>> = {
   agents: 'agents',
   agentsPlayground: 'playground',
@@ -104,6 +125,11 @@ function AppContent({
   const [activeTab, setActiveTab] = useState<NavTab>(initialTab);
   const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
   const [pbiRefreshToken, setPbiRefreshToken] = useState(0);
+  // The item a module was asked to open when a reference sent the user there.
+  const [focus, setFocus] = useState<ReferenceFocus | null>(null);
+  useEffect(() => {
+    if (focus && activeTab !== REFERENCE_TABS[focus.kind]) setFocus(null);
+  }, [activeTab, focus]);
   // Saved test cases a new E2E run starts from, when it is opened from Test Plans.
   const [e2eSeed, setE2eSeed] = useState<{
     readonly selection: AutomateSelection;
@@ -125,17 +151,34 @@ function AppContent({
     setActiveWorkspaceId(workspaceId);
   };
 
+  // A link from a notification (?workspace=...&issue=...). It waits here until the person is signed
+  // in and the workspaces are known, so it survives the login screen.
+  const deepLink = useRef(readDeepLink());
+
   const loadWorkspaces = useCallback(async () => {
     try {
       const list = await apiClient.getWorkspaces();
       setWorkspaces(list);
       const currentId = activeWorkspaceIdRef.current;
+      const link = deepLink.current;
+      const linked = link?.workspace
+        ? list.find((item) => item.workspace.id === link.workspace)
+        : undefined;
       const current = currentId ? list.find((item) => item.workspace.id === currentId) : undefined;
-      const next = current ?? list[0];
+      const next = linked ?? current ?? list[0];
       if (next && next.workspace.id !== currentId) {
         apiClient.setWorkspaceId(next.workspace.id);
         setOwnerId(next.workspace.id);
         setActiveWorkspace(next.workspace.id);
+      }
+      if (link && next) {
+        deepLink.current = null;
+        window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+        // Only into the workspace the link names, and only for someone who can see issues.
+        if ((!link.workspace || linked) && allows(accessFor(next).modules.issues, 'view')) {
+          setFocus({ kind: 'issue', ref: link.issue, nonce: Date.now() });
+          setActiveTab('issues');
+        }
       }
     } catch {
       // Ignored if user not yet authorized
@@ -228,6 +271,26 @@ function AppContent({
     allows(access.modules[module], operation);
   const readOnly = (module: PermissionModule) => !can(module, 'edit');
   const openIntegrations = () => setActiveTab('connect');
+  /** Goes to the module of a "read first" reference and opens that exact item (and passage). */
+  /**
+   * Goes to an issue, opened once the Issues module has its data. Only offered where the member
+   * can already see runs, which needs access to issues.
+   */
+  const openIssue = (issueId: string) => {
+    setFocus({ kind: 'issue', ref: issueId, nonce: Date.now() });
+    setActiveTab('issues');
+  };
+  const openReference = (reference: BriefReference) => {
+    const tab = REFERENCE_TABS[reference.kind];
+    if (!tab || !canSeeTab(tab, can)) return;
+    setFocus({
+      kind: reference.kind as ReferenceFocus['kind'],
+      ref: reference.ref,
+      ...(reference.excerpt ? { excerpt: reference.excerpt } : {}),
+      nonce: Date.now(),
+    });
+    setActiveTab(tab);
+  };
   // A tab the member may not view (e.g. after switching workspace) falls back to the first
   // visible one, so hidden modules are never rendered. Settings closes the order and is always
   // visible, so a tab is always found.
@@ -311,6 +374,9 @@ function AppContent({
             canManageCosts={access.workspace.manageCosts}
             onInboxCountChange={setInboxUnreadCount}
             onOpenIssues={() => setActiveTab('issues')}
+            onOpenReference={openReference}
+            focus={focus}
+            onFocusHandled={() => setFocus(null)}
           />
         )}
         {currentTab === 'pbis' && (
@@ -323,6 +389,8 @@ function AppContent({
             isReadOnly={readOnly('pbis')}
             onOpenIssues={() => setActiveTab('issues')}
             onOpenTestPlans={() => setActiveTab('testplans')}
+            focus={focus}
+            onFocusHandled={() => setFocus(null)}
           />
         )}
         {currentTab === 'brain' && (
@@ -330,6 +398,8 @@ function AppContent({
             apiClient={apiClient}
             defaultOwnerId={ownerId}
             isReadOnly={readOnly('brain')}
+            focus={focus}
+            onFocusHandled={() => setFocus(null)}
           />
         )}
         {(currentTab === 'agents' ||
@@ -342,6 +412,7 @@ function AppContent({
             isReadOnly={readOnly('agents')}
             section={AGENTS_SECTION_BY_TAB[currentTab]}
             onSelectSection={(section) => setActiveTab(AGENTS_TAB_BY_SECTION[section])}
+            onOpenIssue={openIssue}
           />
         )}
         {currentTab === 'testplans' && (
@@ -352,6 +423,8 @@ function AppContent({
             onSelectWorkspace={handleSelectWorkspace}
             initialTab="saved"
             isReadOnly={readOnly('testplans')}
+            focus={focus}
+            onFocusHandled={() => setFocus(null)}
             onAutomate={
               can('e2e', 'edit')
                 ? (selection) => {
@@ -395,6 +468,8 @@ function AppContent({
             canManageTemplates={activeMembership?.member.role === 'ADMIN'}
             isReadOnly={readOnly('specs')}
             canPublishToBrain={can('brain', 'edit')}
+            focus={focus}
+            onFocusHandled={() => setFocus(null)}
           />
         )}
         {currentTab === 'releaseNotes' && (
@@ -418,6 +493,14 @@ function AppContent({
             apiClient={apiClient}
             isAuthenticated={true}
             canManageIntegrations={can('integrations', 'edit')}
+          />
+        )}
+        {currentTab === 'notifications' && (
+          <NotificationsView
+            key={activeWorkspaceId ?? 'no-workspace'}
+            apiClient={apiClient}
+            workspaceId={activeWorkspaceId}
+            canManage={can('integrations', 'edit')}
           />
         )}
         {currentTab === 'workspaces' && (

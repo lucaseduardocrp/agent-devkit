@@ -287,13 +287,28 @@ export function E2eConfigForm({
     void Promise.resolve()
       .then(() => apiClient.getCapabilities())
       .then((capabilities) => {
-        if (active) setWorkersReachLocalhost(capabilities.workersReachLocalhost);
+        if (!active) return;
+        setWorkersReachLocalhost(capabilities.workersReachLocalhost);
+        // A new run starts where the server prefers; an existing run keeps what it has.
+        if (!creationId && capabilities.defaultExecutionTarget === 'local')
+          setForm((current) =>
+            current.executionTarget === 'local'
+              ? current
+              : {
+                  ...current,
+                  executionTarget: 'local',
+                  baseUrl: localAppOrigin(current.localOrigin) ?? current.baseUrl,
+                  localOrigin: '',
+                  accessClientId: '',
+                  accessClientSecret: '',
+                },
+          );
       })
       .catch(() => undefined);
     return () => {
       active = false;
     };
-  }, [apiClient]);
+  }, [apiClient, creationId]);
 
   /** A localhost target only the local runner or a tunnel can open; null when the workers can. */
   const unreachableLocalTarget = (value: string) =>

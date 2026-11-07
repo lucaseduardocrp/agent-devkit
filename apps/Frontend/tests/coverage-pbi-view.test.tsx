@@ -710,6 +710,57 @@ describe('PbiView coverage: item editor', () => {
     expect(editor.querySelector('td')).toHaveTextContent('Alpha');
   });
 
+  describe('closing with unsaved changes', () => {
+    const openChanged = async () => {
+      const api = mockClient();
+      api.getPbiItems.mockResolvedValue([root]);
+      renderView(api);
+      fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.change(within(dialog).getByRole('textbox', { name: 'Título' }), {
+        target: { value: 'Release PBI edited' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Fechar' }));
+      return { api, dialog, alert: await screen.findByRole('alertdialog') };
+    };
+
+    it('asks before closing and keeps editing on cancel', async () => {
+      const { alert, dialog } = await openChanged();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Cancelar' }));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(dialog).toBeInTheDocument();
+    });
+
+    it('discards the changes without saving', async () => {
+      const { api, alert, dialog } = await openChanged();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Descartar alterações' }));
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+      expect(api.updatePbiItem).not.toHaveBeenCalled();
+    });
+
+    it('saves the changes from the prompt', async () => {
+      const { api, alert } = await openChanged();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Salvar alterações' }));
+      await waitFor(() =>
+        expect(api.updatePbiItem).toHaveBeenCalledWith(
+          root.id,
+          expect.objectContaining({ title: 'Release PBI edited' }),
+        ),
+      );
+    });
+
+    it('closes at once when nothing changed', async () => {
+      const api = mockClient();
+      api.getPbiItems.mockResolvedValue([root]);
+      renderView(api);
+      fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Fechar' }));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    });
+  });
+
   it('sanitizes HTML descriptions and saves the edited description', async () => {
     const api = mockClient();
     api.getPbiItems.mockResolvedValue([

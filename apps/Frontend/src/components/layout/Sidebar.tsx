@@ -25,6 +25,7 @@ export type NavTab =
   | 'integrationTests'
   | 'loadTests'
   | 'connect'
+  | 'notifications'
   | 'settings'
   | 'workspaces';
 
@@ -411,6 +412,10 @@ export function Sidebar({
             <div className="mb-1">
               {heading(t('runtime.integrations'))}
               {item('connect', 'ti-plug-connected', t('nav.connect'))}
+              {show('notifications') &&
+                item('notifications', 'ti-bell-ringing', t('nav.notifications'), {
+                  testId: 'sidebar-notifications-button',
+                })}
             </div>
           )}
         </nav>

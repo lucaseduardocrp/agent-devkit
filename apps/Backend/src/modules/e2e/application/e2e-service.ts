@@ -261,6 +261,8 @@ export interface E2eCreationListItem extends Omit<
 }
 
 export interface E2eServiceOptions {
+  /** Where a run executes when the request does not say; the ADK worker ("remote") by default. */
+  readonly defaultExecutionTarget?: E2eExecutionTarget;
   readonly store: E2eStore;
   /** Durable queue consumed by the workers; the API never runs browsers itself. */
   readonly queue: E2eJobQueue;
@@ -1070,7 +1072,8 @@ export class E2eService {
     Omit<E2eCreationSettings, 'passwordSecret' | 'accessSecret'> & { repository: E2eRepositoryRef }
   > {
     await this.options.agents.getAgent(workspaceId, input.agentId);
-    const executionTarget = input.executionTarget ?? 'remote';
+    const executionTarget =
+      input.executionTarget ?? this.options.defaultExecutionTarget ?? 'remote';
     const browserOrigin = normalizeLocalBrowserOrigin(input.localOrigin, input.mode);
     // A local runner opens the application directly: the tunnel's localhost origin is the target.
     const target = normalizeTargetUrl(

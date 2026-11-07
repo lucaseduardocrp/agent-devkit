@@ -72,6 +72,29 @@ import {
   type ReleaseNoteStore,
 } from '../../modules/release-notes/release-note-store.js';
 import { InMemoryRunStore, type RunStore } from '../../modules/issues/run-store.js';
+import { EmailNotificationChannel } from '../../modules/notifications/adapters/email-channel.js';
+import {
+  NotificationChannelRegistry,
+  type NotificationChannel,
+} from '../../modules/notifications/application/channel.js';
+import {
+  InMemoryNotificationOutbox,
+  type NotificationOutbox,
+} from '../../modules/notifications/application/outbox.js';
+import { NotificationOutboxWorker } from '../../modules/notifications/application/outbox-worker.js';
+import { NotificationService } from '../../modules/notifications/application/notification-service.js';
+import {
+  InMemoryNotificationRuleStore,
+  type NotificationRuleStore,
+} from '../../modules/notifications/application/rule-store.js';
+import type { EmailSender } from '../../modules/identity/application/email-sender.js';
+import {
+  InMemoryNotificationContactStore,
+  type NotificationContactStore,
+} from '../../modules/notifications/application/contact-store.js';
+import { createNotificationsRouter } from './notifications-routes.js';
+import { EventingRunStore } from '../../modules/issues/eventing-run-store.js';
+import { InMemoryEventBus, type EventBus } from '../../modules/realtime/event-bus.js';
 import { RunService } from '../../modules/issues/run-service.js';
 import { InMemoryUsageStore, type UsageStore } from '../../modules/issues/usage-store.js';
 import { InMemoryIssueStore, type IssueStore } from '../../modules/issues/issue-store.js';
@@ -164,6 +187,8 @@ export interface ReadinessProbe {
 }
 
 export interface AppOptions {
+  /** Linked from notifications. */
+  readonly frontendUrl?: string;
   /** Shared read cache (Redis in production); without one every read goes to the stores. */
   readonly cache?: Cache;
   readonly auditPersistence?: AuditPersistence;
@@ -186,12 +211,23 @@ export interface AppOptions {
   /** Where workspace agents are installed from (the ADK Hub on GitHub by default). */
   readonly hubCatalog?: HubCatalog;
   readonly issueStore?: IssueStore;
+  /** Sends e-mails (the "email" notification channel); without it that channel is not available. */
+  readonly emailSender?: EmailSender;
+  /** Where notification rules are kept. */
+  readonly notificationRules?: NotificationRuleStore;
+  readonly notificationContacts?: NotificationContactStore;
+  /** Where notifications wait to be delivered; in memory when omitted. */
+  readonly notificationOutbox?: NotificationOutbox;
+  /** More ways to notify people (Teams, Discord...), next to e-mail. */
+  readonly notificationChannels?: readonly NotificationChannel[];
   readonly issueBriefStore?: IssueBriefStore;
   readonly pbiStore?: PbiStore;
   readonly pbiRelationStore?: PbiRelationStore;
   readonly fieldMappingStore?: FieldMappingStore;
   readonly releaseNoteStore?: ReleaseNoteStore;
   readonly runStore?: RunStore;
+  /** Where live updates are published; replace it when several API replicas share a workspace. */
+  readonly eventBus?: EventBus;
   /** Token usage reported by MCP clients; defaults to an in-memory ledger. */
   readonly usageStore?: UsageStore;
   readonly savedTestPlans?: SavedTestPlanStore;
@@ -203,6 +239,10 @@ export interface AppOptions {
   readonly e2eStore?: E2eStore;
   readonly e2eRunner?: E2eRunner;
   readonly e2eArtifacts?: E2eArtifactStore;
+  /** Where attachments and images are kept; defaults to the E2E artifact storage. */
+  readonly attachmentStore?: E2eArtifactStore;
+  /** Where E2E runs execute unless a run says otherwise: the user's computer or the ADK worker. */
+  readonly e2eDefaultExecution?: 'remote' | 'local';
   readonly e2eAuthor?: E2eAuthor;
   readonly e2eScripts?: E2eScriptRepository;
   readonly e2eQueue?: E2eJobQueue;
@@ -342,6 +382,8 @@ export function createApp(options: AppOptions = {}) {
   app.use(express.json({ limit: '1mb' }));
   app.use(modulePolicy);
   const e2eArtifacts = options.e2eArtifacts ?? new InMemoryE2eArtifactStore();
+  // Attachments and images have their own storage, apart from the E2E artifacts (videos, screenshots).
+  const attachmentStore = options.attachmentStore ?? e2eArtifacts;
   const agentRepository = options.agentRepository ?? new InMemoryAgentRepository();
   const agentService =
     options.agentService ??
@@ -363,7 +405,7 @@ export function createApp(options: AppOptions = {}) {
     });
 
   app.use(createAuditRouter(audit, contextResolver));
-  app.use(createAttachmentsRouter(e2eArtifacts, contextResolver, dynamicProviderFactory));
+  app.use(createAttachmentsRouter(attachmentStore, contextResolver, dynamicProviderFactory));
   app.use(createAuthRouter(authService, { accessTokens, ...options.authRouterOptions }));
   app.use(
     createWorkspacesRouter(workspaceService, contextResolver, (id, remove) =>
@@ -376,7 +418,7 @@ export function createApp(options: AppOptions = {}) {
       knowledgeRepository,
       dynamicProviderFactory,
       contextResolver,
-      e2eArtifacts,
+      attachmentStore,
     ),
   );
   const hubAgents = new HubAgentService(options.hubCatalog ?? new HttpHubCatalog(), agentService);
@@ -388,7 +430,9 @@ export function createApp(options: AppOptions = {}) {
   );
   const fieldMappings = options.fieldMappingStore ?? new InMemoryFieldMappingStore();
   app.use(createFieldMappingRouter(fieldMappings, contextResolver));
-  const runStore = options.runStore ?? new InMemoryRunStore();
+  // Runs tell the workspace's open streams whenever they change (Agent map, run flow).
+  const eventBus = options.eventBus ?? new InMemoryEventBus();
+  const runStore = new EventingRunStore(options.runStore ?? new InMemoryRunStore(), eventBus);
   const usageStore = options.usageStore ?? new InMemoryUsageStore();
   const briefService = new IssueBriefService({
     store: options.issueBriefStore ?? new InMemoryIssueBriefStore(),
@@ -399,14 +443,67 @@ export function createApp(options: AppOptions = {}) {
     usage: usageStore,
     knowledge: options.knowledgeSearch,
   });
+  // Notifications: events and rules say who to tell, channels say how (e-mail, Teams...).
+  const notificationChannels = new NotificationChannelRegistry([
+    new EmailNotificationChannel(options.emailSender ?? null),
+    ...(options.notificationChannels ?? []),
+  ]);
+  const notificationRules = options.notificationRules ?? new InMemoryNotificationRuleStore();
+  const notificationContacts =
+    options.notificationContacts ?? new InMemoryNotificationContactStore();
+  // Notifications are written down before they are sent, and a worker delivers (and retries) them,
+  // so a restart cannot lose one. The server starts its periodic look: app.locals.notificationWorker.
+  const notificationOutbox = options.notificationOutbox ?? new InMemoryNotificationOutbox();
+  const notificationWorker = new NotificationOutboxWorker({
+    outbox: notificationOutbox,
+    channels: notificationChannels,
+  });
+  app.locals['notificationWorker'] = notificationWorker;
+  const notifications = new NotificationService({
+    outbox: notificationOutbox,
+    onQueued: () => notificationWorker.kick(),
+    channels: notificationChannels,
+    rules: notificationRules,
+    directory: {
+      find: async (workspaceId, userId) => {
+        const member = await workspaceService.memberContact(workspaceId, userId);
+        if (!member) return null;
+        const addresses = await notificationContacts.forUser(workspaceId, userId);
+        return {
+          userId: member.id,
+          name: member.name,
+          email: member.email,
+          ...(Object.keys(addresses).length ? { addresses } : {}),
+        };
+      },
+    },
+    workspaceName: (workspaceId) => workspaceService.workspaceName(workspaceId),
+    ...(options.frontendUrl ? { appUrl: options.frontendUrl } : {}),
+  });
+  app.use(
+    createNotificationsRouter(
+      {
+        service: notifications,
+        rules: notificationRules,
+        contacts: notificationContacts,
+        people: (workspaceId, query) => workspaceService.searchMemberContacts(workspaceId, query),
+        channels: notificationChannels,
+        issues: issueStore,
+        isMember: async (workspaceId, userId) =>
+          (await workspaceService.memberContact(workspaceId, userId)) !== null,
+      },
+      contextResolver,
+    ),
+  );
   const runService = new RunService(
     runStore,
     issueStore,
     agentService,
     pbiStore,
     usageStore,
-    e2eArtifacts,
+    attachmentStore,
     briefService,
+    notifications,
   );
   void runService
     .recover()
@@ -418,8 +515,10 @@ export function createApp(options: AppOptions = {}) {
       workspaceService,
       runService,
       contextResolver,
-      e2eArtifacts,
+      attachmentStore,
       briefService,
+      eventBus,
+      notifications,
     ),
   );
   app.use(
@@ -438,13 +537,13 @@ export function createApp(options: AppOptions = {}) {
         options.pbiRelationStore ?? new InMemoryPbiRelationStore(),
         fieldMappings,
         cache,
-        e2eArtifacts,
+        attachmentStore,
       ),
       issueStore,
       runService,
       contextResolver,
       workspaceService,
-      e2eArtifacts,
+      attachmentStore,
     ),
   );
   app.use(
@@ -513,6 +612,7 @@ export function createApp(options: AppOptions = {}) {
     e2eDispatcher = new LocalE2eDispatcher(worker);
   }
   const e2eService = new E2eService({
+    defaultExecutionTarget: options.e2eDefaultExecution ?? 'remote',
     store: e2eStore,
     queue: e2eQueue,
     dispatcher: e2eDispatcher,
@@ -527,16 +627,13 @@ export function createApp(options: AppOptions = {}) {
   void e2eService
     .recover()
     .catch((error: unknown) => console.error('[E2eService] Recovery failed:', error));
-  app.use(createE2eRouter(e2eService, contextResolver));
-  app.use(
-    createE2eRunnerRouter(
-      new E2eLocalRunnerService({
-        tasks: e2eRunnerTasks,
-        artifacts: e2eArtifacts,
-        store: e2eStore,
-      }),
-    ),
-  );
+  const localRunners = new E2eLocalRunnerService({
+    tasks: e2eRunnerTasks,
+    artifacts: e2eArtifacts,
+    store: e2eStore,
+  });
+  app.use(createE2eRouter(e2eService, contextResolver, localRunners));
+  app.use(createE2eRunnerRouter(localRunners));
   const specRepository = audited.specs;
   let apiTestDispatcher = options.apiTestDispatcher;
   const apiTestService = new ApiTestService({
@@ -574,14 +671,14 @@ export function createApp(options: AppOptions = {}) {
   const specCollaborator = new AgentSpecCollaborator(agentService);
   app.use(
     createSpecRouter(
-      new SpecService(specRepository, specCollaborator, e2eArtifacts),
+      new SpecService(specRepository, specCollaborator, attachmentStore),
       contextResolver,
-      e2eArtifacts,
+      attachmentStore,
     ),
   );
   app.use(
     createSpecWorkflowRouter(
-      new SpecWorkflows(specRepository, knowledgeRepository, specCollaborator, e2eArtifacts),
+      new SpecWorkflows(specRepository, knowledgeRepository, specCollaborator, attachmentStore),
     ),
   );
   app.use(
@@ -594,7 +691,7 @@ export function createApp(options: AppOptions = {}) {
       dynamicProviderFactory,
       fieldMappings,
       testManagement,
-      e2eArtifacts,
+      attachmentStore,
     ),
   );
 
@@ -608,7 +705,10 @@ export function createApp(options: AppOptions = {}) {
   // What this server can do that the web app adapts to. Public: it describes the install only.
   app.get('/capabilities', (_request, response) => {
     // A local install with host access: runs on the ADK workers reach the user's localhost.
-    response.status(200).json({ workersReachLocalhost: Boolean(options.hostAlias) });
+    response.status(200).json({
+      workersReachLocalhost: Boolean(options.hostAlias),
+      defaultExecutionTarget: options.e2eDefaultExecution ?? 'remote',
+    });
   });
 
   app.get('/health/live', (_request, response) => {

@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AdkApiError } from '../src/api/http-client.js';
 import { ToolRegistry } from '../src/core/registry.js';
@@ -126,14 +129,42 @@ const cases: Record<string, [unknown, string]> = {
   issues_update: [{ issueId: 'i1', title: 'Fix bug' }, 'PATCH /issues/i1'],
   issues_delete: [{ issueId: 'i1' }, 'DELETE /issues/i1'],
   issues_comment: [{ issueId: 'i1', body: 'Working on it' }, 'POST /issues/i1/comments'],
+  issues_attach_file: [
+    { issueId: 'i1', name: 'review.html', text: '<html></html>' },
+    'POST /attachments/files',
+  ],
+  issues_report_step: [{ runId: 'r1', nodeId: 'triage', status: 'started' }, 'POST /runs/r1/steps'],
+  notifications_list_channels: [{}, 'GET /notifications/channels'],
+  notifications_list_events: [{}, 'GET /notifications/events'],
+  notifications_list_rules: [{}, 'GET /notifications/rules'],
+  notifications_save_rule: [
+    {
+      name: 'Tell the assignee',
+      event: 'issue.assigned',
+      channels: ['email'],
+      notifySubject: true,
+    },
+    'POST /notifications/rules',
+  ],
+  notifications_delete_rule: [{ ruleId: 'n1' }, 'DELETE /notifications/rules/n1'],
+  notifications_send: [
+    {
+      issueId: '11111111-1111-4111-8111-111111111111',
+      channels: ['email'],
+      subject: 'Done',
+      message: 'It is done.',
+    },
+    'POST /notifications/send',
+  ],
+  notifications_test: [{ channel: 'email' }, 'POST /notifications/test'],
   issues_brief_get: [{ issueId: 'i1' }, 'GET /issues/i1/brief'],
   issues_brief_update: [
-    { issueId: 'i1', edits: { considerations: ['Check the cache'] } },
+    { issueId: 'i1', considerations: ['Keep the API stable'] },
     'PUT /issues/i1/brief',
   ],
-  issues_brief_regenerate: [{ issueId: 'i1' }, 'POST /issues/i1/brief/regenerate'],
-  work_item_types_get: [{}, 'GET /work-item-types'],
-  work_item_types_save: [
+  issues_brief_regenerate: [{ issueId: 'i1', force: true }, 'POST /issues/i1/brief/regenerate'],
+  pbi_work_item_types_get: [{}, 'GET /work-item-types'],
+  pbi_work_item_types_save: [
     { types: [{ key: 'bug', label: 'Bug', color: 'red', icon: 'bug' }] },
     'PUT /work-item-types',
   ],
@@ -395,7 +426,6 @@ const cases: Record<string, [unknown, string]> = {
   release_notes_prepare: [{ title: 'R', itemIds: ['50086'] }, 'GET /pbi/items/50086'],
   release_notes_export_markdown: [{ releaseNoteId: 'rn1' }, 'GET /release-notes/rn1/export'],
   integration_list_collections: [{}, 'GET /integration-tests/collections'],
-  integration_list_dynamic_values: [{}, 'GET /integration-tests/dynamic-values'],
   integration_get_collection: [{ collectionId: 'c1' }, 'GET /integration-tests/collections/c1'],
   integration_save_collection: [
     { collection: { name: 'API' } },
@@ -552,6 +582,52 @@ describe('remote E2E tunnel', () => {
     const switched = await call('e2e_set_execution', { runId: 'c1', executionTarget: 'local' });
     expect(switched.api.calls[0]?.body).toEqual({ executionTarget: 'local' });
   });
+
+  describe('when the run does not choose where it executes', () => {
+    const create = (setup: ReturnType<typeof fakeContext>) =>
+      call(
+        'e2e_create',
+        {
+          ...(cases['e2e_create']![0] as Record<string, unknown>),
+          baseUrl: 'http://localhost:8014',
+        },
+        setup,
+      );
+
+    it('accepts localhost when the workspace default is the user computer', async () => {
+      const setup = fakeContext();
+      setup.api.on('GET /capabilities', () => ({ defaultExecutionTarget: 'local' }));
+      const { api } = await create(setup);
+      expect(api.calls.map((request) => `${request.method} ${request.path}`)).toEqual([
+        'GET /capabilities',
+        'POST /e2e/creations',
+      ]);
+      expect(api.calls[0]).toMatchObject({ withoutWorkspace: true });
+      // The server applies the default itself: the tool does not send one.
+      expect(api.calls[1]!.body).not.toHaveProperty('executionTarget');
+    });
+
+    it('still rejects localhost when the default is the ADK worker, or is unknown', async () => {
+      const remote = fakeContext();
+      remote.api.on('GET /capabilities', () => ({ defaultExecutionTarget: 'remote' }));
+      await expect(create(remote)).rejects.toThrow('e2e_tunnel_setup');
+
+      const old = fakeContext();
+      old.api.on('GET /capabilities', () => ({ workersReachLocalhost: false }));
+      await expect(create(old)).rejects.toThrow('e2e_tunnel_setup');
+
+      const down = fakeContext();
+      down.api.on('GET /capabilities', () => {
+        throw new Error('unreachable');
+      });
+      await expect(create(down)).rejects.toThrow('e2e_tunnel_setup');
+    });
+
+    it('does not ask for the default when the URL is public', async () => {
+      const { api } = await call('e2e_create', cases['e2e_create']![0]);
+      expect(api.calls.some((request) => request.path === '/capabilities')).toBe(false);
+    });
+  });
 });
 
 describe('Brain publishing tools', () => {
@@ -603,6 +679,319 @@ describe('issue host runs', () => {
       expect(data.agentInstructions).toBe('Cover edge cases.');
       expect(data.task).toContain('Review PBI.');
     }
+  });
+});
+
+describe('notification tools', () => {
+  const ANA = '11111111-1111-4111-8111-111111111111';
+
+  it('turns "tell the assignee" into a rule with its recipients', async () => {
+    const { api } = await call('notifications_save_rule', {
+      name: 'Tell the assignee',
+      event: 'issue.assigned',
+      channels: ['email'],
+      notifySubject: true,
+      userIds: [ANA],
+      subject: 'New task: {{issue.title}}',
+    });
+    expect(api.calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/notifications/rules',
+      body: {
+        name: 'Tell the assignee',
+        event: 'issue.assigned',
+        channels: ['email'],
+        enabled: true,
+        subject: 'New task: {{issue.title}}',
+        message: '',
+        recipients: { subject: true, userIds: [ANA] },
+      },
+    });
+    // The recipients are the nested field the API expects, not loose top-level ones.
+    expect(api.calls[0]!.body).not.toHaveProperty('notifySubject');
+    expect(api.calls[0]!.body).not.toHaveProperty('userIds');
+  });
+
+  it('replaces the rule it is given, and tells nobody by default', async () => {
+    const { api } = await call('notifications_save_rule', {
+      ruleId: 'n1',
+      name: 'Only Ana',
+      event: 'issue.proofreader_assigned',
+      channels: ['email'],
+      userIds: [ANA],
+      enabled: false,
+    });
+    expect(api.calls[0]).toMatchObject({
+      method: 'PUT',
+      path: '/notifications/rules/n1',
+      body: { enabled: false, recipients: { subject: false, userIds: [ANA] } },
+    });
+  });
+
+  it('sends a message about an issue, as the notify action of a workflow does', async () => {
+    const { api } = await call('notifications_send', {
+      issueId: ANA,
+      channels: ['email'],
+      roles: ['proofreader'],
+      subject: 'Review',
+      message: 'Please review {{issue.title}}',
+    });
+    expect(api.calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/notifications/send',
+      body: { roles: ['proofreader'], userIds: [], channels: ['email'] },
+    });
+  });
+
+  it('marks deleting a rule as destructive and the others as safe to confirm', () => {
+    const access = (name: string) => registry.find(name)!.access;
+    expect(access('notifications_delete_rule')).toBe('destructive');
+    expect(access('notifications_list_rules')).toBe('read');
+    expect(access('notifications_save_rule')).toBe('write');
+    expect(registry.find('notifications_send')!.toolset).toBe('notifications');
+  });
+
+  it('accepts the notifications module as the action of a workflow node', async () => {
+    const { api } = await call('agents_workflow_update', {
+      enabled: true,
+      steps: [],
+      canvas: {
+        nodes: [
+          { id: 'start', kind: 'trigger', x: 0, y: 0 },
+          {
+            id: 'tell',
+            kind: 'action',
+            x: 1,
+            y: 0,
+            action: {
+              toolset: 'notifications',
+              toolName: 'notifications_send',
+              notification: { channels: ['email'], roles: ['assignee'] },
+            },
+          },
+        ],
+        edges: [{ id: 'e1', from: 'start', to: 'tell' }],
+      },
+    });
+    expect(api.calls[0]!.body).toMatchObject({
+      canvas: {
+        nodes: [
+          expect.anything(),
+          {
+            action: {
+              toolset: 'notifications',
+              notification: {
+                channels: ['email'],
+                userIds: [],
+                roles: ['assignee'],
+                subject: '',
+                message: '',
+              },
+            },
+          },
+        ],
+      },
+    });
+  });
+});
+
+describe('issues_report_step', () => {
+  it('sends the report and answers with the position of the run only', async () => {
+    const setup = fakeContext();
+    setup.api.on('POST /runs/r1/steps', () => ({
+      run: {
+        id: 'r1',
+        status: 'running',
+        workflowState: {
+          currentStepIndex: 1,
+          currentNodeId: 'cond',
+          results: [{ stepId: 'triage', output: 'long output' }],
+          steps: [{ id: 'triage', instructions: 'Long instructions' }],
+        },
+      },
+    }));
+    const { data, api } = await call(
+      'issues_report_step',
+      { runId: 'r1', nodeId: 'triage', status: 'completed', summary: 'NÍVEL: COMPLEXO' },
+      setup,
+    );
+    expect(api.calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/runs/r1/steps',
+      body: { nodeId: 'triage', status: 'completed', summary: 'NÍVEL: COMPLEXO' },
+    });
+    expect(data).toEqual({
+      runId: 'r1',
+      status: 'running',
+      currentStepIndex: 1,
+      currentNodeId: 'cond',
+      completed: ['triage'],
+    });
+  });
+
+  it('copes with a run that has no workflow state', async () => {
+    const setup = fakeContext();
+    setup.api.on('POST /runs/r1/steps', () => ({
+      run: { id: 'r1', status: 'running', workflowState: null },
+    }));
+    const { data } = await call(
+      'issues_report_step',
+      { runId: 'r1', nodeId: 'x', status: 'started' },
+      setup,
+    );
+    expect(data).toMatchObject({ currentNodeId: null, completed: [] });
+  });
+
+  it('asks the host model to report steps only when a workflow is active', async () => {
+    for (const enabled of [true, false]) {
+      const setup = fakeContext();
+      setup.api.on('GET /agents/workflow', () => ({
+        workflow: { ...fixtures.workflow, enabled },
+      }));
+      setup.api.on('POST /issues', () => ({
+        issue: { id: 'i1', status: 'in_progress' },
+        run: { id: 'r1', agentId: 'a1', prompt: 'Work.' },
+      }));
+      const { data } = await call('issues_create', { title: 'Task' }, setup);
+      const rules = (data.rules as string[]).join(' ');
+      expect(rules.includes('issues_report_step')).toBe(enabled);
+    }
+  });
+});
+
+describe('issues_attach_file', () => {
+  const routes = (api: { calls: { method: string; path: string }[] }) =>
+    api.calls.map((request) => `${request.method} ${request.path}`);
+
+  it('uploads the bytes untouched and adds the file to the existing attachments', async () => {
+    const setup = fakeContext();
+    const existing = { id: 'old', name: 'shot.png', source: 'adk', url: '/attachments/files/old' };
+    setup.api.on('GET /issues/i1', () => ({ issue: { id: 'i1', attachments: [existing] } }));
+    const { data, api } = await call(
+      'issues_attach_file',
+      { issueId: 'i1', name: 'dir\\review.html', text: '<h1>Olá</h1>' },
+      setup,
+    );
+
+    const upload = api.calls[0]!;
+    expect(upload).toMatchObject({
+      method: 'POST',
+      path: '/attachments/files',
+      query: { scope: 'issue', name: 'review.html' },
+    });
+    expect(Buffer.from(upload.rawBody!.data).toString('utf8')).toBe('<h1>Olá</h1>');
+    expect(upload.rawBody!.contentType).toBe('application/octet-stream');
+    expect(upload.timeoutMs).toBeGreaterThan(180_000);
+    expect(routes(api)).toEqual(['POST /attachments/files', 'GET /issues/i1', 'PATCH /issues/i1']);
+    const patch = api.calls[2]!.body as { attachments: { id: string }[] };
+    expect(patch.attachments.map((item) => item.id)).toEqual(['old', 'f1']);
+    expect(data.attachmentCount).toBe(2);
+    expect(data.attachment.id).toBe('f1');
+  });
+
+  it('accepts base64 content, with or without a data URL prefix', async () => {
+    const bytes = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d]); // %PDF-
+    for (const contentBase64 of [
+      bytes.toString('base64'),
+      `data:application/pdf;base64,${bytes.toString('base64')}`,
+    ]) {
+      const { api } = await call('issues_attach_file', {
+        issueId: 'i1',
+        name: 'a.pdf',
+        contentBase64,
+      });
+      expect(Buffer.from(api.calls[0]!.rawBody!.data)).toEqual(bytes);
+    }
+  });
+
+  it('reads a local file only when the server runs on the user computer', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'adk-attach-'));
+    try {
+      const path = join(dir, 'notes.md');
+      await writeFile(path, '# Notes');
+      const hosted = fakeContext();
+      await expect(
+        call('issues_attach_file', { issueId: 'i1', name: 'notes.md', filePath: path }, hosted),
+      ).rejects.toThrow(/runs on your computer/);
+      expect(hosted.api.calls).toEqual([]);
+
+      const base = fakeContext();
+      const local = { ...base, context: { ...base.context, allowLocalFiles: true } };
+      const { api } = await call(
+        'issues_attach_file',
+        { issueId: 'i1', name: 'notes.md', filePath: path },
+        local,
+      );
+      expect(Buffer.from(api.calls[0]!.rawBody!.data).toString('utf8')).toBe('# Notes');
+
+      await expect(
+        call('issues_attach_file', { issueId: 'i1', name: 'x.md', filePath: dir }, local),
+      ).rejects.toThrow(/Not a readable file/);
+      await expect(
+        call(
+          'issues_attach_file',
+          { issueId: 'i1', name: 'x.md', filePath: join(dir, 'nope') },
+          local,
+        ),
+      ).rejects.toThrow(/Not a readable file/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('needs exactly one content source and a valid payload', async () => {
+    for (const input of [
+      { issueId: 'i1', name: 'a.txt' },
+      { issueId: 'i1', name: 'a.txt', text: 'a', contentBase64: 'YQ==' },
+    ]) {
+      await expect(call('issues_attach_file', input)).rejects.toThrow(/exactly one/);
+    }
+    await expect(
+      call('issues_attach_file', { issueId: 'i1', name: 'a.bin', contentBase64: '***' }),
+    ).rejects.toThrow(/not valid/);
+    await expect(
+      call('issues_attach_file', { issueId: 'i1', name: 'a.bin', contentBase64: '=' }),
+    ).rejects.toThrow();
+  });
+
+  it('discards the upload when the issue cannot take the file', async () => {
+    const setup = fakeContext();
+    setup.api.on('PATCH /issues/i1', () => {
+      throw new AdkApiError(400, 'VALIDATION_ERROR', 'An item can have up to 20 attachments.');
+    });
+    await expect(
+      call('issues_attach_file', { issueId: 'i1', name: 'a.txt', text: 'a' }, setup),
+    ).rejects.toThrow(/20 attachments/);
+    expect(routes(setup.api)).toEqual([
+      'POST /attachments/files',
+      'GET /issues/i1',
+      'PATCH /issues/i1',
+      'DELETE /attachments/files/f1',
+    ]);
+  });
+
+  it('still reports the original failure when the cleanup fails too', async () => {
+    const setup = fakeContext();
+    setup.api.on('GET /issues/i1', () => {
+      throw new AdkApiError(404, 'NOT_FOUND', 'Issue not found.');
+    });
+    setup.api.on('DELETE /attachments/files/f1', () => {
+      throw new AdkApiError(500, 'BOOM', 'cleanup failed');
+    });
+    await expect(
+      call('issues_attach_file', { issueId: 'i1', name: 'a.txt', text: 'a' }, setup),
+    ).rejects.toThrow(/Issue not found/);
+  });
+
+  it('treats an issue without attachments as an empty list', async () => {
+    const setup = fakeContext();
+    setup.api.on('GET /issues/i1', () => ({ issue: { id: 'i1' } }));
+    const { data } = await call(
+      'issues_attach_file',
+      { issueId: 'i1', name: 'a.txt', text: 'a' },
+      setup,
+    );
+    expect(data.attachmentCount).toBe(1);
   });
 });
 

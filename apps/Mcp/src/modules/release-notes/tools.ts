@@ -43,6 +43,15 @@ const itemRefs = z
   .min(1)
   .max(MAX_ITEMS)
   .describe('Delivered work items (PBIs, tasks, bugs, cards). Find them with pbi_list.');
+// create/update accept up to 500 items (and an empty list); generation is capped at 300.
+const savedItemRefs = z
+  .array(
+    id(
+      'Internal PBI/card UUID, Azure DevOps work item number (e.g. 50086), or provider:externalId (e.g. azure_devops:50086).',
+    ),
+  )
+  .max(500)
+  .describe('Work items the release note covers. Replaces the current list when updating.');
 const title = z.string().trim().min(1).max(240).describe('Release note title.');
 const version = z.string().trim().max(100).optional().describe('Version label, e.g. 1.4.0.');
 const content = z.string().max(200000).describe('Release note body in Markdown.');
@@ -143,7 +152,7 @@ export const releaseNotesModule: McpModule = {
       toolset: 'releasenotes',
       access: 'write',
       routes: ['POST /release-notes'],
-      input: { title, version, content, itemIds: itemRefs.optional() },
+      input: { title, version, content: content.optional(), itemIds: savedItemRefs.optional() },
       run: async ({ itemIds, ...body }, { api }) =>
         json(
           await api.request({
@@ -157,7 +166,7 @@ export const releaseNotesModule: McpModule = {
       name: 'release_notes_update',
       title: 'Update release note',
       description:
-        'Edits the title, version or Markdown body of a release note. The change is recorded in its history.',
+        'Edits the title, version, Markdown body or covered items of a release note. The change is recorded in its history.',
       toolset: 'releasenotes',
       access: 'write',
       routes: ['PATCH /release-notes/:id'],
@@ -166,10 +175,15 @@ export const releaseNotesModule: McpModule = {
         title: title.optional(),
         version,
         content: content.optional(),
+        itemIds: savedItemRefs.optional(),
       },
-      run: async ({ releaseNoteId: target, ...body }, { api }) =>
+      run: async ({ releaseNoteId: target, itemIds, ...body }, { api }) =>
         json(
-          await api.request({ method: 'PATCH', path: `/release-notes/${segment(target)}`, body }),
+          await api.request({
+            method: 'PATCH',
+            path: `/release-notes/${segment(target)}`,
+            body: { ...body, ...(itemIds ? { itemIds: await resolveItemIds(api, itemIds) } : {}) },
+          }),
         ),
     }),
     defineTool({

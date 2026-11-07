@@ -27,11 +27,34 @@ import { localOrigin, quickTunnelCommand } from './tunnel-command.js';
 const provider = z
   .enum(['github', 'azure_devops'])
   .describe('Where the Playwright scripts live: github or azure_devops.');
+/** The backend adds `warnings` to a local run that starts while no runner of the user is online. */
+const RUNNER_NOTICE =
+  'When the answer has warnings with code NO_LOCAL_RUNNER, no `devkit runner` is connected: the run is queued and waits up to five minutes. Tell the user to start it (devkit login and devkit e2e setup once, then keep devkit runner open) instead of reporting the run as started.';
 const SECRET_NOTICE =
   'Values typed in chat are sent to the model provider; prefer a dedicated test account. The password is stored encrypted and never returned.';
 
+/** Where the server runs a run that does not say: the workspace default, "remote" if unknown. */
+async function resolveTarget(
+  api: AdkApi,
+  executionTarget?: 'remote' | 'local',
+): Promise<'remote' | 'local'> {
+  if (executionTarget) return executionTarget;
+  try {
+    const { defaultExecutionTarget } = await api.request<{
+      defaultExecutionTarget?: 'remote' | 'local';
+    }>({ method: 'GET', path: '/capabilities', withoutWorkspace: true });
+    return defaultExecutionTarget === 'local' ? 'local' : 'remote';
+  } catch {
+    return 'remote';
+  }
+}
+
 /** Localhost is only reachable when the user's own computer runs the browser. */
-function requireReachableUrl(baseUrl: string, executionTarget?: 'remote' | 'local'): string {
+async function requireReachableUrl(
+  api: AdkApi,
+  baseUrl: string,
+  executionTarget?: 'remote' | 'local',
+): Promise<string> {
   if (executionTarget === 'local') return baseUrl;
   let url: URL;
   try {
@@ -40,6 +63,8 @@ function requireReachableUrl(baseUrl: string, executionTarget?: 'remote' | 'loca
     return baseUrl;
   }
   if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname.toLowerCase())) return baseUrl;
+  // Only a localhost URL depends on where the run executes: ask for the default only then.
+  if ((await resolveTarget(api, executionTarget)) === 'local') return baseUrl;
   throw new Error(
     'The ADK MCP server and E2E worker run on Railway, so localhost cannot reach your computer. Either set executionTarget "local" so the user\'s `devkit runner` runs the browser on their computer, or run e2e_tunnel_setup and pass the public HTTPS URL as baseUrl.',
   );
@@ -48,7 +73,7 @@ function requireReachableUrl(baseUrl: string, executionTarget?: 'remote' | 'loca
 const executionTarget = z
   .enum(['remote', 'local'])
   .describe(
-    'remote: the ADK worker runs the browser (the app must be publicly reachable). local: the browser runs on the computer of the user who starts the run, through `devkit runner` (outbound HTTPS only, no tunnel), so localhost URLs work; AI planning, healing and results stay in ADK.',
+    'Omit it to use the workspace default (E2E_DEFAULT_EXECUTION, "remote" unless set). remote: the ADK worker runs the browser (the app must be publicly reachable). local: the browser runs on the computer of the user who starts the run, through `devkit runner` (outbound HTTPS only, no tunnel), so localhost URLs work; AI planning, healing and results stay in ADK.',
   );
 
 /** Settings shared by creating and editing a run. */
@@ -105,7 +130,11 @@ const runSettings = {
     .min(1)
     .max(500_000)
     .describe('Product document: features, flows and business rules. A draft is enough.'),
-  prdFileNames: z.array(z.string().trim().min(1).max(255)).max(20).optional(),
+  prdFileNames: z
+    .array(z.string().trim().min(1).max(255))
+    .max(20)
+    .optional()
+    .describe('Names of the files the product document came from (display only).'),
   diff: z.string().max(500_000).optional().describe('Unified diff, required when scope is diff.'),
   instructions: z
     .string()
@@ -340,7 +369,7 @@ export const e2eModule: McpModule = {
       name: 'e2e_create',
       openWorld: true,
       title: 'Create E2E run',
-      description: `Creates an E2E run that tests the application with Playwright scripts committed to the chosen repository, runs each test on the ADK worker and records a video. With planning "host" (default, no API key needed) the run waits as a draft: call e2e_prepare, write the test cases and specs yourself and save them with e2e_save_plan. With planning "server" the workspace LLM plans and writes everything (needs an LLM integration in ADK). To automate cases kept on a test management platform (Azure Test Plans, TestRail, Xray) pass importCases (prd becomes optional): each case becomes a test whose spec has one top-level test.step per case step, and the results with step screenshots are published back to the same plan/suite unless reporting says otherwise. To automate test cases already saved in ADK (a local suite, Test Plan or chosen cases, e.g. imported with testplans_import_cases) pass savedCases instead. ${QUEUE_NOTICE} For an app on the user's localhost, prefer executionTarget "local" (the user's devkit runner runs the browser on their computer; check e2e_list_runners); otherwise call e2e_tunnel_setup and pass the tunnel URL as baseUrl and the localhost origin as localOrigin. ${SECRET_NOTICE}`,
+      description: `Creates an E2E run that tests the application with Playwright scripts committed to the chosen repository, runs each test on the ADK worker and records a video. With planning "host" (default, no API key needed) the run waits as a draft: call e2e_prepare, write the test cases and specs yourself and save them with e2e_save_plan. With planning "server" the workspace LLM plans and writes everything (needs an LLM integration in ADK). To automate cases kept on a test management platform (Azure Test Plans, TestRail, Xray) pass importCases (prd becomes optional): each case becomes a test whose spec has one top-level test.step per case step, and the results with step screenshots are published back to the same plan/suite unless reporting says otherwise. To automate test cases already saved in ADK (a local suite, Test Plan or chosen cases, e.g. imported with testplans_import_cases) pass savedCases instead. ${QUEUE_NOTICE} For an app on the user's localhost, prefer executionTarget "local" (the user's devkit runner runs the browser on their computer; check e2e_list_runners); otherwise call e2e_tunnel_setup and pass the tunnel URL as baseUrl and the localhost origin as localOrigin. ${RUNNER_NOTICE} ${SECRET_NOTICE}`,
       toolset: 'e2e',
       access: 'write',
       routes: ['POST /e2e/creations'],
@@ -408,7 +437,10 @@ export const e2eModule: McpModule = {
           await context.api.request({
             method: 'POST',
             path: '/e2e/creations',
-            body: { ...body, baseUrl: requireReachableUrl(body.baseUrl, body.executionTarget) },
+            body: {
+              ...body,
+              baseUrl: await requireReachableUrl(context.api, body.baseUrl, body.executionTarget),
+            },
           }),
         );
       },
@@ -427,7 +459,10 @@ export const e2eModule: McpModule = {
           await context.api.request({
             method: 'PUT',
             path: runPath(value),
-            body: { ...body, baseUrl: requireReachableUrl(body.baseUrl, body.executionTarget) },
+            body: {
+              ...body,
+              baseUrl: await requireReachableUrl(context.api, body.baseUrl, body.executionTarget),
+            },
           }),
         ),
     }),
@@ -435,7 +470,8 @@ export const e2eModule: McpModule = {
       name: 'e2e_set_execution',
       title: 'Run E2E locally or on ADK',
       description:
-        'Switches an idle E2E run between the ADK worker (remote) and the computer of the user who starts it (local, through `devkit runner`). Going local, a tunnel run targets its localhost origin directly and the tunnel token is removed. Check that the user has a runner online with e2e_list_runners before running a local run.',
+        'Switches an idle E2E run between the ADK worker (remote) and the computer of the user who starts it (local, through `devkit runner`). Going local, a tunnel run targets its localhost origin directly and the tunnel token is removed. Check that the user has a runner online with e2e_list_runners before running a local run. ' +
+        RUNNER_NOTICE,
       toolset: 'e2e',
       access: 'write',
       routes: ['PUT /e2e/creations/:id/execution'],

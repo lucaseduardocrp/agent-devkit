@@ -150,7 +150,27 @@ function defaultResponse(request: ApiRequest): unknown {
     'GET /TestPlan/search': fixtures.chunks,
     'GET /agents/a1': { agent: fixtures.agent },
     'GET /agents/workflow': { workflow: fixtures.workflow },
+    'GET /issues/i1': { issue: { id: 'i1', attachments: [] }, comments: [] },
+    'POST /attachments/files': {
+      attachment: {
+        id: 'f1',
+        name: 'review.html',
+        kind: 'document',
+        mimeType: 'text/html',
+        size: 13,
+        scope: 'issue',
+        source: 'adk',
+        url: '/attachments/files/f1',
+      },
+    },
     'POST /issues/i1/runs': { run: { id: 'r1', agentId: 'a1', prompt: 'Review issue' } },
+    'POST /runs/r1/steps': {
+      run: {
+        id: 'r1',
+        status: 'running',
+        workflowState: { currentStepIndex: 0, results: [] },
+      },
+    },
     'POST /runs/r1/checkout': { run: { id: 'r1', agentId: 'a1', prompt: 'Review issue' } },
     'GET /spec/specifications': fixtures.specs,
     'GET /spec/templates': fixtures.templates,

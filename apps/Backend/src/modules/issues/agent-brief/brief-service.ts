@@ -37,6 +37,8 @@ const USAGE_WINDOW_DAYS = 30;
 const MAX_CHILDREN = 5;
 const MAX_SIBLINGS = 4;
 const MAX_BRAIN_PAGES = 3;
+/** Characters of the matching passage kept with a Brain reference. */
+const MAX_EXCERPT = 1000;
 /** Local runtimes cost nothing per token. */
 const LOCAL_PROVIDERS = new Set(['ollama']);
 
@@ -247,6 +249,7 @@ export class IssueBriefService {
             label: chunk.source,
             ref: chunk.pageId,
             reason: 'Brain page that matches this issue.',
+            excerpt: chunk.content.slice(0, MAX_EXCERPT),
           });
       }
       return [...pages.values()];
@@ -257,12 +260,34 @@ export class IssueBriefService {
   }
 }
 
+/**
+ * What a host agent (an MCP client running on the user's own model) does before the work: the
+ * recommended model is only a suggestion it cannot apply itself, so it asks the user once, unless
+ * the client already runs on it, and leaves the choice in the result.
+ */
+export function modelCheck(brief: IssueAgentBrief): string[] {
+  const { provider, model, effort } = brief.recommendation;
+  // Nothing is recommended, or the recommendation is the host client itself.
+  if (!model || provider === 'mcp') return [];
+  const recommended = `${provider}/${model}, effort ${effort}`;
+  return [
+    'Model check (do this before any work):',
+    `- Recommended for this issue: ${recommended}.`,
+    '- If you already run on this model with this effort, do not ask anything: carry out the work.',
+    `- Otherwise ask the user ONE question and wait: switch to ${recommended}, or continue with the model and effort currently selected. Name both options.`,
+    '- If the user continues with the current model, carry out the work and add this note to the issue comment and to your result: "Note: run with <current model / effort> instead of the recommended ' +
+      recommended +
+      '."',
+  ];
+}
+
 /** The part of a brief a running agent needs, as text appended to its prompt. */
-export function briefRunContext(brief: IssueAgentBrief): string {
+export function briefRunContext(brief: IssueAgentBrief, options: { host?: boolean } = {}): string {
   const reads = brief.readFirst.map(
     (item, index) => `${index + 1}. [${item.kind}] ${item.label} (${item.ref}) - ${item.reason}`,
   );
   const lines = [
+    ...(options.host ? [...modelCheck(brief), ''] : []),
     `Execution brief (${brief.complexity.level}, effort ${brief.recommendation.effort}):`,
     ...(reads.length ? ['Read first, in this order:', ...reads] : []),
     'Constraints:',

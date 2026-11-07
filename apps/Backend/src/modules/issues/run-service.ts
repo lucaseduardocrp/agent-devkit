@@ -25,6 +25,8 @@ import type {
   WorkflowRunState,
   WorkflowRunStepResult,
 } from './run-store.js';
+import type { AgentWorkflowNotificationConfig } from '../agents/domain/agent-workflow.js';
+import type { NotificationService } from '../notifications/application/notification-service.js';
 import type { PbiStore } from '../pbi/pbi-store.js';
 import type { E2eArtifactStore } from '../e2e/application/artifact-store.js';
 import {
@@ -97,6 +99,46 @@ export interface UsageInput {
   estimated: boolean;
 }
 
+/** Provider whose rates price the host model behind each MCP client. */
+const MCP_CLIENT_PROVIDERS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/claude/i, 'anthropic'],
+  [/codex|openai|gpt/i, 'openai'],
+  [/gemini/i, 'google'],
+];
+
+/**
+ * Prices a token count with the workspace rate table. MCP usage is reported as provider "mcp" and
+ * the client name, so without an explicit rate for that pair it falls back to the most expensive
+ * rate of the client's model provider (e.g. claude-code → anthropic). Overestimating keeps budgets
+ * safe; an exact "mcp" rate always wins.
+ */
+function priceUsage(
+  rates: readonly CostRate[],
+  provider: string,
+  model: string,
+  usage: { inputTokens: number; outputTokens: number },
+): number | null {
+  let rate = rates.find(
+    (item) => item.provider.toLowerCase() === provider.toLowerCase() && item.model === model,
+  );
+  if (!rate && provider.toLowerCase() === 'mcp') {
+    const modelProvider = MCP_CLIENT_PROVIDERS.find(([pattern]) => pattern.test(model))?.[1];
+    if (modelProvider)
+      rate = rates
+        .filter((item) => item.provider.toLowerCase() === modelProvider)
+        .sort(
+          (a, b) =>
+            b.outputUsdPerMillion - a.outputUsdPerMillion ||
+            b.inputUsdPerMillion - a.inputUsdPerMillion,
+        )[0];
+  }
+  if (!rate) return null;
+  const micros = Math.round(
+    usage.inputTokens * rate.inputUsdPerMillion + usage.outputTokens * rate.outputUsdPerMillion,
+  );
+  return Number.isSafeInteger(micros) && micros <= MAX_MICROS ? micros : null;
+}
+
 /** Current-month token usage reported by MCP clients (host model reading and writing tool data). */
 function summarizeMcpUsage(events: readonly LlmUsageEvent[]) {
   const tokens = (event: LlmUsageEvent) => event.inputTokens + event.outputTokens;
@@ -148,6 +190,7 @@ export class RunService {
     private readonly usage: UsageStore = new InMemoryUsageStore(),
     private readonly imageStore?: E2eArtifactStore,
     private readonly briefs?: Pick<IssueBriefService, 'get'>,
+    private readonly notifications?: Pick<NotificationService, 'sendForIssue'>,
   ) {}
 
   async recover(): Promise<void> {
@@ -192,7 +235,14 @@ export class RunService {
       this.usage.list(workspaceId, monthStart),
     ]);
     const monthly = runs.filter((run) => run.createdAt >= monthStart);
-    const mcpUsage = summarizeMcpUsage(monthUsage);
+    // Events recorded before a rate existed are priced now, so past MCP usage counts too.
+    const mcpUsage = summarizeMcpUsage(
+      monthUsage.map((event) =>
+        event.costMicros === null
+          ? { ...event, costMicros: priceUsage(rates, event.provider, event.model, event) }
+          : event,
+      ),
+    );
     // Totals cover agent runs and MCP usage so the dashboard reflects every token consumed.
     const totalInputTokens =
       runs.reduce((sum, run) => sum + (run.inputTokens ?? 0), 0) + usageTotals.inputTokens;
@@ -339,7 +389,8 @@ export class RunService {
       ? `\n\nThe latest user comment [${responseTo.id}] is a new request. Consider the issue, previous work and the full conversation. Carry out the requested work when possible. If clarification or a decision is needed, ask a specific question. Write a concise, direct reply to the user; the application will publish your answer as an issue comment. Do not claim changes you did not make.`
       : '\n\nProvide the work performed, result, and any remaining blockers. Do not claim external changes you did not make.';
     const brief = await this.briefs?.get(workspaceId, issue.id);
-    const briefContext = brief ? briefRunContext(brief) : '';
+    // Only a host (MCP) run uses the user's client model, so only it checks the recommended one.
+    const briefContext = brief ? briefRunContext(brief, { host: mode === 'host' }) : '';
     const prompt = `Work on issue #${issue.number}: ${issue.title}\n\n${issue.description}${pbiContext}${imageContext}${conversation}${briefContext}${instruction}`;
     // A flow is walked only when it has nodes the step list cannot express and a trigger wired to
     // them; anything else still runs as the plain ordered list of steps.
@@ -718,6 +769,7 @@ export class RunService {
       run,
       action.toolName,
       lastResultOutput(state.results),
+      action.notification,
     );
     const next: WorkflowRunState = {
       ...state,
@@ -742,7 +794,13 @@ export class RunService {
    * The module actions a server run performs itself. Every other tool belongs to the MCP server,
    * which the backend cannot call, so naming one fails the run instead of quietly skipping it.
    */
-  private async runModuleAction(run: AgentRun, toolName: string, input: string): Promise<string> {
+  private async runModuleAction(
+    run: AgentRun,
+    toolName: string,
+    input: string,
+    notification?: AgentWorkflowNotificationConfig,
+  ): Promise<string> {
+    if (toolName === 'notifications_send') return this.notifyFromFlow(run, input, notification);
     if (toolName === 'issues_comment') {
       await this.issues.addComment(
         run.issueId,
@@ -754,6 +812,45 @@ export class RunService {
     throw new Error(
       `A server run cannot call '${toolName}'. Run this flow from an MCP client, or replace the action node with a step.`,
     );
+  }
+
+  /**
+   * The `notifications_send` action: tells people about the issue of the run. A node without who
+   * or how fails the run like any unsupported action; a notification that could not be delivered
+   * does not, and the result of the node says how each one ended.
+   */
+  private async notifyFromFlow(
+    run: AgentRun,
+    previousOutput: string,
+    config?: AgentWorkflowNotificationConfig,
+  ): Promise<string> {
+    if (!this.notifications) throw new Error('Notifications are not available on this server.');
+    if (!config || config.channels.length === 0)
+      throw new Error('A notification node needs at least one channel.');
+    if (config.userIds.length === 0 && config.roles.length === 0)
+      throw new Error('A notification node needs people or roles to notify.');
+    const issue = await this.issues.get(run.workspaceId, run.issueId);
+    if (!issue) throw new Error('The issue of this run no longer exists.');
+    const fallback = 'Issue #{{issue.number}}: {{issue.title}}';
+    const results = await this.notifications.sendForIssue({
+      workspaceId: run.workspaceId,
+      actorId: run.actorId,
+      issue,
+      roles: config.roles,
+      userIds: config.userIds,
+      channels: config.channels,
+      subject: config.subject || fallback,
+      // The previous result is text, not a template: its braces must not be filled in.
+      message: config.message || previousOutput.replace(/{{/g, '{ {') || fallback,
+    });
+    if (results.length === 0) return 'No one to notify.';
+    const count = (status: string) => results.filter((result) => result.status === status).length;
+    const problems = [
+      ...new Set(results.flatMap((result) => (result.reason ? [result.reason] : []))),
+    ];
+    return `Notified: ${count('sent')} sent, ${count('queued')} queued, ${count('failed')} failed, ${count('skipped')} skipped${
+      problems.length ? ` (${problems.join('; ')})` : ''
+    }.`;
   }
 
   /** Waits out a delay node, giving the wait up as soon as the run is cancelled. */
@@ -979,6 +1076,76 @@ export class RunService {
       );
     return checked;
   }
+
+  /**
+   * A host (MCP) run is carried out by the user's own model, so the backend only learns where it is
+   * when the model says so. Each report moves the run on the workflow: `started` makes the node the
+   * current one, `completed` records it as done. The change reaches the open streams through the
+   * run store.
+   */
+  async reportStep(
+    workspaceId: string,
+    runId: string,
+    report: { nodeId: string; status: 'started' | 'completed'; summary?: string },
+  ): Promise<AgentRun> {
+    const run = await this.get(workspaceId, runId);
+    if (run.mode !== 'host' || run.status !== 'running')
+      throw new ApplicationError(
+        'INVALID_RUN_STATE',
+        'Only a checked-out host run can report its steps.',
+        409,
+      );
+    const state = run.workflowState;
+    if (!state?.enabled)
+      throw new ApplicationError('NO_WORKFLOW', 'This run has no workflow steps to report.', 409);
+    const stepIndex = state.steps.findIndex((candidate) => candidate.id === report.nodeId);
+    const step = stepIndex >= 0 ? state.steps[stepIndex] : undefined;
+    if (!step && !state.canvas?.nodes.some((node) => node.id === report.nodeId))
+      throw new ApplicationError(
+        'UNKNOWN_STEP',
+        'This step is not part of the workflow of the run.',
+        400,
+      );
+
+    let next: WorkflowRunState;
+    if (report.status === 'started') {
+      next = {
+        ...state,
+        currentStepIndex: step ? stepIndex : state.currentStepIndex,
+        ...(state.canvas ? { currentNodeId: report.nodeId } : {}),
+      };
+    } else {
+      const entry: WorkflowRunStepResult = {
+        stepId: report.nodeId,
+        name: step?.name ?? report.nodeId,
+        agentId: step?.agentId ?? run.agentId,
+        output: report.summary ?? '',
+        kind: step ? 'result' : 'event',
+        provider: 'host',
+      };
+      const { currentNodeId, ...rest } = state;
+      next = {
+        ...rest,
+        currentStepIndex: step
+          ? Math.max(state.currentStepIndex, stepIndex + 1)
+          : state.currentStepIndex,
+        results: [
+          ...state.results.filter(
+            (result) => !(result.stepId === entry.stepId && result.kind === entry.kind),
+          ),
+          entry,
+        ],
+        // Only the node that was just completed stops being the current one.
+        ...(currentNodeId !== undefined && currentNodeId !== report.nodeId
+          ? { currentNodeId }
+          : {}),
+      };
+    }
+    const updated = await this.store.progress(workspaceId, runId, next, run.output ?? '', {});
+    if (!updated) throw new ApplicationError('INVALID_RUN_STATE', 'Run already finished.', 409);
+    return updated;
+  }
+
   async completeHost(
     workspaceId: string,
     runId: string,
@@ -1054,13 +1221,6 @@ export class RunService {
       usage.outputTokens < 0
     )
       return null;
-    const rate = (await this.store.rates(workspaceId)).find(
-      (item) => item.provider.toLowerCase() === provider.toLowerCase() && item.model === model,
-    );
-    if (!rate) return null;
-    const micros = Math.round(
-      usage.inputTokens * rate.inputUsdPerMillion + usage.outputTokens * rate.outputUsdPerMillion,
-    );
-    return Number.isSafeInteger(micros) && micros <= MAX_MICROS ? micros : null;
+    return priceUsage(await this.store.rates(workspaceId), provider, model, usage);
   }
 }

@@ -18,6 +18,7 @@ export interface Issue {
   type: string;
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
+  proofreaderUserId: string | null;
   pbiItemId: string | null;
   createdBy: string;
   createdAt: Date;
@@ -50,6 +51,7 @@ export type IssueChanges = Partial<
     | 'type'
     | 'assigneeAgentId'
     | 'assigneeUserId'
+    | 'proofreaderUserId'
     | 'pbiItemId'
   >
 >;
@@ -111,6 +113,7 @@ export class InMemoryIssueStore implements IssueStore {
       type: changes.type ?? '',
       assigneeAgentId: changes.assigneeAgentId ?? null,
       assigneeUserId: changes.assigneeUserId ?? null,
+      proofreaderUserId: changes.proofreaderUserId ?? null,
       pbiItemId: changes.pbiItemId ?? null,
       createdBy: actorId,
       createdAt: now,
@@ -210,6 +213,7 @@ export class PrismaIssueStore implements IssueStore {
           type: changes.type ?? '',
           assigneeAgentId: changes.assigneeAgentId,
           assigneeUserId: changes.assigneeUserId,
+          proofreaderUserId: changes.proofreaderUserId,
           pbiItemId: changes.pbiItemId,
           createdBy: actorId,
         },
