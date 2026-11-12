@@ -105,6 +105,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error('[Bridge]', error instanceof Error ? error.message : error);
+  const errorName = error instanceof Error ? error.name : 'UnknownError';
+  console.error(`[Bridge] Startup failed (${errorName}).`);
   process.exit(1);
 });
