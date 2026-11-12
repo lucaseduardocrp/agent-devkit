@@ -30,8 +30,8 @@ const page = `<!doctype html><html><head><title>Evento de teste</title></head><b
 <a href="/about">Sobre</a>
 </body></html>`;
 
-/** Counts the pure blue, pure green and evidence-red pixels of a screenshot. */
-async function countColors(png: Uint8Array): Promise<{ blue: number; green: number; red: number }> {
+/** Counts the pure blue pixels and the pixels of the green evidence ring of a screenshot. */
+async function countColors(png: Uint8Array): Promise<{ blue: number; ring: number }> {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({ headless: true });
   try {
@@ -47,13 +47,13 @@ async function countColors(png: Uint8Array): Promise<{ blue: number; green: numb
         const context = canvas.getContext('2d')!;
         context.drawImage(image, 0, 0);
         const data = context.getImageData(0, 0, image.width, image.height).data;
-        const counts = { blue: 0, green: 0, red: 0 };
+        const counts = { blue: 0, ring: 0 };
         for (let index = 0; index < data.length; index += 4) {
           const [r, g, b] = [data[index]!, data[index + 1]!, data[index + 2]!];
           if (r < 10 && g < 10 && b > 245) counts.blue += 1;
-          else if (r < 10 && g > 245 && b < 10) counts.green += 1;
-          else if (Math.abs(r - 225) < 12 && Math.abs(g - 29) < 12 && Math.abs(b - 72) < 12)
-            counts.red += 1;
+          // The ring around what the step read is #4ade80.
+          else if (Math.abs(r - 74) < 12 && Math.abs(g - 222) < 12 && Math.abs(b - 128) < 12)
+            counts.ring += 1;
         }
         return counts;
       },
@@ -481,9 +481,8 @@ test('TC001 - Report status', async ({ page }) => {
     );
     // Step 1 ended while the data was loading: its evidence shows the loaded page.
     expect(opened?.blue).toBe(0);
-    // Step 2 only read the status through evaluateAll: it is scrolled into view and boxed.
-    expect(checked?.green).toBeGreaterThan(1000);
-    expect(checked?.red).toBeGreaterThan(100);
+    // Step 2 only read the status through evaluateAll: it is scrolled into view and ringed.
+    expect(checked?.ring).toBeGreaterThan(500);
   }, 120_000);
 
   it('reports unsuccessful document responses by origin without exposing query parameters', async () => {

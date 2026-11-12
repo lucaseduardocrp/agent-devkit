@@ -365,6 +365,8 @@ describe('E2eSources', () => {
     view.unmount();
     const again = render(<E2eSources {...props} apiClient={asClient(client)} />);
     await again.findByRole('status');
+    // The polling starts in an effect, which can run a moment after the status shows.
+    await waitFor(() => expect(timers.mock.calls.some((call) => call[1] === 3000)).toBe(true));
     const tick = timers.mock.calls.filter((call) => call[1] === 3000).at(-1)![0] as () => void;
     client.getE2eSource.mockResolvedValue({
       source: source(),
