@@ -596,7 +596,6 @@ describe('WorkView issue composer', () => {
         assigneeAgentId: 'agent-a',
         assigneeUserId: 'user-b',
         attachments: [],
-        type: '',
       }),
     );
     expect(onOpenIssues).toHaveBeenCalled();
