@@ -2023,11 +2023,16 @@ export function watchLive(
 ): () => void {
   let seen = 0;
   const read = async () => {
-    const file = path.join(directory, 'live.jpg');
-    const { mtimeMs } = await fs.stat(file);
-    if (mtimeMs === seen) return;
-    seen = mtimeMs;
-    onLive({ image: await fs.readFile(file), activity: await readActivity(directory) });
+    // One handle for the stat and the read, so the frame cannot be swapped in between.
+    const handle = await fs.open(path.join(directory, 'live.jpg'), 'r');
+    try {
+      const { mtimeMs } = await handle.stat();
+      if (mtimeMs === seen) return;
+      seen = mtimeMs;
+      onLive({ image: await handle.readFile(), activity: await readActivity(directory) });
+    } finally {
+      await handle.close();
+    }
   };
   // No frame yet, a frame being replaced or a failing listener: the next tick tries again.
   const timer = setInterval(() => void read().catch(noop), intervalMs);

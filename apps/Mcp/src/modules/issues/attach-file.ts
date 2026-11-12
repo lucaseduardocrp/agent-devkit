@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { z } from 'zod';
 import { segment } from '../../api/http-client.js';
@@ -74,11 +74,17 @@ export async function readAttachmentBytes(
         'filePath only works when the ADK MCP server runs on your computer. Send contentBase64 or text instead.',
       );
     const path = resolve(input.filePath);
-    const info = await stat(path).catch(() => null);
-    if (!info?.isFile()) throw new Error(`Not a readable file: ${path}`);
-    if (info.size > MAX_ATTACHMENT_BYTES)
-      throw new Error(`The file is larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
-    bytes = await readFile(path);
+    // One handle for the checks and the read, so the file cannot be swapped in between.
+    const handle = await open(path, 'r').catch(() => null);
+    try {
+      const info = await handle?.stat();
+      if (!handle || !info?.isFile()) throw new Error(`Not a readable file: ${path}`);
+      if (info.size > MAX_ATTACHMENT_BYTES)
+        throw new Error(`The file is larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+      bytes = await handle.readFile();
+    } finally {
+      await handle?.close();
+    }
   } else if (input.contentBase64 !== undefined) {
     const encoded = input.contentBase64.replace(/^data:[^,]*;base64,/i, '').replace(/\s+/g, '');
     if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(encoded)) throw new Error('contentBase64 is not valid.');

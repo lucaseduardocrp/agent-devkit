@@ -51,7 +51,7 @@ jobs:
         run: npm version "${GITHUB_REF_NAME#desktop-v}" --no-git-tag-version --allow-same-version
       # `dist` stages the web app, API and MCP server, compiles the app and runs electron-builder.
       - run: npm run dist -- --publish never
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             apps/Desktop/release/*.exe

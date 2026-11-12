@@ -2,7 +2,6 @@ import {
   appendFileSync,
   chmodSync,
   chownSync,
-  existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -166,9 +165,14 @@ export class Sandbox {
     const target = join(home, path);
     const inside = relative(home, target);
     if (inside.startsWith('..') || isAbsolute(inside)) return; // never outside the HOME
-    if (existsSync(target)) return;
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, content, { mode: 0o600 });
+    try {
+      // `wx` creates the file only when it does not exist: no check-then-write window.
+      writeFileSync(target, content, { mode: 0o600, flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
+      throw error;
+    }
     if (uid !== undefined) {
       chownSync(dirname(target), uid, uid);
       chownSync(target, uid, uid);

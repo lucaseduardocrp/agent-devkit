@@ -1581,6 +1581,27 @@ describe('e2e tools', () => {
     ).toBeNull();
   });
 
+  it('tells the host to read the Brain when the run is set to use it', async () => {
+    const ctx = fakeContext();
+    ctx.api.on('POST /e2e/creations/c3/brief', () => ({
+      brief: {
+        ...fixtures.e2eBrief,
+        documents: { ...fixtures.e2eBrief.documents, useBrain: true, brainTools: ['brain_search'] },
+      },
+    }));
+    const ready = (await call('e2e_prepare', { runId: 'c3' }, ctx)).data;
+    expect(ready.documents).toMatchObject({ useBrain: true, brainTools: ['brain_search'] });
+  });
+
+  it('sends only the parts of an exploration request that were given', async () => {
+    const ctx = fakeContext();
+    ctx.api.on('POST /e2e/creations/c1/explore', () => ({ exploration: null }));
+    await call('e2e_explore', { runId: 'c1', description: 'the billing screens' }, ctx);
+    expect(ctx.api.calls.at(-1)?.body).toEqual({ description: 'the billing screens' });
+    await call('e2e_explore', { runId: 'c1', storage: 'repository' }, ctx);
+    expect(ctx.api.calls.at(-1)?.body).toEqual({ storage: 'repository' });
+  });
+
   it('hands the host a brief with untrusted documents and saves its plan', async () => {
     const ready = (await call('e2e_prepare', { runId: 'c1', refresh: true })).data;
     expect(ready.agent.instructions).toContain('<untrusted-content source="agent-instructions">');

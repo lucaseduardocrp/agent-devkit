@@ -3,6 +3,7 @@ import { request as httpRequest } from 'node:http';
 import { connect, type AddressInfo } from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/bootstrap/config.js';
 import {
@@ -291,6 +292,32 @@ describe('HTTP transport', () => {
     });
     expect(response.status).toBe(502);
   });
+
+  it('only logs a failure that happens after the response was sent', async () => {
+    const { url } = await listen();
+    const handle = vi
+      .spyOn(StreamableHTTPServerTransport.prototype, 'handleRequest')
+      .mockImplementationOnce((_request, response) => {
+        response.statusCode = 200;
+        response.end('partial');
+        return Promise.reject(new Error('late failure'));
+      });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const response = await fetch(`${url}/mcp`, {
+        method: 'POST',
+        headers: { ...mcpHeaders, authorization: 'Bearer user-token' },
+        body: JSON.stringify(initialize),
+      });
+      expect(response.status).toBe(200);
+      await vi.waitFor(() =>
+        expect(logged).toHaveBeenCalledWith('[devkit] HTTP request failed:', expect.any(Error)),
+      );
+    } finally {
+      handle.mockRestore();
+      logged.mockRestore();
+    }
+  });
 });
 
 describe('HTTP transport session bookkeeping', () => {
@@ -423,14 +450,14 @@ describe('OAuth for remote connectors', () => {
     return ((await response.json()) as { client_id: string }).client_id;
   }
 
-  async function authorizePage(url: string, clientId: string) {
+  async function authorizePage(url: string, clientId: string, state: string | null = 'xyz') {
     const query = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
       redirect_uri: CALLBACK,
       code_challenge: challengeFor(verifier),
       code_challenge_method: 'S256',
-      state: 'xyz',
+      ...(state === null ? {} : { state }),
     });
     const response = await fetch(`${url}/authorize?${query}`);
     const html = await response.text();
@@ -531,6 +558,17 @@ describe('OAuth for remote connectors', () => {
     const { client } = await connectClient(url, body.access_token);
     expect((await client.callTool({ name: 'brain_stats', arguments: {} })).isError).toBeFalsy();
     await client.close();
+  });
+
+  it('redirects without a state when the client sent none', async () => {
+    const { url } = await oauthServer();
+    const clientId = await register(url);
+    const page = await authorizePage(url, clientId, null);
+    const pasted = await login(url, { request: page.request, token: 'adk_pat_manual' });
+    expect(pasted.status).toBe(302);
+    const location = new URL(pasted.headers.get('location')!);
+    expect(location.searchParams.get('code')).toBeTruthy();
+    expect(location.searchParams.has('state')).toBe(false);
   });
 
   it('accepts a pasted access token and rejects incomplete or forged logins', async () => {
@@ -677,11 +715,13 @@ describe('OAuth building blocks', () => {
     const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 120_000);
     try {
       await provider.exchangeAuthorizationCode(client, seal('n2'));
+      // n2 is still within its window when n3 arrives: only expired codes are forgotten.
+      await provider.exchangeAuthorizationCode(client, seal('n3'));
     } finally {
       later.mockRestore();
     }
     const used = (provider as unknown as { usedCodes: Map<string, number> }).usedCodes;
-    expect([...used.keys()]).toEqual(['n2']);
+    expect([...used.keys()]).toEqual(['n2', 'n3']);
   });
 
   it('caches token verification and rethrows transient failures', async () => {
