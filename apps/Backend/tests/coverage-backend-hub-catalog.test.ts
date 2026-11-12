@@ -26,7 +26,7 @@ describe('HttpHubCatalog (edges)', () => {
       String(input).includes('api.github.com') ? ok(COMMIT) : ok(JSON.stringify(index)),
     );
     await new HttpHubCatalog({ fetch: fetcher, githubToken: 'ghp_x' }).index();
-    expect(fetcher.mock.calls[0]![1]).toMatchObject({
+    expect((fetcher.mock.calls[0] as unknown[])[1]).toMatchObject({
       headers: { authorization: 'Bearer ghp_x' },
     });
   });

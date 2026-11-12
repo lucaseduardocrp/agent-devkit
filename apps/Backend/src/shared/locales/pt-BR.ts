@@ -281,6 +281,21 @@ export const ptBR = {
   HUB_SKILL_TOO_LARGE: 'Esta skill é grande demais para um agente.',
   IMAGE_NOT_FOUND: 'Imagem não encontrada.',
   WORKFLOW_ANSWER_REQUIRED: 'Uma resposta é obrigatória.',
+  REALTIME_UNAVAILABLE: 'As atualizações ao vivo não estão disponíveis.',
+  BRIDGE_BAD_CHAT: 'Id de chat inválido.',
+  BRIDGE_FORBIDDEN: 'Token do bridge inválido.',
+  NOTIFICATION_CHANNEL_UNKNOWN: 'Canal desconhecido: {channels}.',
+  NOTIFICATION_CONTACT_INVALID: '{detail}',
+  NOTIFICATION_EVENT_UNKNOWN: 'Este evento não existe.',
+  NOTIFICATION_RECIPIENT_INVALID: 'Este evento não tem uma pessoa a que se refira.',
+  NOTIFICATION_RULE_NOT_FOUND: 'Regra de notificação não encontrada.',
+  UNAUTHENTICATED: 'Entre para continuar.',
+  E2E_BRAIN_EMPTY:
+    'O Brain não tem documentos sobre esta execução. Sincronize ou escreva-os, ou use um PRD.',
+  E2E_BRAIN_UNAVAILABLE: 'O Brain não está disponível para a automação E2E.',
+  E2E_EXPLORATION_NOT_FOUND: 'Script de exploração não encontrado.',
+  NO_WORKFLOW: 'Esta execução não tem etapas de workflow para reportar.',
+  UNKNOWN_STEP: 'Esta etapa não faz parte do workflow da execução.',
 } as const;
 
 export type ErrorMessageCode = keyof typeof ptBR;

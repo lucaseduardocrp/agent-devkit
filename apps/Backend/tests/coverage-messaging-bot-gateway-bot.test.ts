@@ -157,12 +157,9 @@ describe('TelegramBot edge cases', () => {
     await bot.handle(update('/auth'));
     await bot.handle(update('/mcp list'));
     expect(api.deleteMessage).toHaveBeenCalledTimes(2);
-    expect(bridge.forward.mock.calls.map((call) => (call[0] as { text: string }).text)).toEqual([
-      '/auth sk-secret',
-      '/mcp add x https://x tok',
-      '/auth',
-      '/mcp list',
-    ]);
+    expect(
+      (bridge.forward.mock.calls as unknown as [{ text: string }][]).map((call) => call[0].text),
+    ).toEqual(['/auth sk-secret', '/mcp add x https://x tok', '/auth', '/mcp list']);
   });
 
   it('answers messages without text, and sends cli-mode text to the bridge', async () => {
@@ -239,10 +236,9 @@ describe('TelegramBot edge cases', () => {
     await bot.handle(update('/status'));
     await bot.handle(update('/tasks now'));
     await bot.handle(update('/bogus'));
-    expect(bridge.forward.mock.calls.map((call) => (call[0] as { text: string }).text)).toEqual([
-      '/status',
-      '/tasks now',
-    ]);
+    expect(
+      (bridge.forward.mock.calls as unknown as [{ text: string }][]).map((call) => call[0].text),
+    ).toEqual(['/status', '/tasks now']);
     expect(sent).toHaveLength(1);
     await bot.handle(update('/unlink'));
     expect(await chats.find('ws-1', 'telegram', '42')).toBeNull();

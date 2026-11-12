@@ -123,7 +123,7 @@ describe('stores behind adapters', () => {
     const row = {
       id: '1',
       ownerId: 'o',
-      category: 'PBI',
+      category: 'PROJECT_MANAGEMENT',
       providerId: 'jira',
       isEnabled: true,
       settings: { a: 1 },
@@ -133,8 +133,10 @@ describe('stores behind adapters', () => {
     };
     const findMany = vi.fn().mockResolvedValue([row]);
     const store = new PrismaUserIntegrationStore({ integrationRecord: { findMany } } as never);
-    const records = await store.listByProvider('PBI', 'jira');
-    expect(findMany).toHaveBeenCalledWith({ where: { category: 'PBI', providerId: 'jira' } });
+    const records = await store.listByProvider('PROJECT_MANAGEMENT', 'jira');
+    expect(findMany).toHaveBeenCalledWith({
+      where: { category: 'PROJECT_MANAGEMENT', providerId: 'jira' },
+    });
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ ownerId: 'o', providerId: 'jira' });
   });

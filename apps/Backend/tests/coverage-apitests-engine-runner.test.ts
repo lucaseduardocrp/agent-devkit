@@ -83,7 +83,7 @@ const output = (input: ScriptInput, extra: Partial<ScriptOutput> = {}): ScriptOu
 type Handler = (
   input: ScriptInput,
   host: ScriptHost,
-) => Promise<Partial<ScriptOutput>> | Partial<ScriptOutput> | void;
+) => Promise<Partial<ScriptOutput> | void> | Partial<ScriptOutput> | void;
 /** Scripts are plain handlers keyed by the code text. */
 function scriptsOf(handlers: Record<string, Handler>, calls: ScriptInput[] = []) {
   const close = vi.fn(() => Promise.resolve());
@@ -196,7 +196,7 @@ describe('collection flow', () => {
             { name: 'T', passed: false, error: 'bad' },
             { name: 'U', passed: true },
           ],
-          logs: [{ level: 'log', message: 'hello' }],
+          logs: [{ level: 'log', message: 'hello', source: 'go' }],
         }),
         second: () => undefined,
       },
@@ -539,7 +539,9 @@ describe('executeRun', () => {
     expect(outcome).toMatchObject({ status: 'passed', error: null });
     expect(outcome.runtime?.variables).toEqual([{ key: 'rt', value: '1' }]);
     expect(guard).toHaveBeenCalled();
-    const result = outcome.result as { results: { response?: { bodyPreview: string } }[] };
+    const result = outcome.result as unknown as {
+      results: { response?: { bodyPreview: string } }[];
+    };
     expect(result.results[0]!.response?.bodyPreview).toBe('o');
   });
 
@@ -590,7 +592,7 @@ describe('executeRun', () => {
       fetch: okFetch(60),
       report: () => Promise.resolve('stopped'),
     });
-    expect((stopped.result as { results: unknown[] }).results.length).toBeLessThan(3);
+    expect((stopped.result as unknown as { results: unknown[] }).results.length).toBeLessThan(3);
 
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 30);
@@ -599,7 +601,7 @@ describe('executeRun', () => {
       signal: controller.signal,
       fetch: okFetch(60),
     });
-    expect((aborted.result as { results: unknown[] }).results.length).toBeLessThan(3);
+    expect((aborted.result as unknown as { results: unknown[] }).results.length).toBeLessThan(3);
   });
 
   it('survives a failing progress listener', async () => {
@@ -612,7 +614,7 @@ describe('executeRun', () => {
   });
 
   it('reports errors of the run itself, whatever was thrown', async () => {
-    const asError = await executeRun({ ...integration([]), collection: null as never }, { report });
+    const asError = await executeRun({ ...integration([]), collection: null } as never, { report });
     expect(asError).toMatchObject({ status: 'error', result: null });
     expect(asError.error).toMatch(/null/);
     const odd = integration([request('a')]);
@@ -710,7 +712,7 @@ describe('executeRun', () => {
       grpc.grpcListServices.mockResolvedValue({ services: [{ name: 'a.B', methods: [] }] });
       const outcome = await executeRun(grpcPayload(), { report, fetch: okFetch() });
       expect(outcome.status).toBe('passed');
-      const result = outcome.result as {
+      const result = outcome.result as unknown as {
         results: { response: { bodyPreview: string }; kind: string; status: number }[];
         passed: number;
       };

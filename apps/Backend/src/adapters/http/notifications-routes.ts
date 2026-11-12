@@ -117,6 +117,7 @@ export function createNotificationsRouter(
         `Unknown channel: ${unknown.join(', ')}.`,
         400,
         [{ field: 'channels' }],
+        { channels: unknown.join(', ') },
       );
     if (input.recipients.subject && !event.subjectLabel)
       throw new ApplicationError(
@@ -212,9 +213,13 @@ export function createNotificationsRouter(
             );
           const invalid = address ? channel.validateAddress?.(address) : null;
           if (invalid)
-            throw new ApplicationError('NOTIFICATION_CONTACT_INVALID', invalid, 400, [
-              { field: `contacts.${channelId}` },
-            ]);
+            throw new ApplicationError(
+              'NOTIFICATION_CONTACT_INVALID',
+              invalid,
+              400,
+              [{ field: `contacts.${channelId}` }],
+              { detail: invalid },
+            );
           changes[channelId] = address || null;
         }
         await deps.contacts.save(workspace, userId, changes);

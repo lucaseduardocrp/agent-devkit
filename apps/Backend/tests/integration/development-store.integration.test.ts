@@ -52,7 +52,13 @@ describe('development store on PostgreSQL', () => {
       { path: 'src/login.ts', status: 'added', additions: 1, deletions: 0, patch: '+a' },
     ]);
     await service.complete(workspaceId, session.id, { outcome: 'succeeded', summary: 'Done' });
-    await service.addComment(workspaceId, session.id, { body: 'Looks good' }, actor);
+    // An inline review comment: a chat message (no file) would send the session back to the queue.
+    await service.addComment(
+      workspaceId,
+      session.id,
+      { body: 'Looks good', path: 'src/login.ts', line: 1 },
+      actor,
+    );
 
     // Read back from the database: the JSON body and the filter columns agree.
     const stored = await service.getSession(workspaceId, session.id);

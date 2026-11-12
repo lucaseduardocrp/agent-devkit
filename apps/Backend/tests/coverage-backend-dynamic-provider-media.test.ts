@@ -37,7 +37,7 @@ const basic = (value: string) => `Basic ${Buffer.from(value).toString('base64')}
 describe('DynamicProviderFactory.resolveMediaAuthorization', () => {
   it('signs Azure DevOps files of the configured organization', async () => {
     const azure: Entry = {
-      category: 'PBI',
+      category: 'PROJECT_MANAGEMENT',
       providerId: 'azure_devops',
       settings: { organization: 'Acme' },
       secret: ' pat ',
@@ -63,7 +63,7 @@ describe('DynamicProviderFactory.resolveMediaAuthorization', () => {
 
   it('signs Jira, GitHub, Trello and Wiki.js files for their own hosts only', async () => {
     const jira: Entry = {
-      category: 'PBI',
+      category: 'PROJECT_MANAGEMENT',
       providerId: 'jira',
       settings: { baseUrl: 'https://acme.atlassian.net', email: 'qa@acme.test' },
       secret: 'token',
@@ -73,7 +73,11 @@ describe('DynamicProviderFactory.resolveMediaAuthorization', () => {
     });
     expect(await media([jira], 'https://evil.test/secure/attachment/1')).toBeNull();
 
-    const github: Entry = { category: 'PBI', providerId: 'github_projects', secret: 'gh' };
+    const github: Entry = {
+      category: 'PROJECT_MANAGEMENT',
+      providerId: 'github_projects',
+      secret: 'gh',
+    };
     for (const host of [
       'github.com',
       'raw.githubusercontent.com',
@@ -85,7 +89,7 @@ describe('DynamicProviderFactory.resolveMediaAuthorization', () => {
     expect(await media([github], 'https://example.test/a.png')).toBeNull();
 
     const trello: Entry = {
-      category: 'PBI',
+      category: 'PROJECT_MANAGEMENT',
       providerId: 'trello',
       settings: { apiKey: ' key ' },
       secret: 'tok',
@@ -109,7 +113,7 @@ describe('DynamicProviderFactory.resolveMediaAuthorization', () => {
 
   it('has no integration for a URL without a path to read a segment from', async () => {
     const azure: Entry = {
-      category: 'PBI',
+      category: 'PROJECT_MANAGEMENT',
       providerId: 'azure_devops',
       settings: { organization: 'acme' },
       secret: 'pat',
@@ -118,7 +122,11 @@ describe('DynamicProviderFactory.resolveMediaAuthorization', () => {
   });
 
   it('skips disabled integrations, missing secrets and unknown providers', async () => {
-    const github: Entry = { category: 'PBI', providerId: 'github_projects', secret: 'gh' };
+    const github: Entry = {
+      category: 'PROJECT_MANAGEMENT',
+      providerId: 'github_projects',
+      secret: 'gh',
+    };
     expect(await media([{ ...github, isEnabled: false }], 'https://github.com/a')).toBeNull();
     expect(await media([{ ...github, hasSecret: false }], 'https://github.com/a')).toBeNull();
     expect(await media([{ ...github, secret: '  ' }], 'https://github.com/a')).toBeNull();

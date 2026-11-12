@@ -90,8 +90,10 @@ export async function writeTextFile(
 
 /** The folders, then the files, of one folder of the worktree. Git's own folder is left out. */
 export async function listDirectory(root: string, relative = ''): Promise<FileEntry[]> {
-  const entries = await readdir(inside(root, relative), { withFileTypes: true });
-  const prefix = relative ? `${relative.replace(/\\/g, '/').replace(/\/+$/, '')}/` : '';
+  // Paths come from the UI with either separator; '/' keeps Windows and POSIX in agreement.
+  const folder = relative.replace(/\\/g, '/');
+  const entries = await readdir(inside(root, folder), { withFileTypes: true });
+  const prefix = folder ? `${folder.replace(/\/+$/, '')}/` : '';
   return entries
     .filter((entry) => entry.name !== '.git')
     .map((entry): FileEntry => ({

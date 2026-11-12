@@ -72,7 +72,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const finish = async (promise: Promise<unknown>, ms: number) => {
+const finish = async <T>(promise: Promise<T>, ms: number): Promise<T> => {
   await vi.advanceTimersByTimeAsync(ms);
   return promise;
 };
@@ -111,18 +111,20 @@ describe('runLoad', () => {
       'checksRate',
     ] as const;
     const operators = ['lt', 'lte', 'gt', 'gte'] as const;
-    const thresholds: LoadThreshold[] = metrics.map((metric, index) => ({
+    // `min` is read from the latency summary like the other latency metrics, though it is not
+    // one of the declared LOAD_METRICS.
+    const thresholds = metrics.map((metric, index) => ({
       metric,
       operator: operators[index % operators.length]!,
       value: 1,
-    }));
-    const summary = (await finish(
+    })) as unknown as LoadThreshold[];
+    const summary = await finish(
       runLoad(plan({ thresholds, stages: steady(2, 2) }), {
         controlMs: 50,
         tickMs: 500,
       }),
       4_000,
-    )) as Awaited<ReturnType<typeof runLoad>>;
+    );
     expect(summary.thresholds.map((item) => item.metric)).toEqual([...metrics]);
     expect(summary.thresholds.map((item) => item.passed)).toEqual([
       true, // min lt 1: min is 0 (clamped negative)

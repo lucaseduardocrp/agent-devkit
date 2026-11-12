@@ -483,7 +483,7 @@ describe('script steps', () => {
           step({
             error: 'pre failed secret-value',
             tests: [{ id: 't', label: 'T', passed: false, actual: 'secret-value' }],
-            logs: [{ level: 'log', message: 'log secret-value' }],
+            logs: [{ level: 'log', message: 'log secret-value', source: 'pre-request' }],
           }),
         ),
       post: () => Promise.resolve(step()),
@@ -520,7 +520,9 @@ describe('script steps', () => {
           step({ error: 'post failed', tests: [{ id: 'p', label: 'P', passed: true }] }),
         ),
       tests: () =>
-        Promise.resolve(step({ error: 'ignored', logs: [{ level: 'info', message: 'hello' }] })),
+        Promise.resolve(
+          step({ error: 'ignored', logs: [{ level: 'info', message: 'hello', source: 'tests' }] }),
+        ),
     };
     const result = await run(request(), { scripting });
     expect(result).toMatchObject({

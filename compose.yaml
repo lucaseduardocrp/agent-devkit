@@ -202,7 +202,8 @@ services:
       api:
         condition: service_healthy
     environment:
-      BRIDGE_SHARED_TOKEN: ${BRIDGE_SHARED_TOKEN:?Set BRIDGE_SHARED_TOKEN in .env (see docs/bridge.md)}
+      # Required to pair with the API (see docs/bridge.md); optional only in standalone mode.
+      BRIDGE_SHARED_TOKEN: ${BRIDGE_SHARED_TOKEN:-}
       # An API running outside Docker (npm start) is at http://host.docker.internal:3000.
       BRIDGE_ADK_URL: ${BRIDGE_ADK_URL:-http://api:3000}
       BRIDGE_HTTP_PORT: 3500
