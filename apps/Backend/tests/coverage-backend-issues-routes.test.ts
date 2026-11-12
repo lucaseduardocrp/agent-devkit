@@ -56,6 +56,19 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+describe('issue routes: updates', () => {
+  it('answers with the issue as it is when the update finds nothing to change', async () => {
+    const app = build();
+    const created = await request(app).post('/issues').send({ title: 'Keep' }).expect(201);
+    vi.spyOn(store, 'update').mockResolvedValueOnce(null);
+    const response = await request(app)
+      .patch(`/issues/${created.body.issue.id}`)
+      .send({ title: 'Renamed' })
+      .expect(200);
+    expect(response.body.issue.title).toBe('Keep');
+  });
+});
+
 describe('issue routes: attachments', () => {
   it('stores validated attachments when creating an issue, or none', async () => {
     const app = build();

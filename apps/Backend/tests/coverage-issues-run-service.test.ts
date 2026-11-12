@@ -183,6 +183,43 @@ describe('RunService server execution', () => {
     expect((await issues.get(workspaceId, issue.id))?.status).toBe('todo');
   });
 
+  it('finishes a run saved before workflows existed and leaves the issue to a managing store', async () => {
+    const { runs, store, issues, createIssue } = setup({ managed: true });
+    const issue = await createIssue();
+    // A run with no workflow state is carried out by the plain agent path.
+    const queued = (await store.claim({
+      workspaceId,
+      issueId: issue.id,
+      agentId,
+      actorId: 'u',
+      ownerId: 'o',
+      prompt: 'p',
+      attempt: 1,
+      mode: 'server',
+    }))!;
+    await runs.recover();
+    await vi.waitFor(async () =>
+      expect((await store.get(workspaceId, queued.id))?.status).toBe('succeeded'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await issues.get(workspaceId, issue.id))?.status).toBe('todo');
+  });
+
+  it('ignores the failure of an execution that was cancelled meanwhile', async () => {
+    let fail!: (error: unknown) => void;
+    const executeAgent = vi
+      .fn()
+      .mockReturnValue(new Promise((_resolve, reject) => (fail = reject)));
+    const { runs, createIssue } = setup({ executeAgent });
+    const issue = await createIssue();
+    const run = await runs.create(issue.id, context);
+    await vi.waitFor(() => expect(executeAgent).toHaveBeenCalled());
+    await runs.cancel(workspaceId, run.id);
+    fail(new Error('late failure'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await runs.get(workspaceId, run.id)).status).toBe('cancelled');
+  });
+
   it('does not touch the issue when the run was finished elsewhere', async () => {
     let fail!: (error: unknown) => void;
     let succeed!: (value: unknown) => void;

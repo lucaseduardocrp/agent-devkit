@@ -64,10 +64,17 @@ function setup(
     imageStore?: E2eArtifactStore;
     pbiItems?: PbiStore;
     notifications?: { sendForIssue: ReturnType<typeof vi.fn> };
+    /** A store that owns the issue status transitions, like the Prisma store. */
+    managed?: boolean;
   } = {},
 ) {
   const issues = new InMemoryIssueStore();
   const store = new InMemoryRunStore();
+  const serving = options.managed
+    ? Object.defineProperty(Object.create(store) as InMemoryRunStore, 'managesIssueStatus', {
+        value: true,
+      })
+    : store;
   const queue = [...(options.outcomes ?? [])];
   const agents = fakeRunAgents(vi.fn(), {
     enabled: true,
@@ -79,7 +86,7 @@ function setup(
     return { agent: { id: stepAgentId }, provider: 'OpenAI', ...outcome };
   });
   const runs = new RunService(
-    store,
+    serving,
     issues,
     agents,
     options.pbiItems,
@@ -139,6 +146,19 @@ describe('RunService step workflows', () => {
     expect(finished.status).toBe('succeeded');
     expect(finished).toMatchObject({ inputTokens: 11, outputTokens: 6, model: null });
     expect((await issues.get(workspaceId, issue.id))?.status).toBe('done');
+  });
+
+  it('leaves the issue status to a managing store when pausing and resuming', async () => {
+    const { runs, issues, start, waitFor } = setup({
+      managed: true,
+      workflow: { steps: [step('a')], finalReview: true },
+      outcomes: [{ result: `${AGENT_WORKFLOW_QUESTION_MARKER} Which one?` }, 'A done'],
+    });
+    const { run, issue } = await start();
+    await waitFor(run.id, 'waiting_input');
+    await runs.continueWorkflow(workspaceId, run.id, { action: 'answer', answer: 'this one' });
+    await waitFor(run.id, 'waiting_review');
+    expect((await issues.get(workspaceId, issue.id))?.status).toBe('todo');
   });
 
   it('prices a step that ends in a question', async () => {

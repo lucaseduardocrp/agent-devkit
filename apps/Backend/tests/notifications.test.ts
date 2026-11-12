@@ -323,6 +323,21 @@ describe('NotificationService.send', () => {
     expect(chat.sent.map((d) => d.message.text)).toEqual(['Ben -> Ana', 'Someone', 'Someone']);
   });
 
+  it('keeps an actor name the caller already provided', async () => {
+    const chat = fakeChannel();
+    const { service } = setup([chat]);
+    await service.send({
+      workspaceId: WS,
+      actorId: BEN,
+      userIds: [ANA],
+      channels: ['chat'],
+      subject: 's',
+      message: '{{actor.name}}',
+      data: { 'actor.name': 'Zed' },
+    });
+    expect(chat.sent[0]!.message.text).toBe('Zed');
+  });
+
   it('works without a workspace name or app link, and never throws', async () => {
     const chat = fakeChannel();
     const bare = new NotificationService({
@@ -620,6 +635,37 @@ describe('notification routes', () => {
     return { app, rules };
   }
   const body = (patch: Record<string, unknown> = {}) => ruleInput(patch);
+
+  it('accepts a rule that notifies workspace members', async () => {
+    const { app } = build();
+    await request(app)
+      .post('/notifications/rules')
+      .send(body({ recipients: { subject: false, userIds: [ANA] } }))
+      .expect(201);
+  });
+
+  it('reads the request context set by the app when no resolver is given', async () => {
+    const { rules, registry, service } = setup();
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.context = admin;
+      next();
+    });
+    app.use(
+      createNotificationsRouter({
+        service,
+        rules,
+        channels: registry,
+        issues,
+        contacts: new InMemoryNotificationContactStore(),
+        people: async () => ({ people: [], total: 0 }),
+        isMember: async () => true,
+      }),
+    );
+    app.use(errorMiddleware);
+    await request(app).get('/notifications/channels').expect(200);
+  });
 
   it('lists the channels and the events people can attach rules to', async () => {
     const { app } = build();

@@ -388,7 +388,7 @@ export class E2eExecutor {
         signal,
       );
     } catch (error) {
-      await this.failCreation(creation, error, signal, startedAt);
+      await this.failCreation(creation, error, signal);
       return;
     }
     await this.notifyFinished(creation, startedAt);
@@ -422,7 +422,7 @@ export class E2eExecutor {
         signal,
       );
     } catch (error) {
-      await this.failCreation(creation, error, signal, startedAt);
+      await this.failCreation(creation, error, signal);
       return;
     }
     await this.notifyFinished(creation, startedAt, testIds);
@@ -822,7 +822,6 @@ export class E2eExecutor {
     creation: E2eCreation,
     error: unknown,
     signal: AbortSignal,
-    startedAt?: number,
   ): Promise<void> {
     if (signal.aborted || error instanceof Cancelled) return;
     const message = describeError(error, creation.locale);
@@ -832,14 +831,13 @@ export class E2eExecutor {
       finishedAt: new Date(),
     });
     await this.closeActiveTests(creation, { status: 'error', error: message });
-    if (startedAt !== undefined)
-      await this.options.notifier?.runFinished({
-        workspaceId: creation.workspaceId,
-        kind: 'e2e',
-        name: creation.name,
-        status: 'error',
-        summary: message.split('\n')[0]!.slice(0, 300),
-      });
+    await this.options.notifier?.runFinished({
+      workspaceId: creation.workspaceId,
+      kind: 'e2e',
+      name: creation.name,
+      status: 'error',
+      summary: message.split('\n')[0]!.slice(0, 300),
+    });
   }
 
   /** Counts the tests of a finished execution for the paired chats. */

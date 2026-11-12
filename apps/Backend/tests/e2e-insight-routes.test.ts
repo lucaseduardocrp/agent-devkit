@@ -324,6 +324,23 @@ describe('E2E environments routes', () => {
     expect(brief.body.brief.rules.script[0]).toContain('process.env.E2E_VAR_PLAN');
   });
 
+  it('refuses to edit a run into one with neither a PRD nor the Brain', async () => {
+    const { app } = setup();
+    const created = await createRun(app);
+    await request(app)
+      .put(`/e2e/creations/${created.body.creation.id}`)
+      .send({
+        name: 'Run',
+        agentId: created.body.creation.agentId,
+        mode: 'frontend',
+        scope: 'codebase',
+        baseUrl: 'http://localhost:4000',
+        prd: '',
+        repository,
+      })
+      .expect(400);
+  });
+
   it('refuses environments when the service has none configured', async () => {
     const service = new E2eService({
       store: new InMemoryE2eStore(),

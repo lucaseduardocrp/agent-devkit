@@ -370,6 +370,20 @@ describe('TelegramGateway', () => {
     return { gateway, telegram, integrations, chats, pairing };
   }
 
+  it('goes online even when Telegram refuses the command list', async () => {
+    const { gateway, telegram } = await setup('http://localhost:3000');
+    const fetcher = telegram.fetcher as unknown as ReturnType<typeof vi.fn>;
+    const original = fetcher.getMockImplementation() as typeof fetch;
+    fetcher.mockImplementation(async (url: string | URL | Request, init?: RequestInit) =>
+      String(url).endsWith('/setMyCommands')
+        ? Response.json({ ok: false, description: 'denied' }, { status: 400 })
+        : original(url, init),
+    );
+    await gateway.start();
+    expect(gateway.status('ws-1')).toMatchObject({ running: true });
+    await gateway.stop();
+  });
+
   it('long-polls on a local install and answers the updates', async () => {
     const { gateway, telegram } = await setup('http://localhost:3000');
     telegram.batches.push([message('hello', {}, 10)]);

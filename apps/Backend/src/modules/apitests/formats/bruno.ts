@@ -300,10 +300,8 @@ function settingsBlock(request: ApiRequestSpec): string {
   return block('settings', lines);
 }
 
-function metaBlock(name: string, type: string | undefined, seq: number, tags?: readonly string[]) {
-  const lines = [`name: ${name}`];
-  if (type) lines.push(`type: ${type}`);
-  lines.push(`seq: ${seq}`);
+function metaBlock(name: string, type: string, seq: number, tags?: readonly string[]) {
+  const lines = [`name: ${name}`, `type: ${type}`, `seq: ${seq}`];
   const items = (tags ?? []).map(listItem).filter(Boolean);
   if (items.length) lines.push(`tags: [\n${items.map((tag) => indent(tag)).join('\n')}\n]`);
   return block('meta', lines);
