@@ -1,4 +1,5 @@
 import { fireEvent, render, waitFor } from '@testing-library/react';
+import { exportFormatSelect } from './helpers/export-format';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestPlansView } from '../src/features/testplans/TestPlansView.js';
 import { ApiClient } from '../src/lib/api-client.js';
@@ -321,8 +322,8 @@ describe('TestPlansView Azure export fallbacks', () => {
     const ui = view(api);
 
     await ui.findByTestId('panel-saved-plans');
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'azure' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'azure' } });
 
     await waitFor(() =>
       expect((ui.getByLabelText('Area Path') as HTMLSelectElement).disabled).toBe(true),
@@ -333,8 +334,8 @@ describe('TestPlansView Azure export fallbacks', () => {
   it('clears the Azure options when no client is wired', async () => {
     const ui = render(<TestPlansView initialTab="saved" />);
 
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'azure' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'azure' } });
 
     await waitFor(() =>
       expect((ui.getByLabelText('Assigned To') as HTMLSelectElement).disabled).toBe(true),

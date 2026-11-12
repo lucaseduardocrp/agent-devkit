@@ -1,4 +1,5 @@
 import { fireEvent, render, waitFor, within } from '@testing-library/react';
+import { exportFormatSelect } from './helpers/export-format';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestPlansView } from '../src/features/testplans/TestPlansView.js';
 import { ApiClient } from '../src/lib/api-client.js';
@@ -278,7 +279,7 @@ describe('TestPlansView exports that fail', () => {
     createUrl.mockImplementationOnce(() => {
       throw 'Blob unsupported';
     });
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
     for (const expected of ['Blob unsupported', CSV_FAILED]) {
       fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
       fireEvent.click(ui.getByRole('button', { name: 'Exportar CSV' }));
@@ -292,7 +293,7 @@ describe('TestPlansView exports that fail', () => {
       plans: [plan({ title: '   ', suiteId: 'suite-1' })],
     });
     const ui = await openTree(api);
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
     fireEvent.click(ui.getByRole('button', { name: 'Ações: Regression' }));
     fireEvent.click(ui.getByRole('button', { name: 'Exportar suite (.zip)' }));
     await waitFor(() => expect(anchorClick).toHaveBeenCalledOnce());
