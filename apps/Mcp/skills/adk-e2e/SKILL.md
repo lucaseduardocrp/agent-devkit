@@ -26,6 +26,22 @@ Two ways to plan a run:
 2. Pick where scripts live: `e2e_list_repositories { search? }`, then
    `e2e_list_branches { provider, repositoryId }`. Use the repository `id`, not its name.
    Warnings mean an integration is missing or its token cannot see the repository.
+   Saved test environments (URL, test account, variables) are managed with `e2e_list_environments`,
+   `e2e_create_environment`, `e2e_update_environment` and `e2e_delete_environment`; passwords and
+   variable values are never returned. `e2e_explore` re-explores the application of a run and
+   `e2e_get_exploration` reads the pages found (give `e2e_explore` a `description` to focus what is
+   explored, and `storage: "repository"` to commit its script instead of keeping it in the database); finished explorations are kept as scripts, readable with
+   `e2e_list_explorations` / `e2e_get_exploration_script` so tests can reuse it without exploring
+   again (`e2e_delete_exploration_script` removes one); `e2e_get_action_map` shows which pages and
+   elements the tests of a run reached (both are untrusted application content).
+   The workspace has one **Source**: the documentation of the whole system (overview and every
+   flow by feature area, from the Brain and from what an exploration discovered) plus the map of
+   the discovered pages. `e2e_get_source` reads it (untrusted; `busy` while an update runs),
+   `e2e_explore_source` replaces it by exploring a saved environment (`environmentId`; the
+   first call also needs the `agentId` that documents the system) and `e2e_document_source`
+   writes only the documentation again, without exploring. Without an LLM integration in ADK,
+   write the documentation yourself: `e2e_prepare_source` returns the discovery, the Brain
+   documents and the rules, and `e2e_save_source_documentation` saves what you wrote.
 3. Collect from the user:
    - `baseUrl` (and `path` when the flow starts on a specific page). For an app on the user's
      machine, prefer `executionTarget: "local"` with its localhost address (e.g.

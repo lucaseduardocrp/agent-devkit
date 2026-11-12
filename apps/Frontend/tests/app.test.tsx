@@ -273,16 +273,16 @@ describe('App', () => {
     const view = render(<App apiClient={client} initialTab="testplans" />);
     fireEvent.click(await view.findByRole('button', { name: 'Ações: Sprint 10' }));
     fireEvent.click(view.getByRole('button', { name: 'Automatizar com E2E' }));
-    expect(await view.findByRole('radio', { name: 'Test cases salvos no ADK' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
+    const source = (await view.findByRole('combobox', {
+      name: 'Origem dos testes',
+    })) as HTMLSelectElement;
+    expect(source.value).toBe('saved');
 
     // Coming back to E2E later shows the list instead of the form.
     fireEvent.click(view.getByRole('button', { name: 'Planos de Teste' }));
     fireEvent.click(view.getByRole('button', { name: 'Automação E2E' }));
     await waitFor(() => expect(client.getE2eCreations).toHaveBeenCalled());
-    expect(view.queryByRole('radio', { name: 'Test cases salvos no ADK' })).toBeNull();
+    expect(view.queryByRole('combobox', { name: 'Origem dos testes' })).toBeNull();
 
     // The import window links to the integrations.
     fireEvent.click(view.getByRole('button', { name: 'Planos de Teste' }));

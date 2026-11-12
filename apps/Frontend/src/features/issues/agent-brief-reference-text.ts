@@ -15,7 +15,7 @@ export function plainText(value: string | null | undefined): string {
   );
   // Code and styles are not text anyone wrote for reading.
   parsed.body.querySelectorAll('script, style, noscript').forEach((element) => element.remove());
-  return (parsed.body.textContent ?? '').replace(/\n{3,}/g, '\n\n').trim();
+  return parsed.body.textContent.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

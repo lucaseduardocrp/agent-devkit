@@ -16,6 +16,7 @@ export const TOOLSETS = [
   'design',
   'e2e',
   'releasenotes',
+  'development',
   'integrationtests',
   'loadtests',
   'audit',

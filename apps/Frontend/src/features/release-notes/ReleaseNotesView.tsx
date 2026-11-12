@@ -7,7 +7,7 @@ import { Textarea } from '../../components/ui/textarea.js';
 import { ActionsMenu } from '../../components/ui/actions-menu.js';
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog.js';
 import { SkeletonCard } from '../../components/ui/skeleton.js';
-import { useI18n } from '../../lib/i18n/index.js';
+import { getMessages, useI18n } from '../../lib/i18n/index.js';
 import { useActivityRunner } from '../activities/ActivityCenter.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import { HistoryViewer } from '../audit/HistoryViewer.js';
@@ -33,115 +33,13 @@ interface Draft {
 const maxSelectedItems = 300;
 // Rendering thousands of checkboxes is slow; users narrow the list with filters instead.
 const visibleItemLimit = 200;
-
-const copy = {
-  'pt-BR': {
-    subtitle: 'Notas de versão escritas manualmente ou por um agente a partir dos itens entregues',
-    newNote: 'Nova release note',
-    generate: 'Gerar com agente',
-    empty: 'Nenhuma release note ainda.',
-    selectHint: 'Selecione uma release note ou crie uma nova.',
-    loadError: 'Não foi possível carregar as release notes.',
-    actionError: 'Não foi possível concluir a ação.',
-    actions: 'Ações da release note',
-    exportMarkdown: 'Exportar Markdown',
-    exportPdf: 'Exportar PDF',
-    exportDocx: 'Exportar DOCX',
-    edit: 'Editar',
-    delete: 'Excluir',
-    deleteTitle: 'Excluir release note?',
-    deleteDescription: 'Excluir “{title}”? A exclusão fica registrada no histórico.',
-    title: 'Título',
-    version: 'Versão',
-    versionPlaceholder: 'Ex.: 1.4.0',
-    content: 'Conteúdo (Markdown)',
-    preview: 'Pré-visualização',
-    save: 'Salvar',
-    cancel: 'Cancelar',
-    agent: 'Agente',
-    selectAgent: 'Selecione um agente',
-    noAgents: 'Crie um agente em Agents para gerar release notes.',
-    instructions: 'Instruções adicionais (opcional)',
-    instructionsPlaceholder: 'Ex.: público externo, destacar melhorias de desempenho',
-    items: 'Itens da release',
-    searchItems: 'Buscar por título ou ID',
-    allTypes: 'Todos os tipos',
-    allStates: 'Todos os estados',
-    allIterations: 'Todas as iterações',
-    type: 'Tipo',
-    state: 'Estado',
-    iteration: 'Iteração',
-    selected: 'selecionado(s)',
-    selectVisible: 'Selecionar visíveis',
-    clearSelection: 'Limpar seleção',
-    showingFirst: 'Exibindo os primeiros {count} itens. Refine os filtros para ver os demais.',
-    limitReached: 'Limite de {count} itens por release note.',
-    noItems: 'Nenhum item corresponde aos filtros.',
-    loadingItems: 'Carregando itens...',
-    itemsError: 'Não foi possível carregar os itens.',
-    generating: 'Gerando release note',
-    submitGenerate: 'Gerar release note',
-    basedOn: 'Baseada em {count} item(ns)',
-    updated: 'Atualizada em',
-  },
-  'en-US': {
-    subtitle: 'Release notes written manually or by an agent from delivered work items',
-    newNote: 'New release note',
-    generate: 'Generate with agent',
-    empty: 'No release notes yet.',
-    selectHint: 'Select a release note or create a new one.',
-    loadError: 'Could not load release notes.',
-    actionError: 'Could not complete the action.',
-    actions: 'Release note actions',
-    exportMarkdown: 'Export Markdown',
-    exportPdf: 'Export PDF',
-    exportDocx: 'Export DOCX',
-    edit: 'Edit',
-    delete: 'Delete',
-    deleteTitle: 'Delete release note?',
-    deleteDescription: 'Delete “{title}”? The deletion is recorded in the history.',
-    title: 'Title',
-    version: 'Version',
-    versionPlaceholder: 'e.g. 1.4.0',
-    content: 'Content (Markdown)',
-    preview: 'Preview',
-    save: 'Save',
-    cancel: 'Cancel',
-    agent: 'Agent',
-    selectAgent: 'Select an agent',
-    noAgents: 'Create an agent in Agents to generate release notes.',
-    instructions: 'Additional instructions (optional)',
-    instructionsPlaceholder: 'e.g. external audience, highlight performance improvements',
-    items: 'Release items',
-    searchItems: 'Search by title or ID',
-    allTypes: 'All types',
-    allStates: 'All states',
-    allIterations: 'All iterations',
-    type: 'Type',
-    state: 'State',
-    iteration: 'Iteration',
-    selected: 'selected',
-    selectVisible: 'Select visible',
-    clearSelection: 'Clear selection',
-    showingFirst: 'Showing the first {count} items. Refine the filters to see the rest.',
-    limitReached: 'Limit of {count} items per release note.',
-    noItems: 'No items match the filters.',
-    loadingItems: 'Loading items...',
-    itemsError: 'Could not load items.',
-    generating: 'Generating release note',
-    submitGenerate: 'Generate release note',
-    basedOn: 'Based on {count} item(s)',
-    updated: 'Updated',
-  },
-} as const;
-
 const text = (value: unknown): string =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 function itemType(item: PbiItem): string {
   return (
     text(item.sourceData.adkCardType) ||
     text(item.sourceData.type) ||
-    (item.kind === 'pbi' ? 'PBI' : 'Card')
+    (item.kind === 'pbi' ? 'PBI' : getMessages().pbi.cardFallback)
   );
 }
 function normalize(value: string): string {
@@ -159,13 +57,13 @@ function download(blob: Blob, fileName: string): void {
 }
 
 export function ReleaseNotesView({ apiClient, workspaceId, isReadOnly = false }: Props) {
-  const { locale, formatDate, t } = useI18n();
+  const { locale, formatDate, t, messages } = useI18n();
   const { runActivity } = useActivityRunner();
   const permissions = usePermissions();
   const canDelete = !isReadOnly && permissions.can('releaseNotes', 'delete');
   // Generation is built from selected PBIs, so it needs access to read them.
   const canGenerate = !isReadOnly && permissions.can('pbis');
-  const c = copy[locale];
+  const c = messages.releaseNotes;
   const [notes, setNotes] = useState<ReleaseNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -225,7 +123,7 @@ export function ReleaseNotesView({ apiClient, workspaceId, isReadOnly = false }:
         if (!active) return;
         setItems(list);
         setAgents(agentList);
-        setAgentId((current) => current || (agentList[0]?.id ?? ''));
+        setAgentId(agentList[0]?.id ?? '');
         if (currentIteration) setIterationFilter(currentIteration);
       },
       (cause: unknown) => {
@@ -351,7 +249,6 @@ export function ReleaseNotesView({ apiClient, workspaceId, isReadOnly = false }:
       return next;
     });
   const resolveAuditValue = (key: string, value: AuditSnapshot): string | undefined => {
-    // agentId never reaches resolvers: HistoryViewer hides it from snapshots.
     if (key === 'itemIds' && Array.isArray(value))
       return value
         .map((id) => (typeof id === 'string' ? (itemById.get(id)?.title ?? id) : ''))
@@ -381,7 +278,7 @@ export function ReleaseNotesView({ apiClient, workspaceId, isReadOnly = false }:
     ));
 
   return (
-    <main className="flex w-full flex-col gap-5 p-6 text-[var(--text-primary)] 2xl:px-10">
+    <main className="flex w-full flex-col gap-5 text-[var(--text-primary)]">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">{t('nav.releaseNotes')}</h1>
@@ -754,27 +651,25 @@ export function ReleaseNotesView({ apiClient, workspaceId, isReadOnly = false }:
           </section>
         </div>
       )}
-      {deleteNote && (
-        <ConfirmationDialog
-          open
-          title={c.deleteTitle}
-          description={c.deleteDescription.replace('{title}', deleteNote.title)}
-          confirmLabel={c.delete}
-          cancelLabel={c.cancel}
-          destructive
-          isLoading={busy}
-          onCancel={() => setDeleteNote(null)}
-          onConfirm={() => {
-            const id = deleteNote.id;
-            void runAction(async () => {
-              await apiClient.deleteReleaseNote(id);
-              setDeleteNote(null);
-              if (selectedId === id) setSelectedId(null);
-              await load();
-            });
-          }}
-        />
-      )}
+      <ConfirmationDialog
+        open={Boolean(deleteNote)}
+        title={c.deleteTitle}
+        description={c.deleteDescription.replace('{title}', deleteNote?.title ?? '')}
+        confirmLabel={c.delete}
+        cancelLabel={c.cancel}
+        destructive
+        isLoading={busy}
+        onCancel={() => setDeleteNote(null)}
+        onConfirm={() => {
+          const id = deleteNote!.id;
+          void runAction(async () => {
+            await apiClient.deleteReleaseNote(id);
+            setDeleteNote(null);
+            if (selectedId === id) setSelectedId(null);
+            await load();
+          });
+        }}
+      />
     </main>
   );
 }

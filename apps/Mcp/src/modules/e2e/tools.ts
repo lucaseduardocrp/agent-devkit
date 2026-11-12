@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AdkApi } from '../../api/http-client.js';
+import { segment, type AdkApi } from '../../api/http-client.js';
 import type { McpModule } from '../../core/registry.js';
 import { defineTool, json } from '../../core/tool.js';
 import { UNTRUSTED_CONTENT_RULE, id, untrusted } from '../shared.js';
@@ -24,6 +24,28 @@ import {
 import { testManagementTools } from './test-management.js';
 import { localOrigin, quickTunnelCommand } from './tunnel-command.js';
 
+const environmentId = id('E2E environment id (from e2e_list_environments).');
+const explorationId = id('Exploration script id (from e2e_list_explorations).');
+const environmentInput = {
+  name: z.string().trim().min(1).max(80).describe('Environment name, e.g. Staging.'),
+  baseUrl: z.string().trim().min(1).max(500).describe('Base URL of the application.'),
+  username: z.string().trim().max(320).optional().describe('Test account username.'),
+  password: z
+    .string()
+    .max(500)
+    .optional()
+    .describe('Test account password (stored encrypted, never returned).'),
+  variables: z
+    .array(
+      z.object({
+        key: z.string().trim().min(1).max(60),
+        value: z.string().max(4_000).optional().describe('Omit to keep the saved value.'),
+      }),
+    )
+    .max(50)
+    .optional()
+    .describe('Custom variables exposed to the scripts.'),
+};
 const provider = z
   .enum(['github', 'azure_devops'])
   .describe('Where the Playwright scripts live: github or azure_devops.');
@@ -130,6 +152,12 @@ const runSettings = {
     .min(1)
     .max(500_000)
     .describe('Product document: features, flows and business rules. A draft is enough.'),
+  useBrain: z
+    .boolean()
+    .optional()
+    .describe(
+      'Plan and write the tests from the Brain (semantic search plus linked documents) instead of a PRD. Then prd is optional.',
+    ),
   prdFileNames: z
     .array(z.string().trim().min(1).max(255))
     .max(20)
@@ -164,6 +192,8 @@ interface BriefDto {
     readonly diff: string | null;
     readonly instructions: string | null;
     readonly standardizedPrd: string | null;
+    readonly useBrain?: boolean;
+    readonly brainTools?: readonly string[];
   };
   readonly snapshot: { readonly status: 'capturing' | 'failed' | 'ready'; readonly data?: unknown };
   readonly rules: Record<string, unknown>;
@@ -427,9 +457,9 @@ export const e2eModule: McpModule = {
           ),
       },
       run: async (body, context) => {
-        if (!body.prd && !body.importCases && !body.savedCases)
+        if (!body.prd && !body.useBrain && !body.importCases && !body.savedCases)
           throw new Error(
-            'Provide prd (the product document), importCases (test management cases) or savedCases (test cases saved in ADK) to automate.',
+            'Provide prd (the product document), useBrain, importCases (test management cases) or savedCases (test cases saved in ADK) to automate.',
           );
         if (body.savedCases && !body.savedCases.suiteId && !body.savedCases.planId)
           throw new Error('savedCases needs a suiteId or a planId.');
@@ -533,6 +563,9 @@ export const e2eModule: McpModule = {
             diff: wrap('e2e-diff', brief.documents.diff),
             instructions: wrap('e2e-instructions', brief.documents.instructions),
             standardizedPrd: wrap('e2e-prd-summary', brief.documents.standardizedPrd),
+            ...(brief.documents.useBrain
+              ? { useBrain: true, brainTools: brief.documents.brainTools }
+              : {}),
           },
           snapshot:
             status === 'ready'
@@ -809,6 +842,341 @@ export const e2eModule: McpModule = {
               },
         );
       },
+    }),
+    defineTool({
+      name: 'e2e_list_environments',
+      title: 'List E2E environments',
+      description:
+        'Lists the saved test environments of the workspace (name, base URL, username, custom variable names, whether a password is stored). The first one is the default. Passwords and variable values are never returned.',
+      toolset: 'e2e',
+      access: 'read',
+      routes: ['GET /e2e/environments'],
+      input: {},
+      run: async (_, { api }) =>
+        json(await api.request({ method: 'GET', path: '/e2e/environments' })),
+    }),
+    defineTool({
+      name: 'e2e_create_environment',
+      title: 'Create E2E environment',
+      description: `Saves a test environment (where an application runs and how to sign in) that E2E runs can start from. ${SECRET_NOTICE}`,
+      toolset: 'e2e',
+      access: 'write',
+      routes: ['POST /e2e/environments'],
+      input: environmentInput,
+      run: async (input, { api }) =>
+        json(await api.request({ method: 'POST', path: '/e2e/environments', body: input })),
+    }),
+    defineTool({
+      name: 'e2e_update_environment',
+      title: 'Update E2E environment',
+      description:
+        'Replaces the settings of a saved environment. Omit the password to keep the saved one; list a variable without a value to keep its saved value, and leave out a variable to remove it.',
+      toolset: 'e2e',
+      access: 'write',
+      routes: ['PUT /e2e/environments/:id'],
+      input: { environmentId, ...environmentInput },
+      run: async ({ environmentId: value, ...body }, { api }) =>
+        json(
+          await api.request({
+            method: 'PUT',
+            path: `/e2e/environments/${segment(value)}`,
+            body,
+          }),
+        ),
+    }),
+    defineTool({
+      name: 'e2e_delete_environment',
+      title: 'Delete E2E environment',
+      description:
+        'Deletes a saved test environment. Runs created from it keep their own settings.',
+      toolset: 'e2e',
+      access: 'destructive',
+      routes: ['DELETE /e2e/environments/:id'],
+      input: { environmentId },
+      run: async ({ environmentId: value }, { api }) => {
+        await api.request({ method: 'DELETE', path: `/e2e/environments/${segment(value)}` });
+        return json({ deleted: true, environmentId: value });
+      },
+    }),
+    defineTool({
+      name: 'e2e_get_exploration',
+      title: 'Get E2E exploration',
+      description:
+        'Returns the exploration of the tested application for a run: status, the pages captured, the agent log and any error (null when it never ran). Poll it after e2e_explore until the status is ready or failed. Screenshots are only in the web app.',
+      toolset: 'e2e',
+      access: 'read',
+      routes: ['GET /e2e/creations/:id/exploration'],
+      input: { runId },
+      run: async ({ runId: value }, { api }) => {
+        const { exploration } = await api.request<{ exploration: unknown }>({
+          method: 'GET',
+          path: `${runPath(value)}/exploration`,
+        });
+        return json({
+          exploration: exploration
+            ? untrusted('e2e-exploration', JSON.stringify(exploration))
+            : null,
+          note: UNTRUSTED_CONTENT_RULE,
+        });
+      },
+    }),
+    defineTool({
+      name: 'e2e_explore',
+      title: 'Explore application',
+      description:
+        'Asks a worker to explore the application of a run again (signing in with the run account); the run and its tests are left alone. Fails while the run is active. Follow it with e2e_get_exploration. The optional description says what to explore (the whole site, one feature, a bug…): the agent mostly follows the menu items and links that name it, and it is kept with the exploration script. By default the script is kept in the database (e2e_list_explorations returns it); storage "repository" commits it as a JSON file next to the run\'s specs instead.',
+      toolset: 'e2e',
+      access: 'write',
+      routes: ['POST /e2e/creations/:id/explore'],
+      input: {
+        runId,
+        description: z
+          .string()
+          .trim()
+          .max(2_000)
+          .optional()
+          .describe(
+            'What to explore, e.g. "the billing screens" or "the bug in the invoice filter".',
+          ),
+        storage: z
+          .enum(['database', 'repository'])
+          .optional()
+          .describe('Where to keep the exploration script. Defaults to the database.'),
+      },
+      run: async ({ runId: value, description, storage }, { api }) => {
+        const { exploration } = await api.request<{ exploration: unknown }>({
+          method: 'POST',
+          path: `${runPath(value)}/explore`,
+          ...(description || storage
+            ? { body: { ...(description ? { description } : {}), ...(storage ? { storage } : {}) } }
+            : {}),
+        });
+        return json({
+          exploration: exploration
+            ? untrusted('e2e-exploration', JSON.stringify(exploration))
+            : null,
+          note: QUEUE_NOTICE,
+        });
+      },
+    }),
+    defineTool({
+      name: 'e2e_list_explorations',
+      title: 'List exploration scripts',
+      description:
+        'Lists the scripts of the finished site explorations kept in the database, newest first: description, status, the ordered actions of the agent and the pages it reached. Pass runId to narrow it to one run. Reuse them to write tests without exploring again.',
+      toolset: 'e2e',
+      access: 'read',
+      routes: ['GET /e2e/explorations'],
+      input: { runId: runId.optional() },
+      run: async ({ runId: value }, { api }) => {
+        const { explorations } = await api.request<{ explorations: unknown[] }>({
+          method: 'GET',
+          path: '/e2e/explorations',
+          ...(value ? { query: { creationId: value } } : {}),
+        });
+        return json({
+          explorations: untrusted('e2e-exploration-scripts', JSON.stringify(explorations ?? [])),
+          note: UNTRUSTED_CONTENT_RULE,
+        });
+      },
+    }),
+    defineTool({
+      name: 'e2e_get_exploration_script',
+      title: 'Get exploration script',
+      description:
+        'Returns one kept exploration script by id (from e2e_list_explorations): its description, actions and pages.',
+      toolset: 'e2e',
+      access: 'read',
+      routes: ['GET /e2e/explorations/:id'],
+      input: { explorationId },
+      run: async ({ explorationId: value }, { api }) => {
+        const { exploration } = await api.request<{ exploration: unknown }>({
+          method: 'GET',
+          path: `/e2e/explorations/${segment(value)}`,
+        });
+        return json({
+          exploration: exploration
+            ? untrusted('e2e-exploration-script', JSON.stringify(exploration))
+            : null,
+          note: UNTRUSTED_CONTENT_RULE,
+        });
+      },
+    }),
+    defineTool({
+      name: 'e2e_delete_exploration_script',
+      title: 'Delete exploration script',
+      description: 'Deletes a kept exploration script. The run and its tests are not affected.',
+      toolset: 'e2e',
+      access: 'destructive',
+      routes: ['DELETE /e2e/explorations/:id'],
+      input: { explorationId },
+      run: async ({ explorationId: value }, { api }) => {
+        await api.request({ method: 'DELETE', path: `/e2e/explorations/${segment(value)}` });
+        return json({ deleted: true, explorationId: value });
+      },
+    }),
+    defineTool({
+      name: 'e2e_get_action_map',
+      title: 'Get E2E action map',
+      description:
+        'Returns the graph of the pages the tests of a run went through: which tests reached each page, the elements they touched and the order each test followed. Useful to find coverage gaps and where tests fail.',
+      toolset: 'e2e',
+      access: 'read',
+      routes: ['GET /e2e/creations/:id/action-map'],
+      input: { runId },
+      run: async ({ runId: value }, { api }) => {
+        const { map } = await api.request<{ map: unknown }>({
+          method: 'GET',
+          path: `${runPath(value)}/action-map`,
+        });
+        return json({
+          map: map ? untrusted('e2e-action-map', JSON.stringify(map)) : null,
+          note: UNTRUSTED_CONTENT_RULE,
+        });
+      },
+    }),
+    defineTool({
+      name: 'e2e_get_source',
+      title: 'Get workspace Source',
+      description:
+        'Returns the Source of the workspace: the documentation of the whole system (overview, every flow by feature area, which Brain documents it came from), the pages and flows the agent discovered by exploring the application, and whether an update is running (busy). There is a single Source: every exploration replaces it. source is null before the first exploration. Everything in it comes from the tested application and the Brain.',
+      toolset: 'e2e',
+      access: 'read',
+      routes: ['GET /e2e/source'],
+      input: {},
+      run: async (_input, { api }) => {
+        const state = await api.request<{
+          source: unknown;
+          anchorId: string | null;
+          busy: boolean;
+        }>({ method: 'GET', path: '/e2e/source' });
+        return json({
+          source: state.source ? untrusted('e2e-source', JSON.stringify(state.source)) : null,
+          anchorId: state.anchorId,
+          busy: state.busy,
+          note: UNTRUSTED_CONTENT_RULE,
+        });
+      },
+    }),
+    defineTool({
+      name: 'e2e_explore_source',
+      title: 'Explore the whole application (Source)',
+      description:
+        'Explores the application of a saved environment as a whole (it signs in with the environment account and follows far more links and menus than a run does) and replaces the Source of the workspace when it ends well; a failed exploration keeps the current Source. When it ends, the workspace AI writes the documentation from the Brain and what was discovered; without an LLM integration the documentation stays empty and you write it with e2e_prepare_source + e2e_save_source_documentation. Fails while an update is running. Follow it with e2e_get_source (busy, then source). The first call needs agentId, the agent whose model documents the system.',
+      toolset: 'e2e',
+      access: 'write',
+      routes: ['POST /e2e/source/explore'],
+      input: {
+        environmentId,
+        agentId: id(
+          'Agent that documents the system (from agents_list). Kept for later updates.',
+        ).optional(),
+        executionTarget: z
+          .enum(['remote', 'local'])
+          .optional()
+          .describe(
+            'Where the browser runs. Defaults to "local" (the user\'s devkit runner) for localhost environments and to the workspace default otherwise.',
+          ),
+      },
+      run: async (body, { api }) => {
+        const { exploration } = await api.request<{ exploration: unknown }>({
+          method: 'POST',
+          path: '/e2e/source/explore',
+          body,
+        });
+        return json({
+          exploration: exploration
+            ? untrusted('e2e-exploration', JSON.stringify(exploration))
+            : null,
+          note: QUEUE_NOTICE,
+        });
+      },
+    }),
+    defineTool({
+      name: 'e2e_document_source',
+      title: 'Write the Source documentation again',
+      description:
+        'Asks a worker to write the documentation of the system again from what the Source already discovered and the current Brain, without exploring the application. The documentation in use stays if the new one cannot be written (e2e_get_source shows documentationError). Needs an LLM integration in ADK; without one use e2e_prepare_source + e2e_save_source_documentation. Fails while an update is running. Poll e2e_get_source until busy is false.',
+      toolset: 'e2e',
+      access: 'write',
+      execution: 'server',
+      routes: ['POST /e2e/source/document'],
+      input: {},
+      run: async (_input, { api }) =>
+        json(await api.request({ method: 'POST', path: '/e2e/source/document' })),
+    }),
+    defineTool({
+      name: 'e2e_prepare_source',
+      title: 'Prepare the Source documentation (host model)',
+      description:
+        'Returns what you need to write the documentation of the system yourself: what the agent discovered (pages with their controls and the navigation it followed), Brain documents about the system, the rules to follow and the JSON format to answer in. Use brain_search / brain_get_document for anything it leaves out. Then save with e2e_save_source_documentation. Needs a Source: explore with e2e_explore_source first.',
+      toolset: 'e2e',
+      access: 'read',
+      execution: 'host',
+      routes: ['GET /e2e/source/brief'],
+      input: {},
+      run: async (_input, { api }) => {
+        const { brief } = await api.request<{
+          brief: { brainKnowledge?: readonly { title: string; source: string; content: string }[] };
+        }>({ method: 'GET', path: '/e2e/source/brief' });
+        const { brainKnowledge = [], ...rest } = brief ?? {};
+        return json({
+          ...rest,
+          brainKnowledge: brainKnowledge.map((document) => ({
+            title: document.title,
+            source: document.source,
+            content: untrusted(document.source, document.content),
+          })),
+          note: UNTRUSTED_CONTENT_RULE,
+        });
+      },
+    }),
+    defineTool({
+      name: 'e2e_save_source_documentation',
+      title: 'Save the Source documentation',
+      description:
+        'Saves the documentation of the system you wrote (after e2e_prepare_source): an overview in Markdown and every flow by feature area. It replaces the documentation in use; the discovered pages and flows are untouched. Be exhaustive and use only facts from the Brain and the discovery: origin is "documented" (only the Brain), "discovered" (only seen in the application) or "both".',
+      toolset: 'e2e',
+      access: 'write',
+      routes: ['PUT /e2e/source/documentation'],
+      input: {
+        overview: z
+          .string()
+          .trim()
+          .min(1)
+          .max(40_000)
+          .describe('Markdown: purpose, users and permissions, modules, main rules.'),
+        areas: z
+          .array(
+            z.object({
+              name: z.string().trim().min(1).max(120).describe('Feature area, e.g. Issues.'),
+              description: z.string().trim().max(2_000).optional(),
+              flows: z
+                .array(
+                  z.object({
+                    title: z.string().trim().min(1).max(200),
+                    description: z.string().trim().max(2_000).optional(),
+                    steps: z.array(z.string().trim().min(1).max(1_000)).max(30).optional(),
+                    pages: z
+                      .array(z.string().trim().min(1).max(300))
+                      .max(20)
+                      .optional()
+                      .describe('Names of the discovered pages the flow goes through.'),
+                    origin: z.enum(['documented', 'discovered', 'both']),
+                  }),
+                )
+                .max(80),
+            }),
+          )
+          .max(60),
+        brainDocuments: z
+          .array(z.object({ title: z.string().max(300), source: z.string().max(2_000) }))
+          .max(100)
+          .optional()
+          .describe('The Brain documents you used (title and source from e2e_prepare_source).'),
+      },
+      run: async (body, { api }) =>
+        json(await api.request({ method: 'PUT', path: '/e2e/source/documentation', body })),
     }),
     ...testManagementTools,
   ],

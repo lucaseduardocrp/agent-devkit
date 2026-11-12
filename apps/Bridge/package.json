@@ -1,0 +1,27 @@
+{
+  "name": "@adk/bridge",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "description": "Drives AI coding CLIs (Claude, Codex, Gemini, ...) from a chat app such as Telegram.",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/src/main.js",
+    "dev": "node --env-file=.env --experimental-strip-types src/main.ts",
+    "format": "prettier --write \"**/*.{mjs,ts,json,yml}\"",
+    "format:check": "prettier --check \"**/*.{mjs,ts,json,yml}\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "npm run format:check && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.2",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

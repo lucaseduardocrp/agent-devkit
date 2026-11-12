@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hookStepTexts, isQuickTunnelUrl, needsPolling } from '../src/features/e2e/e2e-types.js';
-import { LocalHelperError, localTunnelBridge } from '../src/features/e2e/local-tunnel-bridge.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -43,6 +42,7 @@ describe('E2E type helpers', () => {
  * Notes below the list are not steps.
  */
 import { test } from '@playwright/test';
+import { ptBR } from '../src/lib/i18n/index.js';
 /* 1. Not a step: only the first comment with a list counts. */
 export default async function beforeRun() {}`;
     expect(hookStepTexts(hook)).toEqual([
@@ -64,24 +64,5 @@ export default async function beforeRun() {}`;
         '/* Just a license header, no steps here. */\n/* 1. Open the page */\nexport default async function beforeRun() {}',
       ),
     ).toEqual([{ action: 'Open the page', expectedResult: '' }]);
-  });
-});
-
-describe('local tunnel bridge failures', () => {
-  it('reports a generic failure when the helper answers without a readable body', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
-      }),
-    );
-    const failure = localTunnelBridge.stop();
-    await expect(failure).rejects.toBeInstanceOf(LocalHelperError);
-    await expect(failure).rejects.toMatchObject({
-      code: 'failed',
-      message: 'Local tunnel helper is unavailable.',
-      name: 'LocalHelperError',
-    });
   });
 });

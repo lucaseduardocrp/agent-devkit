@@ -133,7 +133,7 @@ export function E2eTestDetail({
 
   if (!test) {
     return (
-      <div className="flex flex-col gap-4 p-6" data-testid="e2e-test-detail">
+      <div className="flex flex-col gap-4" data-testid="e2e-test-detail">
         <Button variant="ghost" size="sm" className="w-fit" onClick={onBack}>
           <i className="ti ti-arrow-left" aria-hidden="true" />
           {t('e2e.back')}
@@ -154,11 +154,7 @@ export function E2eTestDetail({
   const showsRun = tab === 'preview' || tab === 'testCase';
 
   return (
-    <div
-      className="flex min-w-0 flex-col gap-4 p-6"
-      data-testid="e2e-test-detail"
-      aria-busy={active}
-    >
+    <div className="flex min-w-0 flex-col gap-4" data-testid="e2e-test-detail" aria-busy={active}>
       <div className="flex flex-col gap-3">
         <Button variant="ghost" size="sm" className="w-fit" onClick={onBack}>
           <i className="ti ti-arrow-left" aria-hidden="true" />

@@ -120,7 +120,7 @@ describe('E2eView permissions', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
     fireEvent.click(ui.getByRole('button', { name: /Nova execução/ }));
     expect(await ui.findByTestId('e2e-config-form')).toBeInTheDocument();
-    expect(ui.queryByRole('radiogroup', { name: 'Origem dos testes' })).toBeNull();
+    expect(ui.queryByRole('combobox', { name: 'Origem dos testes' })).toBeNull();
   });
 
   it('offers importing cases and choosing them as the source with access to test plans', async () => {
@@ -131,7 +131,7 @@ describe('E2eView permissions', () => {
     expect(await ui.findByRole('dialog', { name: /Importar test cases · ama/ })).toBeTruthy();
     fireEvent.click(ui.getByRole('button', { name: 'Cancelar' }));
     fireEvent.click(ui.getByRole('button', { name: /Nova execução/ }));
-    expect(await ui.findByRole('radiogroup', { name: 'Origem dos testes' })).toBeInTheDocument();
+    expect(await ui.findByRole('combobox', { name: 'Origem dos testes' })).toBeInTheDocument();
   });
 
   it('links to Agents and Integrations only for members who can open them', async () => {

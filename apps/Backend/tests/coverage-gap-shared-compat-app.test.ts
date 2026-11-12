@@ -103,11 +103,11 @@ describe('app wiring', () => {
 
   it('reports whether workers reach localhost', async () => {
     const local = createApp({ requestContextResolver: owner, hostAlias: 'host.docker.internal' });
-    expect((await request(local).get('/capabilities')).body).toEqual({
+    expect((await request(local).get('/capabilities')).body).toMatchObject({
       workersReachLocalhost: true,
     });
     const cloud = createApp({ requestContextResolver: owner });
-    expect((await request(cloud).get('/capabilities')).body).toEqual({
+    expect((await request(cloud).get('/capabilities')).body).toMatchObject({
       workersReachLocalhost: false,
     });
   });

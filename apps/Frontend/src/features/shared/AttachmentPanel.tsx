@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent, type DragEvent } from 'react';
 import type { ApiClient } from '../../lib/api-client.js';
-import { useI18n } from '../../lib/i18n/index.js';
+import { formatMessage, useI18n } from '../../lib/i18n/index.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import {
@@ -32,42 +32,6 @@ interface Props {
   onInsertInline?: (attachment: Attachment) => void;
   disabled?: boolean;
 }
-
-const copy = {
-  'pt-BR': {
-    title: 'Anexos',
-    url: 'URL do arquivo',
-    addUrl: 'Adicionar URL',
-    upload: 'Anexar arquivo',
-    drop: 'Solte arquivos aqui ou use “Anexar arquivo”. Imagens até 10 MB, vídeos até 100 MB, documentos até 25 MB.',
-    remove: 'Remover anexo',
-    download: 'Baixar',
-    open: 'Abrir no provedor',
-    insert: 'Inserir no texto',
-    limit: `Máximo de ${MAX_ATTACHMENTS} anexos.`,
-    invalidUrl: 'Informe uma URL HTTPS válida.',
-    unsupported: 'Tipo de arquivo não suportado.',
-    tooLarge: (name: string, limit: number) => `${name} passa do limite de ${limit} MB.`,
-    unavailable: 'Arquivo indisponível',
-  },
-  'en-US': {
-    title: 'Attachments',
-    url: 'File URL',
-    addUrl: 'Add URL',
-    upload: 'Attach file',
-    drop: 'Drop files here or use “Attach file”. Images up to 10 MB, videos up to 100 MB, documents up to 25 MB.',
-    remove: 'Remove attachment',
-    download: 'Download',
-    open: 'Open at the provider',
-    insert: 'Insert in text',
-    limit: `Up to ${MAX_ATTACHMENTS} attachments.`,
-    invalidUrl: 'Enter a valid HTTPS URL.',
-    unsupported: 'Unsupported file type.',
-    tooLarge: (name: string, limit: number) => `${name} is over the ${limit} MB limit.`,
-    unavailable: 'File unavailable',
-  },
-} as const;
-
 function documentIcon(name: string): string {
   const extension = /\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase() ?? '';
   if (extension === 'pdf') return 'ti-file-type-pdf';
@@ -109,10 +73,10 @@ export function AttachmentPanel({
   onInsertInline,
   disabled = false,
 }: Props) {
-  const { locale } = useI18n();
+  const { messages } = useI18n();
   const contextClient = useMediaClient();
   const apiClient = givenClient ?? contextClient;
-  const c = copy[locale];
+  const c = messages.attachments;
   const [url, setUrl] = useState('');
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -121,7 +85,7 @@ export function AttachmentPanel({
 
   const addUrl = () => {
     if (full) {
-      setError(c.limit);
+      setError(formatMessage(c.limit, { max: MAX_ATTACHMENTS }));
       return;
     }
     try {
@@ -151,7 +115,7 @@ export function AttachmentPanel({
   const addFiles = (files: readonly File[]) => {
     if (!onChange || !apiClient || !files.length) return;
     if (attachments.length + files.length > MAX_ATTACHMENTS) {
-      setError(c.limit);
+      setError(formatMessage(c.limit, { max: MAX_ATTACHMENTS }));
       return;
     }
     for (const file of files) {
@@ -161,7 +125,12 @@ export function AttachmentPanel({
         return;
       }
       if (file.size > ATTACHMENT_LIMITS[kind]) {
-        setError(c.tooLarge(file.name, ATTACHMENT_LIMITS[kind] / 1024 / 1024));
+        setError(
+          formatMessage(c.tooLarge, {
+            name: file.name,
+            limit: ATTACHMENT_LIMITS[kind] / 1024 / 1024,
+          }),
+        );
         return;
       }
     }
@@ -329,7 +298,7 @@ export function AttachmentPanel({
                 multiple
                 disabled={full}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  const files = [...(event.currentTarget.files as FileList)];
+                  const files = [...(event.currentTarget.files ?? [])];
                   event.currentTarget.value = '';
                   addFiles(files);
                 }}

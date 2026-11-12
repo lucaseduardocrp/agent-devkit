@@ -106,7 +106,7 @@ export class DynamicProviderFactory {
     url: URL,
   ): Promise<Record<string, string> | null> {
     const host = url.hostname.toLowerCase();
-    const firstSegment = decodeURIComponent(url.pathname.split('/')[1]!).toLowerCase();
+    const firstSegment = decodeURIComponent(url.pathname.split('/')[1] ?? '').toLowerCase();
     const sameHost = (value: unknown) => {
       try {
         return new URL(asString(value)).hostname.toLowerCase() === host;
@@ -383,6 +383,20 @@ export class DynamicProviderFactory {
               ? 'Trello board connection verified.'
               : `Trello returned ${res.status}.`,
           };
+        }
+        case 'telegram': {
+          const token = secret?.trim() ?? '';
+          // BotFather tokens look like 123456789:AAF...; anything else must not reach the URL.
+          if (!/^\d+:[\w-]+$/.test(token))
+            return { ok: false, message: 'Paste the bot token BotFather gave you.' };
+          const res = await fetcher(`https://api.telegram.org/bot${token}/getMe`);
+          const body = (await res.json().catch(() => null)) as {
+            ok?: boolean;
+            result?: { username?: string };
+          } | null;
+          return body?.ok
+            ? { ok: true, message: `Connected to @${body.result?.username ?? 'bot'}.` }
+            : { ok: false, message: `Telegram rejected the token (${res.status}).` };
         }
         case 'jira': {
           const baseUrl = asString(settings.baseUrl).trim().replace(/\/$/, '');

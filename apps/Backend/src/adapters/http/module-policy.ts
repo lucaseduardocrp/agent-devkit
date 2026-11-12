@@ -48,6 +48,7 @@ const prefixes: readonly [RegExp, PermissionModule][] = [
   [/^\/design(\/|$)/, 'design'],
   [/^\/spec(\/|$)/, 'specs'],
   [/^\/release-notes(\/|$)/, 'releaseNotes'],
+  [/^\/development(\/|$)/, 'development'],
   [/^\/TestPlan(\/|$)/, 'testplans'],
   [/^\/e2e(\/|$)/, 'e2e'],
   [/^\/integration-tests(\/|$)/, 'integrationTests'],

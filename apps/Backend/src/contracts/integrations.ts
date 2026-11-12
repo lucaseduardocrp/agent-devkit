@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-export const integrationCategorySchema = z.enum(['KNOWLEDGE', 'PROJECT_MANAGEMENT', 'LLM']);
+export const integrationCategorySchema = z.enum([
+  'KNOWLEDGE',
+  'PROJECT_MANAGEMENT',
+  'LLM',
+  'MESSAGING',
+]);
 export type IntegrationCategory = z.infer<typeof integrationCategorySchema>;
 
 export const saveIntegrationSchema = z.object({

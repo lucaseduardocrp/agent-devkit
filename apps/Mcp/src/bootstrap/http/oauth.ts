@@ -142,6 +142,7 @@ export class AdkOAuthProvider implements OAuthServerProvider {
     );
     return router;
   }
+
   public challengeForAuthorizationCode(
     client: OAuthClientInformationFull,
     authorizationCode: string,

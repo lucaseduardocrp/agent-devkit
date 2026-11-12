@@ -18,18 +18,34 @@ import {
   type E2eStepResult,
   type E2eTestCase,
 } from '../domain/e2e.js';
+import {
+  liveFrameKey,
+  liveLabelKey,
+  trailImageKey,
+  trailKey,
+  trailPrefix,
+  explorationPageKey,
+  type E2eStoredTrail,
+} from '../domain/e2e-insight.js';
+import { sourcePageKey, sourcePrefix, type E2eSourceDocumentation } from '../domain/e2e-source.js';
+import type { E2eExplorationLogEntry, E2eExplorationPage } from '../domain/e2e-insight.js';
+import type { E2eEnvironmentService } from './e2e-environments.js';
+import { ExplorationRecorder, readExploration, type ExplorationKeeper } from './e2e-exploration.js';
 import type { E2eRunReporter } from './e2e-reporter.js';
+import { formatDuration, type RunNotifier } from '../../messaging/application/run-notifier.js';
 import type { E2eArtifactStore } from './artifact-store.js';
 import type { E2eAnalysis, E2eAuthor } from './e2e-author.js';
 import type { E2eJob } from './e2e-queue.js';
 import {
   E2eRunnerError,
   type E2eCredentials,
+  type E2eLiveFrame,
   type E2eRunHooks,
   type E2eRunResult,
   type E2eRunner,
   type E2eSnapshot,
   type E2eStepEvidence,
+  type E2eTrail,
   type E2eVideoTranscoder,
 } from './e2e-runner.js';
 import type { E2eStore, E2eTestChanges } from './e2e-store.js';
@@ -51,6 +67,12 @@ export interface E2eExecutorOptions {
   readonly transcoder?: E2eVideoTranscoder | null;
   /** Sends results to the run's test management platform; without it nothing is reported. */
   readonly reporter?: Pick<E2eRunReporter, 'publish'> | null;
+  /** Tells the workspace's paired chats (Telegram) that a run ended. */
+  readonly notifier?: RunNotifier | null;
+  /** The API runs on the user's computer (desktop app): every run uses this process's browser. */
+  readonly runsLocally?: boolean;
+  /** Saved environments: their custom variables reach the specs of the runs that use them. */
+  readonly environments?: Pick<E2eEnvironmentService, 'variables'> | null;
 }
 
 type SnapshotProvider = () => Promise<E2eSnapshot | null>;
@@ -80,6 +102,7 @@ export class E2eExecutor {
     if (job.kind === 'generate') await this.generate(creation, job, signal);
     else if (job.kind === 'explore') await this.explore(creation, job, signal);
     else if (job.kind === 'publish') await this.publish(creation);
+    else if (job.kind === 'document') await this.document(creation, signal);
     else await this.execute(creation, job, signal);
   }
 
@@ -88,7 +111,8 @@ export class E2eExecutor {
    * job when the run executes locally. Orchestration (AI, healing, results) stays here.
    */
   private runnerFor(creation: E2eCreation, job: E2eJob, testId: string | null): E2eRunner {
-    if (creation.executionTarget !== 'local') return this.options.runner;
+    if (creation.executionTarget !== 'local' || this.options.runsLocally)
+      return this.options.runner;
     if (!this.options.localRunner)
       throw new E2eRunnerError('E2E_LOCAL_RUNNER_UNAVAILABLE', 'Local runners are not enabled.');
     return this.options.localRunner.for({
@@ -142,13 +166,7 @@ export class E2eExecutor {
   private async explore(creation: E2eCreation, job: E2eJob, signal: AbortSignal): Promise<void> {
     let stored: StoredSnapshot;
     try {
-      const snapshot = await this.runnerFor(creation, job, null).explore({
-        mode: creation.mode,
-        url: targetUrl(creation),
-        transportUrl: creation.localOrigin ? creation.baseUrl : undefined,
-        signal,
-        accessToken: decryptAccessToken(creation.accessSecret),
-      });
+      const snapshot = await this.exploreApplication(creation, job, signal);
       stored = { capturedAt: new Date().toISOString(), snapshot };
     } catch (error) {
       stored = {
@@ -163,18 +181,197 @@ export class E2eExecutor {
     );
   }
 
-  private async generate(initial: E2eCreation, job: E2eJob, signal: AbortSignal): Promise<void> {
-    const { store, author } = this.options;
-    let creation = initial;
+  /**
+   * Opens the application and reads it for the plan. The exploration of a UI signs in with the
+   * run's test account and is recorded step by step, so it can be followed while it happens.
+   */
+  private async exploreApplication(
+    creation: E2eCreation,
+    job: E2eJob,
+    signal: AbortSignal,
+  ): Promise<E2eSnapshot> {
+    const credentials = credentialsOf(creation);
+    // The user's description of an explicit exploration waits in the run's state; the one
+    // that precedes planning has none.
+    const requested =
+      job.kind === 'explore' ? await readExploration(this.options.artifacts, creation) : null;
+    const description = requested?.description ?? null;
+    const source = requested?.source === true;
+    // A run's exploration is scoped to the tests of that run: the Source (the whole application)
+    // is the only exploration that stays open.
+    const focus = source ? description : await this.testsFocus(creation, description);
+    const recorder =
+      creation.mode === 'frontend'
+        ? await ExplorationRecorder.start(
+            this.options.artifacts,
+            creation,
+            Boolean(credentials.username && credentials.password),
+            Date.now,
+            {
+              description,
+              source,
+              keep: source ? this.sourceKeeper(creation, signal) : this.explorationKeeper(),
+            },
+          )
+        : null;
     try {
-      creation = await this.updateCreation(creation, { status: 'planning' }, signal);
       const snapshot = await this.runnerFor(creation, job, null).explore({
         mode: creation.mode,
         url: targetUrl(creation),
         transportUrl: creation.localOrigin ? creation.baseUrl : undefined,
         signal,
         accessToken: decryptAccessToken(creation.accessSecret),
+        credentials,
+        ...(focus ? { focus } : {}),
+        // The Source maps every flow of the application, not a sample of it.
+        thorough: source,
+        ...(recorder ? { onProgress: recorder.onProgress } : {}),
       });
+      await recorder?.finish();
+      return snapshot;
+    } catch (error) {
+      await recorder?.fail(describeError(error, creation.locale));
+      throw error;
+    }
+  }
+
+  /**
+   * What a run's exploration looks for: its own tests (title, description and first steps) and
+   * the user's description. Nothing outside the run gives it context. Null when the run has
+   * neither, which leaves the exploration open.
+   */
+  private async testsFocus(
+    creation: E2eCreation,
+    description: string | null,
+  ): Promise<string | null> {
+    const tests = await this.options.store.listTests(creation.workspaceId, creation.id);
+    const text = [
+      description,
+      ...tests.flatMap((test) => [test.title, test.description, ...test.steps.slice(0, 4)]),
+    ]
+      .filter(Boolean)
+      .join(' ');
+    return text || null;
+  }
+
+  /** Scripts of explorations are kept in the database only, never in the repository. */
+  private explorationKeeper(): ExplorationKeeper {
+    return async (script) => {
+      await this.options.store.saveExplorationScript(script);
+      return 'database';
+    };
+  }
+
+  /**
+   * Replaces the Source of the workspace with an exploration that ended well: its script and
+   * pages go to the database and the pictures of its pages are copied out of the run, which
+   * replaces its own on the next exploration. A failed exploration leaves the Source as it was.
+   */
+  private sourceKeeper(creation: E2eCreation, signal: AbortSignal): ExplorationKeeper {
+    const { artifacts, store } = this.options;
+    return async (script) => {
+      if (script.status !== 'ready') return null;
+      const { workspaceId } = creation;
+      await artifacts.removePrefix(sourcePrefix(workspaceId));
+      const pages = [];
+      for (const page of script.pages) {
+        const picture = await artifacts.get(explorationPageKey(creation, page.index));
+        if (picture) await artifacts.put(sourcePageKey(workspaceId, page.index), picture);
+        pages.push({ ...page, hasScreenshot: Boolean(picture) });
+      }
+      // The AI documents the system from the Brain and from what was just discovered. Without
+      // it (no model, an unusable answer) the map is kept and the reason is shown.
+      const { documentation, documentationError } = await this.writeDocumentation(
+        creation,
+        pages,
+        script.script,
+        signal,
+      );
+      await store.saveSource({
+        workspaceId,
+        creationId: creation.id,
+        environmentId: creation.environmentId ?? null,
+        startUrl: targetUrl(creation),
+        signedInMs: script.signedInMs,
+        script: script.script,
+        pages,
+        documentation,
+        documentationError,
+        startedAt: script.startedAt,
+        finishedAt: script.finishedAt,
+      });
+      return 'source';
+    };
+  }
+
+  /** The AI's documentation of the system, or why it could not be written; never throws. */
+  private async writeDocumentation(
+    creation: E2eCreation,
+    pages: readonly E2eExplorationPage[],
+    script: readonly E2eExplorationLogEntry[],
+    signal: AbortSignal,
+  ): Promise<{
+    documentation: E2eSourceDocumentation | null;
+    documentationError: string | null;
+  }> {
+    const { author } = this.options;
+    if (!author.documentSource)
+      return {
+        documentation: null,
+        documentationError: describeError(
+          new ApplicationError(
+            'E2E_SOURCE_AUTHOR_UNSUPPORTED',
+            'This author cannot document the system.',
+            503,
+          ),
+          creation.locale,
+        ),
+      };
+    try {
+      return {
+        documentation: await author.documentSource({
+          creation,
+          startUrl: targetUrl(creation),
+          pages,
+          script,
+          signal,
+        }),
+        documentationError: null,
+      };
+    } catch (error) {
+      return { documentation: null, documentationError: describeError(error, creation.locale) };
+    }
+  }
+
+  /**
+   * Writes the documentation of the Source again from what it already discovered, without
+   * exploring. The documentation in use stays when the new one cannot be written.
+   */
+  private async document(creation: E2eCreation, signal: AbortSignal): Promise<void> {
+    const { store } = this.options;
+    const source = await store.getSource(creation.workspaceId);
+    if (!source) return;
+    const { documentation, documentationError } = await this.writeDocumentation(
+      creation,
+      source.pages,
+      source.script,
+      signal,
+    );
+    if (signal.aborted) return;
+    await store.saveSource({
+      ...source,
+      documentation: documentation ?? source.documentation,
+      documentationError,
+    });
+  }
+
+  private async generate(initial: E2eCreation, job: E2eJob, signal: AbortSignal): Promise<void> {
+    const { store, author } = this.options;
+    const startedAt = Date.now();
+    let creation = initial;
+    try {
+      creation = await this.updateCreation(creation, { status: 'planning' }, signal);
+      const snapshot = await this.exploreApplication(creation, job, signal);
       await this.checkpoint(creation, signal);
       const plan = await author.plan({ creation, snapshot, signal });
       ensureActive(signal);
@@ -191,14 +388,16 @@ export class E2eExecutor {
         signal,
       );
     } catch (error) {
-      await this.failCreation(creation, error, signal);
+      await this.failCreation(creation, error, signal, startedAt);
       return;
     }
+    await this.notifyFinished(creation, startedAt);
     await this.autoPublish(creation);
   }
 
   private async execute(initial: E2eCreation, job: E2eJob, signal: AbortSignal): Promise<void> {
     const { testIds } = job;
+    const startedAt = Date.now();
     let creation = initial;
     let snapshot: Promise<E2eSnapshot | null> | undefined;
     const snapshotProvider: SnapshotProvider = () =>
@@ -223,9 +422,10 @@ export class E2eExecutor {
         signal,
       );
     } catch (error) {
-      await this.failCreation(creation, error, signal);
+      await this.failCreation(creation, error, signal, startedAt);
       return;
     }
+    await this.notifyFinished(creation, startedAt, testIds);
     await this.autoPublish(creation, testIds);
   }
 
@@ -303,6 +503,7 @@ export class E2eExecutor {
     ensureActive(signal);
     const videoKey = await this.replaceVideo(creation, initial, result.video);
     const stepResults = await this.replaceStepEvidence(initial, result.steps);
+    await this.replaceTrail(initial, result.trail ?? null);
     await this.options.store.updateTest(creation.workspaceId, test.id, {
       status: result.status,
       error: result.error,
@@ -342,6 +543,44 @@ export class E2eExecutor {
     return results;
   }
 
+  /**
+   * Keeps the trail of the latest execution only: what the test touched, with one image per
+   * screen and per element. A test that left none (API tests, local runs) loses its old one.
+   */
+  private async replaceTrail(test: E2eTestCase, trail: E2eTrail | null): Promise<void> {
+    const { artifacts } = this.options;
+    await artifacts.removePrefix(trailPrefix(test));
+    if (!trail) return;
+    for (const page of trail.pages)
+      if (page.screenshot)
+        await artifacts.put(trailImageKey(test, 'page', page.index), page.screenshot);
+    for (const element of trail.elements)
+      if (element.screenshot)
+        await artifacts.put(trailImageKey(test, 'element', element.index), element.screenshot);
+    const stored: E2eStoredTrail = {
+      pages: trail.pages.map(({ screenshot, ...page }) => ({
+        ...page,
+        hasScreenshot: Boolean(screenshot),
+      })),
+      elements: trail.elements.map(({ screenshot, ...element }) => ({
+        ...element,
+        hasScreenshot: Boolean(screenshot),
+      })),
+      touches: [...trail.touches],
+      visits: [...trail.visits],
+    };
+    await artifacts.put(trailKey(test), Buffer.from(JSON.stringify(stored), 'utf8'));
+  }
+
+  /** The latest frame of a running test and the action it is on, for the run's live view. */
+  private async storeLive(test: E2eTestCase, frame: E2eLiveFrame): Promise<void> {
+    await this.options.artifacts.put(liveFrameKey(test), frame.image);
+    await this.options.artifacts.put(
+      liveLabelKey(test),
+      Buffer.from(JSON.stringify(frame.activity), 'utf8'),
+    );
+  }
+
   private async replaceVideo(
     creation: E2eCreation,
     test: E2eTestCase,
@@ -369,6 +608,8 @@ export class E2eExecutor {
     const { store, author } = this.options;
     await this.updateTest(creation, test.id, { status: 'generating' }, signal);
     const context = await snapshot();
+    const names = Object.keys(await this.variablesOf(creation));
+    const variables = names.length ? { variableNames: names } : {};
     let script = await author.writeScript({
       creation,
       test,
@@ -376,6 +617,7 @@ export class E2eExecutor {
       previous,
       hooks,
       signal,
+      ...variables,
     });
     let check = checkScript(script);
     if (!check.ok) {
@@ -389,6 +631,7 @@ export class E2eExecutor {
         },
         hooks,
         signal,
+        ...variables,
       });
       check = checkScript(script);
     }
@@ -510,19 +753,43 @@ export class E2eExecutor {
       { status: 'running', attempts: test.attempts + 1, lastRunAt: new Date() },
       signal,
     );
-    const result = await this.runnerFor(creation, job, test.id).run({
-      script,
-      hooks,
-      mode: creation.mode,
-      baseUrl: creation.baseUrl,
-      localOrigin: creation.localOrigin,
-      locale: creation.locale,
-      credentials: credentialsOf(creation),
-      accessToken: decryptAccessToken(creation.accessSecret),
-      signal,
-    });
+    const { artifacts } = this.options;
+    // Frames are stored one after the other, so the last one written is the latest.
+    let live: Promise<void> = Promise.resolve();
+    let result: E2eRunResult;
+    try {
+      result = await this.runnerFor(creation, job, test.id).run({
+        script,
+        hooks,
+        mode: creation.mode,
+        baseUrl: creation.baseUrl,
+        localOrigin: creation.localOrigin,
+        locale: creation.locale,
+        credentials: credentialsOf(creation),
+        accessToken: decryptAccessToken(creation.accessSecret),
+        signal,
+        variables: await this.variablesOf(creation),
+        onLive: (frame) => {
+          live = live
+            .then(() => this.storeLive(test, frame))
+            .catch((error: unknown) => console.error('[E2eExecutor] Live frame lost:', error));
+        },
+      });
+    } finally {
+      await live;
+      await artifacts.removePrefix(liveFrameKey(test));
+      await artifacts.removePrefix(liveLabelKey(test));
+    }
     ensureActive(signal);
     return result;
+  }
+
+  /** Custom variables of the environment the run was configured from. */
+  private async variablesOf(creation: E2eCreation): Promise<Record<string, string>> {
+    return (
+      (await this.options.environments?.variables(creation.workspaceId, creation.environmentId)) ??
+      {}
+    );
   }
 
   private async analyze(
@@ -555,6 +822,7 @@ export class E2eExecutor {
     creation: E2eCreation,
     error: unknown,
     signal: AbortSignal,
+    startedAt?: number,
   ): Promise<void> {
     if (signal.aborted || error instanceof Cancelled) return;
     const message = describeError(error, creation.locale);
@@ -564,6 +832,34 @@ export class E2eExecutor {
       finishedAt: new Date(),
     });
     await this.closeActiveTests(creation, { status: 'error', error: message });
+    if (startedAt !== undefined)
+      await this.options.notifier?.runFinished({
+        workspaceId: creation.workspaceId,
+        kind: 'e2e',
+        name: creation.name,
+        status: 'error',
+        summary: message.split('\n')[0]!.slice(0, 300),
+      });
+  }
+
+  /** Counts the tests of a finished execution for the paired chats. */
+  private async notifyFinished(
+    creation: E2eCreation,
+    startedAt: number,
+    testIds?: readonly string[],
+  ): Promise<void> {
+    if (!this.options.notifier) return;
+    const tests = (await this.options.store.listTests(creation.workspaceId, creation.id)).filter(
+      (test) => !testIds || testIds.includes(test.id),
+    );
+    const passed = tests.filter((test) => test.status === 'passed').length;
+    await this.options.notifier.runFinished({
+      workspaceId: creation.workspaceId,
+      kind: 'e2e',
+      name: creation.name,
+      status: passed === tests.length ? 'passed' : 'failed',
+      summary: `${passed}/${tests.length} passed · ${formatDuration(Date.now() - startedAt)}`,
+    });
   }
 
   private async closeActiveTests(creation: E2eCreation, changes: E2eTestChanges): Promise<void> {

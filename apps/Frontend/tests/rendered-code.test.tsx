@@ -33,7 +33,7 @@ describe('MermaidDiagram', () => {
       ReturnType<typeof mermaid.render>
     >);
     render(<MermaidDiagram code="flowchart TD\nA-->B" />);
-    const image = await screen.findByRole('img', { name: 'Mermaid diagram' });
+    const image = await screen.findByRole('img', { name: 'Diagrama Mermaid' });
     expect(image.getAttribute('src')).toContain('data:image/svg+xml');
     expect(mermaid.initialize).toHaveBeenCalledWith(
       expect.objectContaining({ securityLevel: 'strict' }),
@@ -44,6 +44,6 @@ describe('MermaidDiagram', () => {
     vi.mocked(mermaid.render).mockRejectedValue(new Error('Invalid diagram'));
     render(<MermaidDiagram code="invalid" />);
     await waitFor(() => expect(mermaid.render).toHaveBeenCalled());
-    expect(screen.queryByRole('img', { name: 'Mermaid diagram' })).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Diagrama Mermaid' })).toBeNull();
   });
 });

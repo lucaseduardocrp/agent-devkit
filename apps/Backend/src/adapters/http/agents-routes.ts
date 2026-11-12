@@ -95,6 +95,7 @@ const workflowToolsetSchema = z.enum([
   'design',
   'e2e',
   'releasenotes',
+  'development',
   'integrationtests',
   'loadtests',
   'audit',

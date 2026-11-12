@@ -18,6 +18,13 @@ let server: http.Server;
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
+    if (req.url === '/medium') {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }, 250);
+      return;
+    }
     if (req.url === '/slow') {
       setTimeout(() => res.end('late'), 2_000);
       return;
@@ -159,6 +166,117 @@ describe('devkit runner for API tests', () => {
     });
     await agent.serve({ signal: controller.signal });
     expect(events).toEqual([{ type: 'offline', message: 'ECONNREFUSED', retryInMs: 2_000 }]);
+  });
+
+  it('keeps the run going while heartbeats say it is still running', async () => {
+    const { api, calls } = fakeApi(integration(`${base}/medium`));
+    const agent = new ApiTestRunnerAgent({ api, identity, heartbeatMs: 20 });
+    await agent.poll({ waitSeconds: 0 });
+    expect(calls.filter((call) => call.path.endsWith('/heartbeat')).length).toBeGreaterThan(0);
+    const complete = calls.find((call) => call.path.endsWith('/complete'));
+    expect(complete?.body).toMatchObject({ status: 'passed' });
+  });
+
+  it('runs requests through the given fetch and abort signal', async () => {
+    const { api } = fakeApi(integration('{{base}}/health'));
+    const fetcher = vi.fn(() => Promise.resolve(Response.json({ ok: true })));
+    const agent = new ApiTestRunnerAgent({
+      api,
+      identity,
+      fetch: fetcher,
+    });
+    const controller = new AbortController();
+    await agent.poll({ waitSeconds: 0, signal: controller.signal });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps serving after a successful poll until the signal aborts', async () => {
+    const { api } = fakeApi(integration('{{base}}/health'));
+    const controller = new AbortController();
+    const events: ApiRunnerEvent[] = [];
+    const agent = new ApiTestRunnerAgent({
+      api,
+      identity,
+      onEvent: (event) => {
+        events.push(event);
+        if (event.type === 'finished') controller.abort();
+      },
+    });
+    await agent.serve({ waitSeconds: 0, signal: controller.signal });
+    expect(events.map((event) => event.type)).toEqual(['claimed', 'finished']);
+  });
+
+  it('gives up on authentication errors instead of retrying them', async () => {
+    const denied = Object.assign(new Error('Unauthorized'), { status: 401 });
+    const agent = new ApiTestRunnerAgent({
+      api: { request: () => Promise.reject(denied) },
+      identity,
+    });
+    await expect(agent.serve()).rejects.toBe(denied);
+  });
+
+  it('retries other errors with a doubling pause, through the default sleep', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const controller = new AbortController();
+      const events: ApiRunnerEvent[] = [];
+      const agent = new ApiTestRunnerAgent({
+        api: { request: () => Promise.reject(new Error('refused')) },
+        identity,
+        onEvent: (event) => events.push(event),
+      });
+      const serving = agent.serve({ signal: controller.signal });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(events.map((event) => event.type === 'offline' && event.retryInMs)).toEqual([
+        2_000, 4_000,
+      ]);
+      controller.abort();
+      await serving;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not wait at all when already aborted, and reports failures that are not errors', async () => {
+    const controller = new AbortController();
+    const events: ApiRunnerEvent[] = [];
+    const agent = new ApiTestRunnerAgent({
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- covers a non-Error rejection
+      api: { request: () => Promise.reject('plain failure') },
+      identity,
+      onEvent: (event) => {
+        events.push(event);
+        controller.abort();
+      },
+    });
+    await agent.serve({ signal: controller.signal });
+    expect(events).toEqual([{ type: 'offline', message: 'plain failure', retryInMs: 2_000 }]);
+  });
+
+  it('prints every event for the terminal', () => {
+    const run = { id: 'r', kind: 'integration' as const, name: 'Orders' };
+    expect(formatApiRunnerEvent({ type: 'claimed', run })).toBe(
+      '[devkit] API tests "Orders" started on this computer.',
+    );
+    expect(
+      formatApiRunnerEvent({
+        type: 'finished',
+        run,
+        saved: true,
+        outcome: { status: 'error', error: 'Collection not found', result: null },
+      }),
+    ).toBe('[devkit] API tests "Orders" error: Collection not found.');
+    expect(
+      formatApiRunnerEvent({
+        type: 'finished',
+        run,
+        saved: true,
+        outcome: { status: 'error', error: null, result: null },
+      }),
+    ).toBe('[devkit] API tests "Orders" error.');
+    expect(
+      formatApiRunnerEvent({ type: 'offline', message: 'ECONNREFUSED', retryInMs: 4_000 }),
+    ).toBe('[devkit] ADK is unreachable (ECONNREFUSED); retrying API test runs in 4 s.');
   });
 });
 

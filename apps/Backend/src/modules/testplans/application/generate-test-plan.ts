@@ -454,7 +454,6 @@ export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
           language: localeForLanguage(outputLanguage),
         });
         if (
-          parsedPlans.length > 0 &&
           usesOutputLanguage(parsedPlans, outputLanguage) &&
           hasUsableTestSteps(parsedPlans, prompt)
         ) {
@@ -531,7 +530,6 @@ export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
         parsedPlans = [];
       }
       if (
-        parsedPlans.length > 0 &&
         usesOutputLanguage(parsedPlans, composed.outputLanguage) &&
         hasUsableTestSteps(parsedPlans, composed.prompt)
       ) {

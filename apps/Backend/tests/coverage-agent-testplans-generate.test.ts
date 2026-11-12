@@ -176,3 +176,137 @@ describe('AiKnowledgeTestPlanGenerator provider and agent selection', () => {
     expect(complete).not.toHaveBeenCalled();
   });
 });
+
+describe('AiKnowledgeTestPlanGenerator with an agent workflow', () => {
+  const context = { requestId: 'r', ownerId: 'owner-1', workspaceId: 'ws-1' };
+  const validPlan = JSON.stringify([
+    {
+      title: 'Report filter',
+      description: 'Report filter',
+      steps: [
+        {
+          action:
+            'Open the employee report screen and choose the dismissal filter options available',
+          expected:
+            'The filtered list shows only matching people with their names and current status',
+        },
+      ],
+    },
+  ]);
+
+  function build(options: {
+    answers: string[];
+    agents?: { id: string; isDefault?: boolean; role?: string }[];
+    stepAgentId?: string;
+    enabled?: boolean;
+  }) {
+    const executeAgent = vi.fn();
+    for (const answer of options.answers) executeAgent.mockResolvedValueOnce({ result: answer });
+    const getWorkflow = vi.fn().mockResolvedValue({
+      enabled: options.enabled ?? true,
+      steps: [{ id: 's1', name: 'Plan', instructions: 'x', agentId: options.stepAgentId }],
+    });
+    const generator = new AiKnowledgeTestPlanGenerator({
+      agentService: { getWorkflow, executeAgent } as never,
+      agentRepository: {
+        findById: vi.fn().mockResolvedValue({ id: 'chosen' }),
+        listByWorkspace: vi.fn().mockResolvedValue(options.agents ?? []),
+      } as unknown as AgentRepository,
+    });
+    return { generator, executeAgent };
+  }
+
+  it('asks the selected agent and returns the plans it writes', async () => {
+    const { generator, executeAgent } = build({ answers: [validPlan] });
+    const result = await generator.generate(
+      { prompt: requirement, agentId: 'chosen', llmProvider: 'gemini' },
+      context,
+    );
+    expect(result.title).toBe('Report filter');
+    expect(result.plans).toHaveLength(1);
+    expect(executeAgent).toHaveBeenCalledOnce();
+    expect(executeAgent).toHaveBeenCalledWith(
+      'ws-1',
+      'chosen',
+      expect.objectContaining({ includeKnowledge: false, llmProvider: 'gemini' }),
+      context,
+    );
+  });
+
+  it('picks the default agent, then a QA agent, then the one of the workflow', async () => {
+    const byDefault = build({
+      answers: [validPlan],
+      agents: [
+        { id: 'qa', role: 'QA' },
+        { id: 'main', isDefault: true },
+      ],
+      stepAgentId: 'step-agent',
+    });
+    await byDefault.generator.generate({ prompt: requirement }, context);
+    expect(byDefault.executeAgent.mock.calls[0]![1]).toBe('main');
+
+    const byRole = build({ answers: [validPlan], agents: [{ id: 'qa', role: 'QA' }] });
+    await byRole.generator.generate({ prompt: requirement }, context);
+    expect(byRole.executeAgent.mock.calls[0]![1]).toBe('qa');
+
+    const byStep = build({ answers: [validPlan], stepAgentId: 'step-agent' });
+    await byStep.generator.generate({ prompt: requirement }, context);
+    expect(byStep.executeAgent.mock.calls[0]![1]).toBe('step-agent');
+    expect(byStep.executeAgent.mock.calls[0]![2]).not.toHaveProperty('llmProvider');
+  });
+
+  it('needs an agent, either chosen or in the workflow', async () => {
+    const { generator, executeAgent } = build({ answers: [] });
+    await expect(generator.generate({ prompt: requirement }, context)).rejects.toMatchObject({
+      code: 'AGENT_WORKFLOW_AGENT_REQUIRED',
+      statusCode: 409,
+    });
+    expect(executeAgent).not.toHaveBeenCalled();
+  });
+
+  it('asks again once with a correction when the answer is unusable, then gives up', async () => {
+    const generic = JSON.stringify([
+      {
+        title: 'Report filter',
+        description: 'Report filter',
+        steps: [{ action: 'Execute the test.', expected: 'The report is displayed.' }],
+      },
+    ]);
+    const retry = build({ answers: [generic, validPlan], stepAgentId: 'a' });
+    const result = await retry.generator.generate({ prompt: requirement }, context);
+    expect(result.title).toBe('Report filter');
+    expect(retry.executeAgent).toHaveBeenCalledTimes(2);
+    expect(retry.executeAgent.mock.calls[0]![2].prompt).not.toContain('CORRECTION REQUIRED');
+    expect(retry.executeAgent.mock.calls[1]![2].prompt).toContain('CORRECTION REQUIRED');
+
+    const hopeless = build({ answers: [generic, generic], stepAgentId: 'a' });
+    await expect(
+      hopeless.generator.generate({ prompt: requirement }, context),
+    ).rejects.toMatchObject({ code: 'AGENT_WORKFLOW_OUTPUT_INVALID', statusCode: 502 });
+    expect(hopeless.executeAgent).toHaveBeenCalledTimes(2);
+    // An answer that is not JSON at all is not worth a second try.
+    const garbage = build({ answers: ['not json at all'], stepAgentId: 'a' });
+    await expect(
+      garbage.generator.generate({ prompt: requirement }, context),
+    ).rejects.toMatchObject({
+      code: 'AGENT_WORKFLOW_OUTPUT_INVALID',
+    });
+    expect(garbage.executeAgent).toHaveBeenCalledOnce();
+  });
+
+  it('uses the normal path when the workflow is off or has no steps', async () => {
+    const { llm } = llmReturning([
+      { action: 'Open the report screen.', expected: 'The report is displayed.' },
+    ]);
+    const off = build({ answers: [], enabled: false });
+    const generator = new AiKnowledgeTestPlanGenerator({
+      defaultLlm: llm,
+      agentService: {
+        getWorkflow: vi.fn().mockResolvedValue({ enabled: true, steps: [] }),
+      } as never,
+    });
+    expect((await generator.generate({ prompt: requirement }, context)).plans).toHaveLength(1);
+    await off.generator.generate({ prompt: requirement }, context).catch(() => undefined);
+    expect(off.executeAgent).not.toHaveBeenCalled();
+  });
+});

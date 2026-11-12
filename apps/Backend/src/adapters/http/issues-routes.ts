@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { ApplicationError } from '../../shared/errors.js';
 import { requireAuth } from './auth-middleware.js';
 import { accessForContext, requireModuleAccess } from './module-policy.js';
-import { parseBody } from './validation.js';
+import { parseBody, parseQuery } from './validation.js';
 import type { RequestContextResolver } from './compatibility-routes.js';
 import type { AgentService } from '../../modules/agents/application/agent-service.js';
 import type { WorkspaceService } from '../../modules/workspaces/application/workspace-service.js';
@@ -36,6 +36,11 @@ const status = z.enum([
   'cancelled',
 ]);
 const priority = z.enum(['urgent', 'high', 'medium', 'low']);
+const issueSearchQuery = z.object({
+  q: z.string().trim().max(200).optional(),
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+});
 const issueFields = z.object({
   title: z.string().trim().min(1).max(240),
   description: z.string().max(30000).optional(),
@@ -283,6 +288,13 @@ export function createIssuesRouter(
 
   router.get('/issues', requireAuth, async (request, response, next) => {
     try {
+      // A select that pages and searches asks for a page; the list screens still get everything.
+      if (Object.keys(request.query).length) {
+        response.json(
+          await store.search(workspaceId(request), parseQuery(issueSearchQuery, request)),
+        );
+        return;
+      }
       response.json({ issues: await store.list(workspaceId(request)) });
     } catch (error) {
       next(error);

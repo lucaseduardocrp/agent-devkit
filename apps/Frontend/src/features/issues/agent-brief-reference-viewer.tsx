@@ -4,48 +4,6 @@ import { Modal } from '../../components/ui/modal.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import type { BriefReference } from './agent-brief-types.js';
 import { locateExcerpt, type ReferenceDetail } from './agent-brief-reference-text.js';
-
-const copy = {
-  'pt-BR': {
-    kinds: {
-      pbi: 'PBI',
-      issue: 'Issue',
-      attachment: 'Anexo',
-      brain: 'Brain',
-      spec: 'Spec',
-      testplan: 'Plano de testes',
-      file: 'Arquivo',
-    },
-    loading: 'Carregando o conteúdo…',
-    failed: 'Não foi possível carregar o conteúdo.',
-    missing: 'Este item não existe mais ou você não tem acesso a ele.',
-    passage: 'Trecho referenciado',
-    passageNotFound: 'O trecho não foi encontrado no texto atual: a página pode ter mudado.',
-    openInModule: 'Abrir no módulo',
-    close: 'Fechar',
-    empty: 'Sem conteúdo.',
-  },
-  'en-US': {
-    kinds: {
-      pbi: 'PBI',
-      issue: 'Issue',
-      attachment: 'Attachment',
-      brain: 'Brain',
-      spec: 'Spec',
-      testplan: 'Test plan',
-      file: 'File',
-    },
-    loading: 'Loading the content…',
-    failed: 'The content could not be loaded.',
-    missing: 'This item no longer exists or you do not have access to it.',
-    passage: 'Referenced passage',
-    passageNotFound: 'The passage was not found in the current text: the page may have changed.',
-    openInModule: 'Open in module',
-    close: 'Close',
-    empty: 'No content.',
-  },
-} as const;
-
 /** What one reference points at, with the exact passage of a Brain page highlighted. */
 export function ReferenceViewer({
   reference,
@@ -60,8 +18,8 @@ export function ReferenceViewer({
   onClose: () => void;
   onOpenModule?: (reference: BriefReference) => void;
 }) {
-  const { locale } = useI18n();
-  const c = copy[locale];
+  const { messages } = useI18n();
+  const c = messages.agentBriefReference;
   const mark = useRef<HTMLElement>(null);
   const excerpt = reference.excerpt?.trim() ?? '';
   const found = useMemo(

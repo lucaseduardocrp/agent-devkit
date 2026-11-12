@@ -175,6 +175,7 @@ export function TestPlansView({
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const defaultTestCases = getDefaultTestCases(t);
   const selectedWorkspaceId = activeWorkspaceId ?? workspaces[0]?.workspace.id ?? '';
+  const [csvConfigOpen, setCsvConfigOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'saved' | 'create'>(
     canEdit ? (initialTab ?? 'create') : 'saved',
   );
@@ -373,7 +374,6 @@ export function TestPlansView({
     void loadSavedPlans();
   }, [loadSavedPlans]);
 
-  /* v8 ignore start -- suite requests are exercised by the end-to-end Test Plans workflow. */
   const loadTestSuites = useCallback(async () => {
     if (!apiClient || !selectedWorkspaceId) {
       setTestSuites([]);
@@ -407,9 +407,8 @@ export function TestPlansView({
     }
   };
   const renameSuite = async (id: string, name: string) => {
-    if (!apiClient) return;
     try {
-      await apiClient.updateTestSuite(id, { name });
+      await apiClient?.updateTestSuite(id, { name });
       await loadTestSuites();
     } catch (error) {
       setSavedPlansError(
@@ -417,26 +416,28 @@ export function TestPlansView({
       );
     }
   };
-  const pushSuite = async (input: PublishTestSuiteInput) => {
-    if (!apiClient || !suiteToPublish) throw new Error(t('testplans.suitePushFailed'));
-    setPushingSuiteId(suiteToPublish.id);
+  const pushSuite = async (
+    client: ApiClient,
+    target: TestSuiteDto,
+    input: PublishTestSuiteInput,
+  ) => {
+    setPushingSuiteId(target.id);
     try {
       return await runActivity(
-        { kind: 'push', title: `Publicando suíte “${suiteToPublish.name}”` },
-        () => apiClient.pushTestSuite(suiteToPublish.id, input),
+        { kind: 'push', title: t('testplans.publishingSuite', { name: target.name }) },
+        () => client.pushTestSuite(target.id, input),
       );
     } finally {
       setPushingSuiteId(null);
     }
   };
-  /* v8 ignore stop */
 
-  // Suites (and so this dialog) only exist with a client; the dialog passes its own suite.
-  const handleDeleteSuite = async (suite: TestSuiteDto) => {
+  const handleDeleteSuite = async () => {
+    if (!apiClient || !suiteToDelete) return;
     setIsDeletingSuite(true);
     setDeleteSuiteError(null);
     try {
-      await apiClient!.deleteTestSuite(suite.id);
+      await apiClient.deleteTestSuite(suiteToDelete.id);
       await loadTestSuites();
       await loadSavedPlans();
       setSuiteToDelete(null);
@@ -471,7 +472,7 @@ export function TestPlansView({
     setIsGenerating(true);
 
     const testPlanTitle = currentWorkspace
-      ? `Plano de Testes - ${currentWorkspace.workspace.name}`
+      ? t('testplans.defaultPlanTitle', { workspace: currentWorkspace.workspace.name })
       : undefined;
 
     // External assignees are selected only during export, keeping plan creation provider-neutral.
@@ -482,7 +483,7 @@ export function TestPlansView({
           apiClient.setWorkspaceId(selectedWorkspaceId);
         }
         const res = await runActivity(
-          { kind: 'agent', title: 'Agentes gerando plano de testes' },
+          { kind: 'agent', title: t('testplans.agentsGeneratingPlan') },
           () =>
             apiClient.generateTestPlan(trimmedStory, {
               title: testPlanTitle,
@@ -515,7 +516,7 @@ export function TestPlansView({
       }
     } catch (error) {
       setErrorMessage(
-        error instanceof Error ? error.message : 'Falha ao conectar ao gerador de testes.',
+        error instanceof Error ? error.message : t('testplans.generatorConnectionFailed'),
       );
       setGeneratedCases(null);
     } finally {
@@ -556,24 +557,27 @@ export function TestPlansView({
     setIsSavingPlan(true);
     setErrorMessage(null);
     try {
-      // Only saved plans (loaded through the client) can be selected.
-      const updated = await apiClient!.updateSavedTestPlan(selectedSavedId, {
-        title: savedTitle || 'Test Plan',
-        plans: cases.map((item) => ({
-          title: item.title,
-          description: item.scenario,
-          steps: item.steps ? [...item.steps] : [],
-          // Keeping the ID lets the history follow each case across edits.
-          ...(item.caseId ? { metadata: { caseId: item.caseId } } : {}),
-        })),
-        suiteId: selectedSuiteId || null,
-      });
-      setSavedPlans((current) => current.map((plan) => (plan.id === updated.id ? updated : plan)));
-      setTreePlans((current) =>
-        current ? current.map((plan) => (plan.id === updated.id ? updated : plan)) : current,
-      );
-      // New cases get their IDs from the API.
-      setGeneratedCases(toTestCases(updated.plans));
+      if (apiClient) {
+        const updated = await apiClient.updateSavedTestPlan(selectedSavedId, {
+          title: savedTitle || t('testplans.untitledPlan'),
+          plans: cases.map((item) => ({
+            title: item.title,
+            description: item.scenario,
+            steps: item.steps ? [...item.steps] : [],
+            // Keeping the ID lets the history follow each case across edits.
+            ...(item.caseId ? { metadata: { caseId: item.caseId } } : {}),
+          })),
+          suiteId: selectedSuiteId || null,
+        });
+        setSavedPlans((current) =>
+          current.map((plan) => (plan.id === updated.id ? updated : plan)),
+        );
+        setTreePlans((current) =>
+          current ? current.map((plan) => (plan.id === updated.id ? updated : plan)) : current,
+        );
+        // New cases get their IDs from the API.
+        setGeneratedCases(toTestCases(updated.plans));
+      }
       showTemporarySuccess(t('testplans.changesSaved'));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : t('testplans.saveChangesFailed'));
@@ -586,8 +590,9 @@ export function TestPlansView({
     setIsDeletingPlan(true);
     setDeleteError(null);
     try {
-      // Saved plans (and so this dialog) only exist with a client.
-      await apiClient!.deleteSavedTestPlan(planId);
+      if (apiClient) {
+        await apiClient.deleteSavedTestPlan(planId);
+      }
       const nextPage =
         savedPlans.length === 1 && savedPlansPage > 1 ? savedPlansPage - 1 : savedPlansPage;
       setSavedPlansTotal((current) => Math.max(0, current - 1));
@@ -604,15 +609,18 @@ export function TestPlansView({
       }
       showTemporarySuccess(t('testplans.planDeleted'));
     } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : 'Falha ao excluir plano de testes.');
+      setDeleteError(error instanceof Error ? error.message : t('testplans.deletePlanFailed'));
     } finally {
       setIsDeletingPlan(false);
     }
   };
 
   const handleSaveTestCase = async (updatedCase: TestCase) => {
-    // The editor only opens on a case already in the list (adding one inserts it first).
-    const next = generatedCases!.map((tc) => (tc.id === updatedCase.id ? updatedCase : tc));
+    if (!generatedCases) return;
+    const known = generatedCases.some((tc) => tc.id === updatedCase.id);
+    const next = known
+      ? generatedCases.map((tc) => (tc.id === updatedCase.id ? updatedCase : tc))
+      : [...generatedCases, updatedCase];
     setGeneratedCases(next);
     setEditingTestCase(null);
     // A saved Test Plan keeps the change at once, like PBIs and issues.
@@ -621,13 +629,13 @@ export function TestPlansView({
 
   const openCase = (plan: SavedTestPlanDto, index: number) => {
     openSavedPlan(plan);
-    // The tree only offers indexes of the plan's own cases.
     setEditingTestCase(toTestCases(plan.plans)[index]!);
   };
 
-  // Only rendered cases offer deletion, so the list is always loaded here.
   const handleDeleteTestCase = (testCaseId: string) => {
-    setGeneratedCases(generatedCases!.filter((tc) => tc.id !== testCaseId));
+    /* v8 ignore next -- the delete buttons only exist while the cases are listed */
+    if (!generatedCases) return;
+    setGeneratedCases(generatedCases.filter((tc) => tc.id !== testCaseId));
   };
 
   const handleAddTestCase = () => {
@@ -664,7 +672,7 @@ export function TestPlansView({
     setIsDownloading(true);
     setErrorMessage(null);
     try {
-      await runActivity({ kind: 'download', title: 'Exportando Test Plan em CSV' }, () => {
+      await runActivity({ kind: 'download', title: t('testplans.exportingCsv') }, () => {
         const csvContent = exportCasesCsv(
           (generatedCases ?? []).map((item) => ({
             title: item.title,
@@ -712,15 +720,16 @@ export function TestPlansView({
     setIsDownloading(true);
     setErrorMessage(null);
     try {
-      // Suites (and so their export) only exist with a client.
-      const client = apiClient!;
-      const firstPage = await client.getSavedTestPlans(1, 50);
-      const remainingPages = await Promise.all(
-        Array.from({ length: Math.max(0, firstPage.totalPages - 1) }, (_, index) =>
-          client.getSavedTestPlans(index + 2, 50),
-        ),
-      );
-      const availablePlans = [firstPage, ...remainingPages].flatMap((page) => page.items);
+      let availablePlans = savedPlans;
+      if (apiClient) {
+        const firstPage = await apiClient.getSavedTestPlans(1, 50);
+        const remainingPages = await Promise.all(
+          Array.from({ length: Math.max(0, firstPage.totalPages - 1) }, (_, index) =>
+            apiClient.getSavedTestPlans(index + 2, 50),
+          ),
+        );
+        availablePlans = [firstPage, ...remainingPages].flatMap((page) => page.items);
+      }
       const suiteIds = new Set<string>([suite.id]);
       let didAddSuite = true;
       while (didAddSuite) {
@@ -739,7 +748,7 @@ export function TestPlansView({
         value
           .trim()
           .replace(/[<>:"/\\|?*]+/g, '-')
-          .replace(/\s+/g, ' ') || 'Test Plan';
+          .replace(/\s+/g, ' ') || t('testplans.untitledPlan');
       const files = availablePlans
         .filter((plan) => plan.suiteId && suiteIds.has(plan.suiteId))
         .map((plan, index) => ({
@@ -780,10 +789,15 @@ export function TestPlansView({
     }
   };
 
+  const openCsvConfiguration = () => {
+    setCsvConfigOpen(true);
+    if (exportFormat === 'azure' && !azureOptionsLoaded) void loadAzureExportOptions();
+  };
+
   const selectedPlanObj = savedPlans.find((p) => p.id === selectedSavedId);
 
   return (
-    <div className={cn('max-w-4xl space-y-5', className)} data-testid="screen-testplans">
+    <div className={cn('w-full space-y-5', className)} data-testid="screen-testplans">
       {/* Top Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -799,6 +813,17 @@ export function TestPlansView({
         </div>
 
         <div className="flex items-center gap-3">
+          {(generatedCases || activeTab === 'saved') && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={openCsvConfiguration}
+              data-testid="btn-csv-configuration"
+              leftIcon={<i className="ti ti-settings text-base" aria-hidden="true" />}
+            >
+              {t('testplans.csvConfiguration')}
+            </Button>
+          )}
           {activeTab === 'saved' ? (
             canEdit && (
               <Button
@@ -871,20 +896,15 @@ export function TestPlansView({
       </div>
 
       {/* Feedback Messages */}
-      {(generatedCases || activeTab === 'saved') && (
-        <details
-          className="rounded-lg border border-border bg-surface-1 p-4"
-          aria-label={t('testplans.csvConfiguration')}
-          onToggle={(event) => {
-            if (event.currentTarget.open && exportFormat === 'azure' && !azureOptionsLoaded) {
-              void loadAzureExportOptions();
-            }
-          }}
-        >
-          <summary className="cursor-pointer text-sm font-semibold focus-visible:outline-none focus-visible:ring-2">
-            {t('testplans.csvConfiguration')}
-          </summary>
-          <div className="mt-3 space-y-3">
+      {csvConfigOpen && (
+        <Modal open labelledBy="csv-config-dialog-title" onClose={() => setCsvConfigOpen(false)}>
+          <div className="w-full max-w-lg space-y-4 rounded-xl border border-border bg-surface-1 p-6 shadow-2xl">
+            <h3
+              id="csv-config-dialog-title"
+              className="text-base font-semibold text-[var(--text-primary)]"
+            >
+              {t('testplans.csvConfiguration')}
+            </h3>
             <Select
               aria-label={t('testplans.csvFormat')}
               value={exportFormat}
@@ -917,8 +937,13 @@ export function TestPlansView({
                 <p className="text-xs text-muted">{t('testplans.csvAzureGuidance')}</p>
               </>
             )}
+            <div className="flex justify-end pt-2">
+              <Button type="button" variant="outline" onClick={() => setCsvConfigOpen(false)}>
+                {t('common.close')}
+              </Button>
+            </div>
           </div>
-        </details>
+        </Modal>
       )}
       {successMessage && (
         <div
@@ -961,9 +986,8 @@ export function TestPlansView({
               onCreatePlan={
                 canEdit
                   ? (suiteId) => {
-                      // Clearing first: handleClear also resets the suite being preselected.
-                      handleClear();
                       setSelectedSuiteId(suiteId);
+                      handleClear();
                       setActiveTab('create');
                     }
                   : undefined
@@ -1033,8 +1057,6 @@ export function TestPlansView({
                   </Button>
                 </div>
               ) : (
-                /* The section only renders without an error when a plan sits outside a suite,
-                   so the list is never empty here (the tree shows the empty state). */
                 <div className="grid gap-2 sm:grid-cols-2">
                   {savedPlans
                     .filter((plan) => !plan.suiteId)
@@ -1352,36 +1374,36 @@ export function TestPlansView({
       {/* TAB 2: CREATE / GENERATE TEST PLAN */}
       {activeTab === 'create' && (
         <div className="space-y-5" data-testid="panel-create-plan">
-          <div>
-            <label
-              htmlFor="testplan-suite-select"
-              className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]"
-            >
-              {t('testplans.testSuite')}
-            </label>
-            <Select
-              id="testplan-suite-select"
-              aria-label={t('testplans.testSuite')}
-              value={selectedSuiteId}
-              onChange={(event) => setSelectedSuiteId(event.target.value)}
-              required={Boolean(selectedWorkspaceId)}
-            >
-              <option value="">{t('testplans.selectSuite')}</option>
-              {testSuites.map((suite) => (
-                <option key={suite.id} value={suite.id}>
-                  {suite.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div>
-            <label
-              htmlFor="testplan-agent-select"
-              className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]"
-            >
-              {t('testplans.optionalAgent')}
-            </label>
-            <div className="w-full sm:max-w-md">
+          <div className="grid gap-5 sm:grid-cols-2">
+            <div>
+              <label
+                htmlFor="testplan-suite-select"
+                className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]"
+              >
+                {t('testplans.testSuite')}
+              </label>
+              <Select
+                id="testplan-suite-select"
+                aria-label={t('testplans.testSuite')}
+                value={selectedSuiteId}
+                onChange={(event) => setSelectedSuiteId(event.target.value)}
+                required={Boolean(selectedWorkspaceId)}
+              >
+                <option value="">{t('testplans.selectSuite')}</option>
+                {testSuites.map((suite) => (
+                  <option key={suite.id} value={suite.id}>
+                    {suite.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <label
+                htmlFor="testplan-agent-select"
+                className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]"
+              >
+                {t('testplans.optionalAgent')}
+              </label>
               <Select
                 id="testplan-agent-select"
                 value={selectedAgentId}
@@ -1646,7 +1668,7 @@ export function TestPlansView({
           apiClient={apiClient}
           suite={suiteToPublish}
           onClose={() => setSuiteToPublish(null)}
-          onPublish={pushSuite}
+          onPublish={(input) => pushSuite(apiClient, suiteToPublish, input)}
           onPublished={(result) => {
             setSuiteToPublish(null);
             showTemporarySuccess(
@@ -1817,7 +1839,7 @@ export function TestPlansView({
               <Button
                 type="button"
                 variant="destructive"
-                onClick={() => void handleDeleteSuite(suiteToDelete)}
+                onClick={() => void handleDeleteSuite()}
                 disabled={isDeletingSuite || deleteSuiteConfirmText !== suiteToDelete.name}
                 isLoading={isDeletingSuite}
                 data-testid="confirm-delete-suite-btn"

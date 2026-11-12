@@ -19,7 +19,7 @@ export type WorkItemTypeColor = (typeof workItemTypeColors)[number];
 export interface WorkItemType {
   readonly key: string;
   readonly label: string;
-  /** A color token, or a `#rrggbb` value chosen in the color picker. */
+  /** A color token ({@link WorkItemTypeColor}), or a `#rrggbb` value chosen in the color picker. */
   readonly color: string;
   /** Tabler icon name without the `ti-` prefix. */
   readonly icon: string;

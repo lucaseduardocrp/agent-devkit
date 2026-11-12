@@ -21,14 +21,16 @@ function handlers() {
 
 describe('ApiClient.streamRunEvents', () => {
   it('opens the stream with the session and the workspace, and reports ready and runs', async () => {
-    const fetcher = vi.fn().mockResolvedValue(
-      stream([
-        'retry: 3000\n\nevent: ready\ndata: {}\n\n',
-        'event: run\ndata: {"id":"r1","status":"queued"}\n\n',
-        ': keep-alive\n\nevent: run\ndata: {"id":"r1","sta',
-        'tus":"running"}\n\n',
-      ]),
-    );
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        stream([
+          'retry: 3000\n\nevent: ready\ndata: {}\n\n',
+          'event: run\ndata: {"id":"r1","status":"queued"}\n\n',
+          ': keep-alive\n\nevent: run\ndata: {"id":"r1","sta',
+          'tus":"running"}\n\n',
+        ]),
+      );
     const client = new ApiClient({ fetcher, baseUrl: 'http://adk.test', token: 'secret' });
     client.setWorkspaceId('ws-1');
     const given = handlers();
@@ -78,6 +80,8 @@ describe('ApiClient.streamRunEvents', () => {
     const client = new ApiClient({
       fetcher: vi.fn().mockResolvedValue({ ok: true, status: 200, body: null }),
     });
-    await expect(client.streamRunEvents(handlers(), new AbortController().signal)).rejects.toThrow();
+    await expect(
+      client.streamRunEvents(handlers(), new AbortController().signal),
+    ).rejects.toThrow();
   });
 });

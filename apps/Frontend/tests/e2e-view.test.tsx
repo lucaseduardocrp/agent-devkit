@@ -132,6 +132,26 @@ describe('E2eView', () => {
     expect(view.getByText(/Aguardando o seu computador/)).toBeInTheDocument();
   });
 
+  it('never waits for a runner in the desktop app, which runs everything on this computer', async () => {
+    Object.defineProperty(window, 'adkDesktop', {
+      value: { apiUrl: 'http://127.0.0.1:60675' },
+      configurable: true,
+    });
+    try {
+      const client = api([
+        creation({ executionTarget: 'local', status: 'running', passed: 0, tests: [] }),
+      ]);
+      const view = render(<E2eView apiClient={asClient(client)} />);
+      await view.findByText('ama');
+      expect(view.queryByText('No meu computador')).toBeNull();
+      expect(view.queryByText(/Aguardando o seu computador/)).toBeNull();
+      expect(view.queryByTestId('e2e-local-runner-wait')).toBeNull();
+      expect(client.getE2eRunners).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(window, 'adkDesktop');
+    }
+  });
+
   describe('waiting for a local runner', () => {
     const panel = (view: ReturnType<typeof render>) => view.queryByTestId('e2e-local-runner-wait');
 
@@ -215,7 +235,7 @@ describe('E2eView', () => {
     await view.findByText('alpha');
     const names = () =>
       Array.from(
-        view.container.querySelectorAll('tbody > tr > td:nth-child(2) > span:first-child'),
+        view.container.querySelectorAll('tbody > tr > td:nth-child(2) > button:first-child'),
       ).map((node) => node.textContent);
 
     fireEvent.change(view.getByLabelText('Ordenar'), { target: { value: 'name' } });
@@ -479,7 +499,7 @@ describe('E2eView', () => {
     expect(view.getByText(/Aguardando o plano de testes e os scripts/)).toBeInTheDocument();
     const names = () =>
       Array.from(
-        view.container.querySelectorAll('tbody > tr > td:nth-child(2) > span:first-child'),
+        view.container.querySelectorAll('tbody > tr > td:nth-child(2) > button:first-child'),
       ).map((node) => node.textContent);
     fireEvent.change(view.getByLabelText('Filtrar por status'), { target: { value: 'active' } });
     expect(names()).toEqual(['login']);
@@ -521,10 +541,10 @@ describe('E2eView opened from Test Plans', () => {
     const view = render(
       <E2eView apiClient={asClient(client)} initialSavedCases={{ planId: 'plan-1' }} />,
     );
-    expect(await view.findByRole('radio', { name: 'Test cases salvos no ADK' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
+    const source = (await view.findByRole('combobox', {
+      name: 'Origem dos testes',
+    })) as HTMLSelectElement;
+    expect(source.value).toBe('saved');
     expect(client.getE2eCreations).not.toHaveBeenCalled();
   });
 
@@ -534,6 +554,6 @@ describe('E2eView opened from Test Plans', () => {
       <E2eView apiClient={asClient(client)} isReadOnly initialSavedCases={{ planId: 'plan-1' }} />,
     );
     expect(await view.findByText('ama')).toBeInTheDocument();
-    expect(view.queryByRole('radio', { name: 'Test cases salvos no ADK' })).toBeNull();
+    expect(view.queryByRole('combobox', { name: 'Origem dos testes' })).toBeNull();
   });
 });

@@ -13,7 +13,11 @@ import { E2eConfigForm, type E2eSavedCasesSeed } from './E2eConfigForm.js';
 import { E2eTestDetail } from './E2eTestDetail.js';
 import { E2eCreationStatusLabel, E2eTestStatusLabel } from './E2eStatus.js';
 import { E2eImportCasesDialog, E2eReportingDialog, E2eReportStrip } from './E2eTestManagement.js';
+import { isDesktopApp } from '../../lib/desktop.js';
 import { E2eLocalRunnerPanel } from './E2eLocalRunnerPanel.js';
+import { E2eEnvironments } from './E2eEnvironments.js';
+import { E2eExploration } from './E2eExploration.js';
+import { E2eRunView } from './E2eRunView.js';
 import { isCreationActive, needsPolling, type E2eCreationSummary } from './e2e-types.js';
 
 const POLL_MS = 3000;
@@ -22,7 +26,13 @@ type Screen =
   | { kind: 'list' }
   | { kind: 'new' }
   | { kind: 'edit'; creationId: string }
-  | { kind: 'test'; testId: string; creationId: string };
+  | { kind: 'environments' }
+  /** The run as a whole: its progress, the pages its tests went through and their browsers. */
+  | { kind: 'run'; creationId: string }
+  /** What the agent does and saw while it explores the application of a run. */
+  | { kind: 'exploration'; creationId: string }
+  /** `fromRun` goes back to the run view instead of the list. */
+  | { kind: 'test'; testId: string; creationId: string; fromRun?: boolean };
 type StatusFilter = 'all' | 'passed' | 'failed' | 'active';
 type SortKey = 'updatedAt' | 'createdAt' | 'name';
 type TestManagementDialog = { kind: 'reporting' | 'import'; creation: E2eCreationSummary };
@@ -102,7 +112,10 @@ export function E2eView({
   const hasActive = Boolean(creations?.some(needsPolling));
   // A local run waits for `devkit runner`: while one is waiting, show whether the computer is
   // connected and how to connect it, instead of leaving the run queued without explanation.
+  // The desktop app runs everything on this computer, so nothing waits for a runner there.
+  const desktop = isDesktopApp();
   const hasActiveLocal = Boolean(
+    !desktop &&
     creations?.some(
       (creation) => creation.executionTarget === 'local' && isCreationActive(creation.status),
     ),
@@ -187,8 +200,48 @@ export function E2eView({
         onCreated={(creation) => {
           setExpanded(new Set([creation.id]));
           setNotice(screen.kind === 'edit' ? t('e2e.saved', { name: creation.name }) : null);
-          setScreen({ kind: 'list' });
+          // A new UI run starts by exploring the application: show it while it happens.
+          setScreen(
+            screen.kind === 'new' &&
+              creation.mode === 'frontend' &&
+              isCreationActive(creation.status)
+              ? { kind: 'exploration', creationId: creation.id }
+              : { kind: 'list' },
+          );
         }}
+      />
+    );
+
+  if (screen.kind === 'environments')
+    return (
+      <E2eEnvironments
+        apiClient={apiClient}
+        isReadOnly={isReadOnly}
+        onBack={() => setScreen({ kind: 'list' })}
+      />
+    );
+
+  if (screen.kind === 'exploration')
+    return (
+      <E2eExploration
+        apiClient={apiClient}
+        creationId={screen.creationId}
+        isReadOnly={isReadOnly}
+        onBack={() => setScreen({ kind: 'list' })}
+        onOpenRun={() => setScreen({ kind: 'run', creationId: screen.creationId })}
+      />
+    );
+
+  if (screen.kind === 'run')
+    return (
+      <E2eRunView
+        apiClient={apiClient}
+        creationId={screen.creationId}
+        onBack={() => setScreen({ kind: 'list' })}
+        onOpenExploration={() => setScreen({ kind: 'exploration', creationId: screen.creationId })}
+        onOpenTest={(testId) =>
+          setScreen({ kind: 'test', testId, creationId: screen.creationId, fromRun: true })
+        }
       />
     );
 
@@ -199,14 +252,18 @@ export function E2eView({
         testId={screen.testId}
         reporting={creations?.find((item) => item.id === screen.creationId)?.reporting ?? null}
         isReadOnly={isReadOnly}
-        onBack={() => setScreen({ kind: 'list' })}
+        onBack={() =>
+          setScreen(
+            screen.fromRun ? { kind: 'run', creationId: screen.creationId } : { kind: 'list' },
+          )
+        }
       />
     );
 
   const dateFormat = { dateStyle: 'short', timeStyle: 'short' } as const;
 
   return (
-    <div className="flex flex-col gap-6 p-6" data-testid="e2e-view">
+    <div className="flex flex-col gap-6" data-testid="e2e-view">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2.5">
@@ -220,12 +277,18 @@ export function E2eView({
           </div>
           <p className="mt-1 text-sm text-[var(--text-secondary)]">{t('e2e.subtitle')}</p>
         </div>
-        {!isReadOnly && (
-          <Button onClick={() => setScreen({ kind: 'new' })}>
-            <i className="ti ti-plus" aria-hidden="true" />
-            {t('e2e.newRun')}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setScreen({ kind: 'environments' })}>
+            <i className="ti ti-world" aria-hidden="true" />
+            {t('e2e.envManage')}
           </Button>
-        )}
+          {!isReadOnly && (
+            <Button onClick={() => setScreen({ kind: 'new' })}>
+              <i className="ti ti-plus" aria-hidden="true" />
+              {t('e2e.newRun')}
+            </Button>
+          )}
+        </div>
       </div>
 
       <p className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] px-4 py-3 text-sm text-[var(--text-secondary)]">
@@ -348,10 +411,15 @@ export function E2eView({
                       </Button>
                     </td>
                     <td className="px-3 py-3">
-                      <span className="font-medium text-[var(--text-primary)]">
+                      <Button
+                        variant="link"
+                        className="h-auto p-0 font-medium text-[var(--text-primary)]"
+                        title={t('e2e.runOpen', { name: creation.name })}
+                        onClick={() => setScreen({ kind: 'run', creationId: creation.id })}
+                      >
                         {creation.name}
-                      </span>
-                      {creation.executionTarget === 'local' && (
+                      </Button>
+                      {!desktop && creation.executionTarget === 'local' && (
                         <span className="ml-2 inline-flex items-center gap-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 align-middle text-xs text-[var(--text-secondary)]">
                           <i className="ti ti-device-laptop" aria-hidden="true" />
                           {t('e2e.localRunBadge')}
@@ -391,7 +459,8 @@ export function E2eView({
                           {creation.error}
                         </span>
                       )}
-                      {creation.executionTarget === 'local' &&
+                      {!desktop &&
+                        creation.executionTarget === 'local' &&
                         isCreationActive(creation.status) && (
                           <span className="mt-1 block max-w-xl text-xs text-[var(--text-secondary)]">
                             {t('e2e.localRunWaiting')}
@@ -439,6 +508,19 @@ export function E2eView({
                             >
                               <i className="ti ti-refresh" aria-hidden="true" />
                               {t('e2e.rerunAll')}
+                            </Button>
+                          )}
+                          {creation.mode === 'frontend' && (
+                            <Button
+                              variant="ghost"
+                              role="menuitem"
+                              className="flex w-full justify-start text-left"
+                              onClick={() =>
+                                setScreen({ kind: 'exploration', creationId: creation.id })
+                              }
+                            >
+                              <i className="ti ti-compass" aria-hidden="true" />
+                              {t('e2e.exploreSite')}
                             </Button>
                           )}
                           {creation.repository && !active && (

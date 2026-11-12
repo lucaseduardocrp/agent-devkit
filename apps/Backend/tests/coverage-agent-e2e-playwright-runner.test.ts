@@ -241,40 +241,41 @@ describe('readStepEvidence', () => {
   });
 });
 
-describe('PlaywrightE2eRunner tolerating slow pages and cleanup failures', () => {
-  it('explores even when the page never reaches network idle', async () => {
-    const { runner, page } = browserWith([]);
-    page.waitForLoadState.mockRejectedValue(new Error('networkidle timeout'));
-    const result = await runner.explore({
-      mode: 'frontend',
-      url: `${LOCAL}/`,
-      transportUrl: TRANSPORT,
-      accessToken: gatewayToken,
+describe('PlaywrightE2eRunner browser options (fake browser)', () => {
+  it('launches the browser with the host resolver arguments when host access is on', async () => {
+    const launch = vi.fn().mockResolvedValue({
+      newPage: vi.fn().mockResolvedValue({
+        goto: vi.fn().mockResolvedValue(undefined),
+        waitForLoadState: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn().mockResolvedValue(snapshot(`${LOCAL}/`)),
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
     });
-    expect(result.pages).toHaveLength(1);
-    expect(page.waitForLoadState).toHaveBeenCalledTimes(2);
+    const runner = new PlaywrightE2eRunner({
+      browserArgs: ['--host-resolver-rules=MAP localhost host.docker.internal'],
+      loadPlaywright: () =>
+        Promise.resolve({ chromium: { launch } } as unknown as PlaywrightModule),
+    });
+    await runner.explore({ mode: 'frontend', url: `${LOCAL}/` });
+    expect(launch).toHaveBeenCalledWith({
+      headless: true,
+      args: ['--host-resolver-rules=MAP localhost host.docker.internal'],
+    });
   });
 
-  it('returns the run result when its workspace cannot be removed', async () => {
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'adk-pw-cleanup-'));
-    const rm = vi.spyOn(fs, 'rm').mockRejectedValueOnce(new Error('EBUSY'));
-    try {
-      const runner = new PlaywrightE2eRunner({
-        workspaceRoot,
-        executor: async () => ({ stdout: 'done', stderr: '', exitCode: 1, timedOut: false }),
-      });
-      const result = await runner.run({
-        mode: 'backend',
-        baseUrl: 'http://api.example.test',
-        locale: 'en-US',
-        credentials: { username: null, password: null },
-        script: "import { test } from '@playwright/test';\ntest('x', async () => {});",
-      });
-      expect(result.status).toBe('failed');
-      expect(rm).toHaveBeenCalled();
-    } finally {
-      rm.mockRestore();
-      await fs.rm(workspaceRoot, { recursive: true, force: true });
-    }
+  it('refuses scoped access headers when the browser cannot route requests', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const runner = new PlaywrightE2eRunner({
+      loadPlaywright: () =>
+        Promise.resolve({
+          chromium: {
+            launch: () => Promise.resolve({ newPage: vi.fn().mockResolvedValue({}), close }),
+          },
+        } as unknown as PlaywrightModule),
+    });
+    await expect(
+      runner.explore({ mode: 'frontend', url: `${LOCAL}/`, transportUrl: TRANSPORT }),
+    ).rejects.toThrow('The browser does not support scoped Access headers.');
+    expect(close).toHaveBeenCalled();
   });
 });

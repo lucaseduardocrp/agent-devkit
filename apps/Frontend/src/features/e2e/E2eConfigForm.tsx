@@ -9,6 +9,7 @@ import {
 } from 'react';
 import type { ApiClient } from '../../lib/api-client.js';
 import { cn } from '../../lib/utils.js';
+import { isDesktopApp } from '../../lib/desktop.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { usePermissions } from '../workspaces/permissions.js';
 import type { TranslationKey } from '../../lib/i18n/types.js';
@@ -23,6 +24,7 @@ import {
   suggestedScriptFolder,
   type E2eCreationDetail,
   type E2eCreationInput,
+  type E2eEnvironment,
   type E2eCreationSummary,
   type E2eExecutionTarget,
   type E2eMode,
@@ -42,13 +44,7 @@ import {
   savedSelectionReady,
   type SavedCaseSelection,
 } from './E2eSavedCasePicker.js';
-import { AdkCliInstall } from './AdkCliInstall.js';
 import { E2eLocalRunnerPanel } from './E2eLocalRunnerPanel.js';
-import {
-  LocalHelperError,
-  localTunnelBridge,
-  type LocalHelperErrorCode,
-} from './local-tunnel-bridge.js';
 
 const PRD_ACCEPT = '.md,.markdown,.txt,.json,.yaml,.yml,.html,.htm,.csv,.xml,.feature';
 const DIFF_ACCEPT = '.diff,.patch,.txt';
@@ -62,6 +58,9 @@ interface UploadedFile {
 /** Tests are planned from a PRD, automate platform cases or automate cases saved in ADK. */
 type TestSource = 'prd' | 'cases' | 'saved';
 
+/** Where the AI learns about the product: the workspace Brain or an uploaded/pasted PRD. */
+type KnowledgeSource = 'brain' | 'prd';
+
 /** Saved cases a run starts from, e.g. when opened from Test Plans. */
 export interface E2eSavedCasesSeed {
   readonly suiteId?: string;
@@ -71,6 +70,7 @@ export interface E2eSavedCasesSeed {
 
 interface FormState {
   readonly source: TestSource;
+  readonly knowledge: KnowledgeSource;
   readonly cases: TestManagementSelection;
   readonly saved: SavedCaseSelection;
   readonly mode: E2eMode;
@@ -79,9 +79,8 @@ interface FormState {
   readonly agentId: string;
   readonly username: string;
   readonly password: string;
-  readonly accessClientId: string;
-  readonly accessClientSecret: string;
-  readonly clearAccessServiceToken: boolean;
+  /** Saved environment the run is configured from; empty when filled in by hand. */
+  readonly environmentId: string;
   readonly baseUrl: string;
   readonly localOrigin: string;
   /** `local` runs the browser on the user's computer through `devkit runner`. */
@@ -101,7 +100,6 @@ type FieldError =
   | 'agentId'
   | 'baseUrl'
   | 'localOrigin'
-  | 'access'
   | 'prd'
   | 'diff'
   | 'repository'
@@ -120,15 +118,9 @@ const tunnelCheckMessage: Record<
   request_error: 'e2e.tunnelCheckRequest',
 };
 
-const localHelperMessage: Record<LocalHelperErrorCode, TranslationKey> = {
-  unreachable: 'e2e.localHelperUnreachable',
-  origin_mismatch: 'e2e.localHelperOriginMismatch',
-  outdated: 'e2e.localHelperOutdated',
-  failed: 'e2e.localHelperFailed',
-};
-
 const initialState = (agentId = '', seed?: E2eSavedCasesSeed): FormState => ({
   source: seed ? 'saved' : 'prd',
+  knowledge: 'prd',
   cases: EMPTY_SELECTION,
   saved: seed
     ? {
@@ -143,9 +135,7 @@ const initialState = (agentId = '', seed?: E2eSavedCasesSeed): FormState => ({
   agentId,
   username: '',
   password: '',
-  accessClientId: '',
-  accessClientSecret: '',
-  clearAccessServiceToken: false,
+  environmentId: '',
   baseUrl: 'http://localhost:3000',
   localOrigin: '',
   executionTarget: 'remote',
@@ -161,6 +151,7 @@ const initialState = (agentId = '', seed?: E2eSavedCasesSeed): FormState => ({
 /** Form values of an existing run; its documents come back as one pasted PRD. */
 const stateFromCreation = (creation: E2eCreationDetail): FormState => ({
   source: 'prd',
+  knowledge: creation.useBrain ? 'brain' : 'prd',
   cases: EMPTY_SELECTION,
   saved: EMPTY_SAVED_SELECTION,
   mode: creation.mode,
@@ -169,9 +160,7 @@ const stateFromCreation = (creation: E2eCreationDetail): FormState => ({
   agentId: creation.agentId,
   username: creation.username ?? '',
   password: '',
-  accessClientId: '',
-  accessClientSecret: '',
-  clearAccessServiceToken: false,
+  environmentId: creation.environmentId ?? '',
   baseUrl: creation.baseUrl,
   localOrigin: creation.localOrigin ?? '',
   executionTarget: creation.executionTarget ?? 'remote',
@@ -223,10 +212,6 @@ function isLocalBrowserOrigin(value: string): boolean {
   return url.pathname === '/' && !url.search && !url.hash;
 }
 
-function quickTunnelCommand(origin: string): string {
-  return `cloudflared tunnel --url ${origin} --http-host-header ${new URL(origin).host}`;
-}
-
 export interface E2eConfigFormProps {
   readonly apiClient: ApiClient;
   /** Edits this run instead of creating a new one. */
@@ -267,19 +252,13 @@ export function E2eConfigForm({
     status: number | null;
   } | null>(null);
   const [checkingTunnel, setCheckingTunnel] = useState(false);
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const [startingLocalTunnel, setStartingLocalTunnel] = useState(false);
-  const [localTunnelError, setLocalTunnelError] = useState<{
-    code: LocalHelperErrorCode;
-    detail: string;
-  } | null>(null);
-  const [showTunnelSetup, setShowTunnelSetup] = useState(false);
-  const [showAccessSettings, setShowAccessSettings] = useState(false);
   const [dragging, setDragging] = useState(false);
   const prdInput = useRef<HTMLInputElement>(null);
   const diffInput = useRef<HTMLInputElement>(null);
+  // The desktop app runs the tests on this computer: no runner, tunnel or execution choice.
+  const desktop = isDesktopApp();
   // In a local install the ADK workers open http://localhost on this computer themselves.
-  const [workersReachLocalhost, setWorkersReachLocalhost] = useState(false);
+  const [workersReachLocalhost, setWorkersReachLocalhost] = useState(desktop);
 
   useEffect(() => {
     let active = true;
@@ -290,7 +269,7 @@ export function E2eConfigForm({
         if (!active) return;
         setWorkersReachLocalhost(capabilities.workersReachLocalhost);
         // A new run starts where the server prefers; an existing run keeps what it has.
-        if (!creationId && capabilities.defaultExecutionTarget === 'local')
+        if (!creationId && !isDesktopApp() && capabilities.defaultExecutionTarget === 'local')
           setForm((current) =>
             current.executionTarget === 'local'
               ? current
@@ -299,8 +278,6 @@ export function E2eConfigForm({
                   executionTarget: 'local',
                   baseUrl: localAppOrigin(current.localOrigin) ?? current.baseUrl,
                   localOrigin: '',
-                  accessClientId: '',
-                  accessClientSecret: '',
                 },
           );
       })
@@ -338,8 +315,9 @@ export function E2eConfigForm({
       .then((creation) => {
         if (!active) return;
         setEditing(creation);
-        setForm(stateFromCreation(creation));
-        if (creation.hasAccessServiceToken) setShowAccessSettings(true);
+        const state = stateFromCreation(creation);
+        // A run saved for `devkit runner` runs here in the desktop app, which hides that choice.
+        setForm(isDesktopApp() ? { ...state, executionTarget: 'remote' } : state);
       })
       .catch((error: unknown) => {
         if (active)
@@ -351,24 +329,44 @@ export function E2eConfigForm({
   }, [apiClient, creationId, t]);
   useEffect(loadEditing, [loadEditing]);
 
+  const [environments, setEnvironments] = useState<readonly E2eEnvironment[]>([]);
+  useEffect(() => {
+    let active = true;
+    // Promise.resolve first: a client or a server without environments means "none".
+    void Promise.resolve()
+      .then(() => apiClient.getE2eEnvironments())
+      .then((list) => {
+        if (active) setEnvironments(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [apiClient]);
+  /** Fills the address and the test account from a saved environment. */
+  const chooseEnvironment = (id: string) => {
+    const environment = environments.find((item) => item.id === id);
+    setTunnelCheck(null);
+    setForm((current) => ({
+      ...current,
+      environmentId: id,
+      ...(environment
+        ? { baseUrl: environment.baseUrl, username: environment.username ?? '', password: '' }
+        : {}),
+    }));
+  };
+
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     if (key === 'baseUrl' || key === 'executionTarget') {
       setTunnelCheck(null);
-      setCopyStatus('idle');
-      setLocalTunnelError(null);
     }
-    if (
-      key === 'accessClientId' ||
-      key === 'accessClientSecret' ||
-      key === 'clearAccessServiceToken'
-    )
-      setTunnelCheck(null);
     setForm((current) => ({
       ...current,
       [key]: value,
       ...(key === 'baseUrl' &&
       current.mode === 'frontend' &&
       current.executionTarget === 'remote' &&
+      !workersReachLocalhost &&
       localAppOrigin(value as string)
         ? { localOrigin: localAppOrigin(value as string)! }
         : {}),
@@ -377,14 +375,9 @@ export function E2eConfigForm({
         ? {
             baseUrl: localAppOrigin(current.localOrigin) ?? current.baseUrl,
             localOrigin: '',
-            accessClientId: '',
-            accessClientSecret: '',
           }
         : {}),
       ...(key === 'mode' && value === 'backend' ? { localOrigin: '' } : {}),
-      ...((key === 'accessClientId' || key === 'accessClientSecret') && value
-        ? { clearAccessServiceToken: false }
-        : {}),
       ...(key === 'name' && !current.pathTouched
         ? {
             repository: {
@@ -397,42 +390,18 @@ export function E2eConfigForm({
     setErrors((current) => {
       const next = new Set(current);
       next.delete(key === 'files' || key === 'prdText' ? 'prd' : (key as FieldError));
-      if (key === 'accessClientId' || key === 'accessClientSecret') next.delete('access');
       // Switching the source changes which of the two is required.
       if (key === 'source') next.delete('prd');
       return next;
     });
   };
 
-  const copyTunnelCommand = async (command: string) => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopyStatus('copied');
-    } catch {
-      setCopyStatus('failed');
-    }
-  };
-
-  const checkTunnel = async (
-    value?: string,
-    credentials = { clientId: form.accessClientId, clientSecret: form.accessClientSecret },
-  ) => {
-    if (Boolean(credentials.clientId.trim()) !== Boolean(credentials.clientSecret.trim())) {
-      setErrors((current) => new Set(current).add('access'));
-      setShowAccessSettings(true);
-      return;
-    }
-    const url = value ?? form.baseUrl.trim();
+  const checkTunnel = async () => {
+    const url = form.baseUrl.trim();
     setCheckingTunnel(true);
     setTunnelCheck(null);
     try {
-      const result = await apiClient.checkE2eTunnel(url, {
-        ...(creationId ? { creationId } : {}),
-        ...(credentials.clientId.trim() ? { accessClientId: credentials.clientId.trim() } : {}),
-        ...(credentials.clientSecret.trim()
-          ? { accessClientSecret: credentials.clientSecret.trim() }
-          : {}),
-      });
+      const result = await apiClient.checkE2eTunnel(url, creationId ? { creationId } : {});
       setTunnelCheck({ url, reason: result.reason, status: result.status });
     } catch {
       setTunnelCheck({ url, reason: 'request_error', status: null });
@@ -440,127 +409,6 @@ export function E2eConfigForm({
       setCheckingTunnel(false);
     }
   };
-
-  const startLocalTunnel = async () => {
-    // The action is only offered when one of the two is a localhost address.
-    const origin = (localAppOrigin(form.localOrigin) ?? localAppOrigin(form.baseUrl))!;
-    setStartingLocalTunnel(true);
-    setLocalTunnelError(null);
-    try {
-      const result = await localTunnelBridge.start(origin);
-      if (!result.tunnel) throw new LocalHelperError('failed', 'Tunnel did not start.');
-      const { accessClientId, accessClientSecret, publicUrl } = result.tunnel;
-      if (!accessClientId || !accessClientSecret) {
-        await localTunnelBridge.stop().catch(() => undefined);
-        throw new LocalHelperError('outdated', 'The local helper cannot route local services.');
-      }
-      if (form.mode === 'frontend') update('localOrigin', origin);
-      update('accessClientId', accessClientId);
-      update('accessClientSecret', accessClientSecret);
-      update('baseUrl', publicUrl);
-      await checkTunnel(publicUrl, { clientId: accessClientId, clientSecret: accessClientSecret });
-    } catch (error) {
-      let failure =
-        error instanceof LocalHelperError ? error : new LocalHelperError('failed', String(error));
-      // The browser hides why the POST preflight failed; a simple GET can reveal a wrong --origin.
-      if (failure.code === 'unreachable') {
-        failure = await localTunnelBridge.status().then(
-          () => failure,
-          (reason: unknown) =>
-            reason instanceof LocalHelperError && reason.code === 'origin_mismatch'
-              ? reason
-              : failure,
-        );
-      }
-      setLocalTunnelError({ code: failure.code, detail: failure.message });
-      setShowTunnelSetup(true);
-    } finally {
-      setStartingLocalTunnel(false);
-    }
-  };
-
-  const localHelperAlert = localTunnelError && (
-    <div role="alert" className="space-y-1 text-xs text-amber-400">
-      <p>{t(localHelperMessage[localTunnelError.code])}</p>
-      {localTunnelError.code === 'failed' && (
-        <p className="break-words font-mono">{localTunnelError.detail}</p>
-      )}
-      {localTunnelError.code === 'origin_mismatch' && (
-        <code className="block select-all break-all rounded bg-[var(--surface-1)] p-2 font-mono text-[var(--text-primary)]">
-          {`devkit bridge --origin ${window.location.origin}`}
-        </code>
-      )}
-    </div>
-  );
-
-  const commandBlock = (command: string, copyable = false) => (
-    <div className="mt-2 flex flex-wrap items-center gap-2">
-      <code className="min-w-0 flex-1 select-all break-all rounded bg-[var(--surface-1)] p-2 font-mono text-[var(--text-primary)]">
-        {command}
-      </code>
-      {copyable && (
-        <Button variant="outline" size="sm" onClick={() => void copyTunnelCommand(command)}>
-          {t('e2e.copyTunnelCommand')}
-        </Button>
-      )}
-    </div>
-  );
-
-  const tunnelSetup = (origin: string) => (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        aria-expanded={showTunnelSetup}
-        aria-controls={showTunnelSetup ? 'e2e-tunnel-setup' : undefined}
-        onClick={() => setShowTunnelSetup((current) => !current)}
-        className="h-auto w-full justify-start whitespace-normal border-t border-[var(--border)] px-0 pt-3 text-left text-xs text-[var(--text-accent)] hover:underline"
-      >
-        <i className="ti ti-terminal-2" aria-hidden="true" />
-        {t('e2e.tunnelSetupOptions')}
-        <i
-          className={cn('ti ml-auto', showTunnelSetup ? 'ti-chevron-up' : 'ti-chevron-down')}
-          aria-hidden="true"
-        />
-      </Button>
-      {showTunnelSetup && (
-        <div id="e2e-tunnel-setup" className="space-y-3 text-xs text-[var(--text-secondary)]">
-          <AdkCliInstall />
-          <div className="border-t border-[var(--border)] pt-3">
-            <p>{t('e2e.localHelperSetup')}</p>
-            {commandBlock(`devkit bridge --origin ${window.location.origin}`)}
-          </div>
-          <div className="border-t border-[var(--border)] pt-3">
-            <p className="font-medium text-[var(--text-primary)]">{t('e2e.terminalTunnelHint')}</p>
-            {commandBlock(`devkit tunnel --url ${origin}`, true)}
-            <p className="mt-2">{t('e2e.terminalTunnelPaste')}</p>
-          </div>
-          <div className="border-t border-[var(--border)] pt-3">
-            <p className="font-medium text-[var(--text-primary)]">{t('e2e.manualTunnelHint')}</p>
-            {commandBlock(quickTunnelCommand(origin))}
-          </div>
-          <a
-            href="https://developers.cloudflare.com/tunnel/downloads/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-block text-[var(--text-accent)] underline underline-offset-2"
-          >
-            {t('e2e.installCloudflared')}
-          </a>
-          {copyStatus !== 'idle' && (
-            <p role="status">
-              {t(
-                copyStatus === 'copied' ? 'e2e.tunnelCommandCopied' : 'e2e.tunnelCommandCopyFailed',
-              )}
-            </p>
-          )}
-          <p>{t('e2e.localhostPaste')}</p>
-          <p>{t('e2e.localhostExposure')}</p>
-        </div>
-      )}
-    </>
-  );
 
   const setRepository = useCallback((repository: E2eRepositorySelection) => {
     setForm((current) => ({ ...current, repository }));
@@ -649,9 +497,7 @@ export function E2eConfigForm({
       (!isLocalBrowserOrigin(form.localOrigin) || form.mode !== 'frontend')
     )
       next.add('localOrigin');
-    if (Boolean(form.accessClientId.trim()) !== Boolean(form.accessClientSecret.trim()))
-      next.add('access');
-    if (form.source === 'prd' && !prdContent().trim()) next.add('prd');
+    if (form.source === 'prd' && form.knowledge === 'prd' && !prdContent().trim()) next.add('prd');
     if (form.source === 'cases' && form.cases.caseIds.length === 0) next.add('cases');
     if (form.source === 'saved' && !savedSelectionReady(form.saved)) next.add('saved');
     if (form.scope === 'diff' && !form.diff.trim()) next.add('diff');
@@ -663,12 +509,14 @@ export function E2eConfigForm({
   const submit = async () => {
     const invalid = validate();
     setErrors(invalid);
-    if (invalid.has('access')) setShowAccessSettings(true);
     setSubmitError(null);
     if (invalid.size) return;
     setSubmitting(true);
     // The pasted PRD of an edited run already holds its earlier files' content.
-    const fileNames = [...(editing?.prdFileNames ?? []), ...form.files.map((file) => file.name)];
+    const useBrain = form.source === 'prd' && form.knowledge === 'brain';
+    const fileNames = useBrain
+      ? []
+      : [...(editing?.prdFileNames ?? []), ...form.files.map((file) => file.name)];
     try {
       const input: E2eCreationInput = {
         name: form.name.trim(),
@@ -676,18 +524,26 @@ export function E2eConfigForm({
         mode: form.mode,
         scope: form.scope,
         baseUrl: form.baseUrl.trim(),
-        localOrigin: form.executionTarget === 'local' ? '' : form.localOrigin.trim(),
+        // Workers that reach localhost open the address directly: no tunnel origin is needed.
+        localOrigin:
+          form.executionTarget === 'local' ||
+          (workersReachLocalhost && localAppOrigin(form.baseUrl))
+            ? ''
+            : form.localOrigin.trim(),
         executionTarget: form.executionTarget,
         path: form.path.trim(),
         ...(form.username.trim() ? { username: form.username.trim() } : {}),
         ...(form.password ? { password: form.password } : {}),
-        ...(form.accessClientId.trim() ? { accessClientId: form.accessClientId.trim() } : {}),
-        ...(form.accessClientSecret.trim()
-          ? { accessClientSecret: form.accessClientSecret.trim() }
-          : {}),
-        ...(form.clearAccessServiceToken ? { clearAccessServiceToken: true } : {}),
-        prd: prdContent(),
+        // Null unlinks a run that was configured from an environment.
+        ...(form.environmentId
+          ? { environmentId: form.environmentId }
+          : editing?.environmentId
+            ? { environmentId: null }
+            : {}),
+        // With the Brain the knowledge comes from its documents, not from a PRD.
+        prd: useBrain ? '' : prdContent(),
         prdFileNames: [...new Set(fileNames)],
+        ...(useBrain ? { useBrain: true } : {}),
         ...(form.source === 'cases' ? { importCases: importCases(form.cases) } : {}),
         ...(form.source === 'saved' ? { savedCases: savedCases(form.saved) } : {}),
         ...(form.scope === 'diff' ? { diff: form.diff } : {}),
@@ -723,8 +579,6 @@ export function E2eConfigForm({
     setFileError(null);
     setSubmitError(null);
     setTunnelCheck(null);
-    setShowTunnelSetup(false);
-    setShowAccessSettings(Boolean(editing?.hasAccessServiceToken));
   };
 
   const fieldError = (field: FieldError, message: TranslationKey) =>
@@ -748,10 +602,7 @@ export function E2eConfigForm({
 
   if (creationId && !editing)
     return (
-      <div
-        className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-6"
-        data-testid="e2e-config-form"
-      >
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-8" data-testid="e2e-config-form">
         {header}
         {editLoadError ? (
           <div className="flex flex-col items-start gap-3" role="alert">
@@ -770,7 +621,7 @@ export function E2eConfigForm({
     );
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-6" data-testid="e2e-config-form">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-8" data-testid="e2e-config-form">
       {header}
 
       <Section title={t('e2e.testingTypes')} hint={t('e2e.testingTypesHint')} required>
@@ -879,6 +730,22 @@ export function E2eConfigForm({
       </Section>
 
       <Section title={t('e2e.accountTitle')} badge={t('e2e.optional')} hint={t('e2e.accountHint')}>
+        {environments.length > 0 && (
+          <Row label={t('e2e.envSelect')} hint={t('e2e.envSelectHint')}>
+            <Select
+              aria-label={t('e2e.envSelect')}
+              value={form.environmentId}
+              onChange={(event) => chooseEnvironment(event.target.value)}
+            >
+              <option value="">{t('e2e.envSelectNone')}</option>
+              {environments.map((environment) => (
+                <option key={environment.id} value={environment.id}>
+                  {environment.name}
+                </option>
+              ))}
+            </Select>
+          </Row>
+        )}
         <Row label={t('e2e.username')} hint={t('e2e.usernameHint')}>
           <Input
             aria-label={t('e2e.username')}
@@ -907,24 +774,26 @@ export function E2eConfigForm({
       </Section>
 
       <Section title={t('e2e.targetTitle')} hint={t('e2e.targetHint')} required>
-        <div className="space-y-2">
-          <Segmented
-            label={t('e2e.executionTitle')}
-            value={form.executionTarget}
-            options={[
-              { value: 'remote', label: t('e2e.executionRemote') },
-              { value: 'local', label: t('e2e.executionLocal') },
-            ]}
-            onChange={(value) => update('executionTarget', value)}
-          />
-          <p className="text-xs text-[var(--text-muted)]">
-            {t(
-              form.executionTarget === 'local'
-                ? 'e2e.executionLocalHint'
-                : 'e2e.executionRemoteHint',
-            )}
-          </p>
-        </div>
+        {!desktop && (
+          <div className="space-y-2">
+            <Segmented
+              label={t('e2e.executionTitle')}
+              value={form.executionTarget}
+              options={[
+                { value: 'remote', label: t('e2e.executionRemote') },
+                { value: 'local', label: t('e2e.executionLocal') },
+              ]}
+              onChange={(value) => update('executionTarget', value)}
+            />
+            <p className="text-xs text-[var(--text-muted)]">
+              {t(
+                form.executionTarget === 'local'
+                  ? 'e2e.executionLocalHint'
+                  : 'e2e.executionRemoteHint',
+              )}
+            </p>
+          </div>
+        )}
 
         <div className="space-y-2">
           <label
@@ -964,34 +833,13 @@ export function E2eConfigForm({
         {form.executionTarget === 'local' ? (
           <E2eLocalRunnerPanel apiClient={apiClient} {...(creationId ? { creationId } : {})} />
         ) : unreachableLocalTarget(form.baseUrl) ? (
-          <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-[var(--surface-1)] p-3">
-              <p className="min-w-0 flex-1 text-xs text-[var(--text-secondary)]">
-                {t('e2e.useLocalRunnerHint')}
-              </p>
-              <Button size="sm" onClick={() => update('executionTarget', 'local')}>
-                {t('e2e.useLocalRunner')}
-              </Button>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-0 space-y-1">
-                <p className="text-sm font-semibold text-[var(--text-primary)]">
-                  {t('e2e.localConnectionTitle')}
-                </p>
-                <p className="text-xs text-[var(--text-secondary)]">{t('e2e.localhostHint')}</p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                isLoading={startingLocalTunnel}
-                onClick={() => void startLocalTunnel()}
-              >
-                {t('e2e.startLocalTunnel')}
-              </Button>
-            </div>
-            {localHelperAlert}
-            {tunnelSetup(localAppOrigin(form.baseUrl)!)}
-          </div>
+          <p
+            role="status"
+            className="flex items-start gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-400"
+          >
+            <i className="ti ti-alert-circle mt-0.5" aria-hidden="true" />
+            {t('e2e.localUrlUseMyComputer')}
+          </p>
         ) : (
           isHttpUrl(form.baseUrl) &&
           form.baseUrl.trim().startsWith('https://') && (
@@ -1006,15 +854,6 @@ export function E2eConfigForm({
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {form.mode === 'frontend' && isLocalBrowserOrigin(form.localOrigin) && (
-                    <Button
-                      size="sm"
-                      isLoading={startingLocalTunnel}
-                      onClick={() => void startLocalTunnel()}
-                    >
-                      {t('e2e.startLocalTunnel')}
-                    </Button>
-                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -1025,10 +864,6 @@ export function E2eConfigForm({
                   </Button>
                 </div>
               </div>
-              {localHelperAlert}
-              {form.mode === 'frontend' &&
-                isLocalBrowserOrigin(form.localOrigin) &&
-                tunnelSetup(localAppOrigin(form.localOrigin)!)}
               {tunnelCheck?.url === form.baseUrl.trim() && (
                 <p
                   role="status"
@@ -1047,12 +882,6 @@ export function E2eConfigForm({
                     aria-hidden="true"
                   />
                   {t(tunnelCheckMessage[tunnelCheck.reason] ?? 'e2e.tunnelCheckRequest')}
-                </p>
-              )}
-              {form.accessClientId.trim().startsWith('adk-local-') && (
-                <p className="flex items-start gap-2 text-xs text-[var(--text-secondary)]">
-                  <i className="ti ti-route mt-0.5" aria-hidden="true" />
-                  {t('e2e.localGatewayActive')}
                 </p>
               )}
               {form.mode === 'frontend' && (
@@ -1104,90 +933,23 @@ export function E2eConfigForm({
           <p className="text-xs text-[var(--text-muted)]">{t('e2e.pathHint')}</p>
         </div>
 
-        {form.executionTarget === 'remote' && (
-          <div className="border-t border-[var(--border)] pt-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-expanded={showAccessSettings}
-              aria-controls={showAccessSettings ? 'e2e-access-settings' : undefined}
-              onClick={() => setShowAccessSettings((current) => !current)}
-              className="h-auto w-full justify-start whitespace-normal px-0 text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            >
-              <i className="ti ti-lock" aria-hidden="true" />
-              {t('e2e.accessSettingsTitle')}
-              {editing?.hasAccessServiceToken && !form.clearAccessServiceToken && (
-                <span className="rounded bg-[var(--surface-2)] px-2 py-0.5 text-xs">
-                  {t('e2e.accessTokenSaved')}
-                </span>
-              )}
-              <i
-                className={cn(
-                  'ti ml-auto',
-                  showAccessSettings ? 'ti-chevron-up' : 'ti-chevron-down',
-                )}
-                aria-hidden="true"
-              />
-            </Button>
-            {showAccessSettings && (
-              <div
-                id="e2e-access-settings"
-                className="mt-3 space-y-2 text-sm text-[var(--text-secondary)]"
-              >
-                <p className="text-xs">{t('e2e.accessServiceTokenHint')}</p>
-                <Input
-                  aria-label={t('e2e.accessClientId')}
-                  placeholder={t('e2e.accessClientId')}
-                  value={form.accessClientId}
-                  onChange={(event) => update('accessClientId', event.target.value)}
-                />
-                <Input
-                  aria-label={t('e2e.accessClientSecret')}
-                  placeholder={
-                    editing?.hasAccessServiceToken ? '••••••••' : t('e2e.accessClientSecret')
-                  }
-                  type="password"
-                  autoComplete="new-password"
-                  value={form.accessClientSecret}
-                  onChange={(event) => update('accessClientSecret', event.target.value)}
-                />
-                {fieldError('access', 'e2e.validationAccessToken')}
-                {editing?.hasAccessServiceToken && !form.clearAccessServiceToken && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => update('clearAccessServiceToken', true)}
-                  >
-                    {t('e2e.removeAccessServiceToken')}
-                  </Button>
-                )}
-                {form.clearAccessServiceToken && (
-                  <p role="status">{t('e2e.accessServiceTokenRemoved')}</p>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
         <p className="flex items-center gap-2 rounded-md bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--text-secondary)]">
           <i className="ti ti-info-circle-filled" aria-hidden="true" />
-          {t('e2e.reachableWarning')}
+          {t(desktop ? 'e2e.reachableWarningDesktop' : 'e2e.reachableWarning')}
         </p>
       </Section>
 
       {!creationId && canImportCases && (
         <Section title={t('e2e.sourceTitle')} hint={t('e2e.sourceHint')} required>
-          <Segmented
-            label={t('e2e.sourceTitle')}
+          <Select
+            aria-label={t('e2e.sourceTitle')}
             value={form.source}
-            options={[
-              { value: 'prd', label: t('e2e.sourcePrd') },
-              { value: 'cases', label: t('e2e.sourceCases') },
-              { value: 'saved', label: t('e2e.sourceSaved') },
-            ]}
-            onChange={(source) => update('source', source)}
-          />
+            onChange={(event) => update('source', event.target.value as typeof form.source)}
+          >
+            <option value="prd">{t('e2e.sourcePrd')}</option>
+            <option value="cases">{t('e2e.sourceCases')}</option>
+            <option value="saved">{t('e2e.sourceSaved')}</option>
+          </Select>
           {form.source === 'cases' && (
             <E2eCasePicker
               apiClient={apiClient}
@@ -1210,6 +972,60 @@ export function E2eConfigForm({
       )}
 
       {form.source === 'prd' && (
+        <Section title={t('e2e.knowledgeTitle')} hint={t('e2e.knowledgeHint')} required>
+          <div
+            role="tablist"
+            aria-label={t('e2e.knowledgeTitle')}
+            className="grid grid-cols-2 gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-0)] p-1"
+          >
+            {(
+              [
+                ['brain', 'e2e.knowledgeUseBrain', 'ti-brain'],
+                ['prd', 'e2e.knowledgeUsePrd', 'ti-file-text'],
+              ] as const
+            ).map(([value, label, icon]) => (
+              <Button
+                key={value}
+                role="tab"
+                id={`e2e-knowledge-tab-${value}`}
+                aria-selected={form.knowledge === value}
+                aria-controls="e2e-knowledge-panel"
+                variant={form.knowledge === value ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-9"
+                onClick={() => update('knowledge', value)}
+              >
+                <i className={cn('ti', icon)} aria-hidden="true" />
+                {t(label)}
+              </Button>
+            ))}
+          </div>
+          <div
+            role="tabpanel"
+            id="e2e-knowledge-panel"
+            aria-labelledby={`e2e-knowledge-tab-${form.knowledge}`}
+            className="flex flex-col gap-3"
+          >
+            {form.knowledge === 'brain' ? (
+              <div
+                className="flex flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4"
+                data-testid="e2e-brain-panel"
+              >
+                <p className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+                  <i className="ti ti-brain text-[var(--text-accent)]" aria-hidden="true" />
+                  {t('e2e.brainTitle')}
+                </p>
+                <p className="text-sm text-[var(--text-secondary)]">{t('e2e.brainHint')}</p>
+                <p className="text-xs text-[var(--text-muted)]">{t('e2e.brainPoints')}</p>
+              </div>
+            ) : (
+              <p className="text-sm text-[var(--text-secondary)]">{t('e2e.prdHint')}</p>
+            )}
+          </div>
+        </Section>
+      )}
+
+      {form.source === 'prd' && form.knowledge === 'prd' && (
         <Section title={t('e2e.prdTitle')} hint={t('e2e.prdHint')} required>
           <div
             onDragOver={(event) => {

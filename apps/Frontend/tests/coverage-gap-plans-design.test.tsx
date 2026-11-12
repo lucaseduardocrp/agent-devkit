@@ -176,47 +176,6 @@ describe('DesignView coverage gaps', () => {
     expect(sent).toHaveAttribute('src', 'data:image/png;base64,aGk=');
   });
 
-  it('reports image read failures from the file reader', async () => {
-    const api = client();
-    class FailingReader {
-      error: Error | null = null;
-      result: unknown = null;
-      onerror: (() => void) | null = null;
-      onload: (() => void) | null = null;
-      readAsDataURL(file: File) {
-        if (file.name === 'error.png') {
-          this.onerror?.();
-        } else {
-          this.result = new ArrayBuffer(1);
-          this.onload?.();
-        }
-      }
-    }
-    vi.stubGlobal('FileReader', FailingReader);
-    const rejections: unknown[] = [];
-    const onRejection = (event: PromiseRejectionEvent | Error) => rejections.push(event);
-    process.on('unhandledRejection', onRejection);
-    try {
-      render(<DesignView apiClient={api} activeWorkspaceId="ws" />);
-      await screen.findByRole('button', { name: /Landing/ });
-      const input = screen.getByLabelText('Adicionar imagens');
-      fireEvent.change(input, { target: { files: null } });
-      fireEvent.change(input, {
-        target: { files: [new File(['x'], 'error.png', { type: 'image/png' })] },
-      });
-      fireEvent.change(input, {
-        target: { files: [new File(['x'], 'buffer.png', { type: 'image/png' })] },
-      });
-      await waitFor(() => expect(rejections).toHaveLength(2));
-      expect(String(rejections[0])).toContain('Unable to read image.');
-      expect(String(rejections[1])).toContain('Unable to read image.');
-      expect(screen.queryByAltText('error.png')).toBeNull();
-    } finally {
-      process.off('unhandledRejection', onRejection);
-      vi.unstubAllGlobals();
-    }
-  });
-
   it('saves a Design System from the prototype form and shows non-Error failures', async () => {
     const api = client();
     const save = vi

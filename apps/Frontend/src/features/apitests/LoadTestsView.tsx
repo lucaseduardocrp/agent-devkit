@@ -9,6 +9,7 @@ import { SearchableSelect } from '../../components/ui/searchable-select.js';
 import { ApiClient } from '../../lib/api-client.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { cn } from '../../lib/utils.js';
+import { isDesktopApp } from '../../lib/desktop.js';
 import {
   flattenItems,
   isActiveRun,
@@ -40,9 +41,6 @@ export interface LoadTestsViewProps {
 
 type Tab = 'plan' | 'runs';
 const snapshot = (draft: LoadScenarioInput | null) => JSON.stringify(draft);
-/** Every request of a collection, each with the same weight. */
-const everyRequest = (collection: ApiCollection) =>
-  flattenItems(collection.items).map(({ request }) => ({ requestId: request.id, weight: 1 }));
 
 export function LoadTestsView({
   apiClient = defaultApiClient,
@@ -66,14 +64,12 @@ export function LoadTestsView({
   const [starting, setStarting] = useState(false);
   const [showGenerate, setShowGenerate] = useState(false);
   const [naming, setNaming] = useState<'new' | 'rename' | 'duplicate' | null>(null);
-  // The id of the scenario waiting for the delete confirmation.
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // True until the scenarios, collections and environments are listed.
   const [loading, setLoading] = useState(true);
-  // Picking another collection (or creating a scenario) selects all of its requests once loaded:
-  // the id of that collection, so a late answer for a collection left behind changes nothing.
-  const selectAllOnLoad = useRef<string | null>(null);
+  // Picking another collection (or creating a scenario) selects all of its requests once loaded.
+  const selectAllOnLoad = useRef(false);
 
   const fail = (err: unknown) => setError(err instanceof Error ? err.message : String(err));
   const dirty = draft !== null && snapshot(draft) !== saved;
@@ -110,9 +106,19 @@ export function LoadTestsView({
       .getApiCollection(draft.collectionId)
       .then((loaded) => {
         setCollection(loaded);
-        if (selectAllOnLoad.current === loaded.id) {
-          selectAllOnLoad.current = null;
-          setDraft((current) => current && { ...current, requests: everyRequest(loaded) });
+        if (selectAllOnLoad.current) {
+          selectAllOnLoad.current = false;
+          setDraft((current) =>
+            current && current.collectionId === loaded.id
+              ? {
+                  ...current,
+                  requests: flattenItems(loaded.items).map(({ request }) => ({
+                    requestId: request.id,
+                    weight: 1,
+                  })),
+                }
+              : current,
+          );
         }
       })
       .catch(fail);
@@ -133,11 +139,9 @@ export function LoadTestsView({
     return () => window.clearInterval(timer);
   }, [apiClient, run]);
 
-  /** Opens `scenario`; false when the user kept unsaved changes instead. */
-  const select = async (scenario: LoadScenario): Promise<boolean> => {
-    if (dirty && !window.confirm(t('apiTests.discardChanges'))) return false;
+  const select = async (scenario: LoadScenario) => {
+    if (dirty && !window.confirm(t('apiTests.discardChanges'))) return;
     const { id: _id, updatedAt: _updatedAt, ...input } = scenario;
-    selectAllOnLoad.current = null;
     setSelectedId(scenario.id);
     setDraft(input);
     setSaved(snapshot(input));
@@ -150,28 +154,27 @@ export function LoadTestsView({
     } catch (err) {
       fail(err);
     }
-    return true;
   };
 
   const createScenario = (name: string) => {
-    const created = emptyScenario(name, collections[0]?.id);
-    selectAllOnLoad.current = created.collectionId;
+    const collectionId = collections[0]?.id ?? '';
+    selectAllOnLoad.current = true;
     setCollection(null);
     setSelectedId(null);
-    setDraft(created);
+    setDraft(emptyScenario(name, collectionId));
     setSaved('null');
     setRuns([]);
     setRun(null);
     setTab('plan');
   };
 
-  const applyProfile = async (current: LoadScenarioInput, profile: LoadProfileType) => {
-    if (profile === 'custom') return setDraft({ ...current, profile });
+  const applyProfile = async (draft: LoadScenarioInput, profile: LoadProfileType) => {
+    if (profile === 'custom') return setDraft({ ...draft, profile });
     try {
       const profiles = await apiClient.getLoadProfiles(preset.vus, preset.durationSec);
       const chosen = profiles.find((item) => item.profile === profile);
       setDraft({
-        ...current,
+        ...draft,
         profile,
         ...(chosen ? { stages: chosen.stages, thresholds: chosen.thresholds } : {}),
       });
@@ -213,10 +216,11 @@ export function LoadTestsView({
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const remove = async (id: string) => {
-    setConfirmDelete(null);
+  const remove = async () => {
+    setConfirmDelete(false);
+    if (!selectedId) return;
     try {
-      await apiClient.deleteLoadScenario(id);
+      await apiClient.deleteLoadScenario(selectedId);
       setSelectedId(null);
       setDraft(null);
       setSaved('null');
@@ -243,12 +247,13 @@ export function LoadTestsView({
     setShowRun(true);
   };
 
-  const start = async (scenarioId: string) => {
+  const start = async () => {
+    if (!selectedId) return;
     setStarting(true);
     setError(null);
     try {
       const started = await apiClient.startLoadRun({
-        scenarioId,
+        scenarioId: selectedId,
         target,
         authorized: true,
       });
@@ -342,13 +347,7 @@ export function LoadTestsView({
               options={collections.map((item) => ({ value: item.id, label: item.name }))}
               onChange={(collectionId) => {
                 if (collectionId === draft.collectionId) return;
-                // Back to the collection already loaded: nothing is fetched, so select it now.
-                if (collection?.id === collectionId) {
-                  selectAllOnLoad.current = null;
-                  setDraft({ ...draft, collectionId, requests: everyRequest(collection) });
-                  return;
-                }
-                selectAllOnLoad.current = collectionId;
+                selectAllOnLoad.current = true;
                 setDraft({ ...draft, collectionId, requests: [] });
               }}
               data-testid="scenario-collection"
@@ -456,16 +455,14 @@ export function LoadTestsView({
   if (loading) return <LoadTestsSkeleton />;
 
   return (
-    <div
-      className="-m-5 flex h-[calc(100%+2.5rem)] min-h-[560px] overflow-hidden bg-[var(--surface-0)]"
-      data-testid="load-tests-view"
-    >
+    <div className="flex h-full min-h-[560px] gap-4" data-testid="load-tests-view">
       <ResizableSidebar
-        className="border-r border-[var(--border)] bg-[var(--surface-1)]"
+        className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)]"
         defaultWidth={280}
         minWidth={220}
         maxWidth={480}
         aria-label={t('apiTests.scenarios')}
+        gap
       >
         <div className="flex h-14 shrink-0 items-center gap-1 border-b border-[var(--border)] pl-3 pr-1.5">
           <h2 className="flex-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
@@ -556,9 +553,7 @@ export function LoadTestsView({
                     <Button
                       variant="ghost"
                       role="menuitem"
-                      onClick={() =>
-                        void select(scenario).then((opened) => opened && setNaming('duplicate'))
-                      }
+                      onClick={() => void select(scenario).then(() => setNaming('duplicate'))}
                     >
                       <i className="ti ti-copy" aria-hidden="true" />
                       {t('apiTests.loadUi.duplicate')}
@@ -567,11 +562,7 @@ export function LoadTestsView({
                       variant="ghost"
                       role="menuitem"
                       data-destructive
-                      onClick={() =>
-                        void select(scenario).then(
-                          (opened) => opened && setConfirmDelete(scenario.id),
-                        )
-                      }
+                      onClick={() => void select(scenario).then(() => setConfirmDelete(true))}
                     >
                       <i className="ti ti-trash" aria-hidden="true" />
                       {t('apiTests.delete')}
@@ -589,7 +580,7 @@ export function LoadTestsView({
         </ul>
       </ResizableSidebar>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
         {error && (
           <div
             role="alert"
@@ -606,27 +597,32 @@ export function LoadTestsView({
         )}
         <div className="min-h-0 flex-1">{renderMain()}</div>
         <footer className="flex shrink-0 items-center gap-2 border-t border-[var(--border)] bg-[var(--surface-1)] px-3 py-1.5 text-[11px] text-[var(--text-muted)]">
-          <i
-            className={cn('ti text-base', target === 'local' ? 'ti-device-laptop' : 'ti-cloud')}
-            aria-hidden="true"
-          />
-          <div className="w-72">
-            <SearchableSelect
-              label={t('apiTests.target')}
-              placeholder={t('apiTests.target')}
-              emptyMessage=""
-              value={target}
-              options={[
-                { value: 'remote', label: t('apiTests.targetRemote') },
-                { value: 'local', label: t('apiTests.targetLocal') },
-              ]}
-              onChange={(value) => setTarget(value as ApiRunTarget)}
-              searchable={false}
-              placement="top"
-              data-testid="run-target"
-            />
-          </div>
-          {target === 'local' && <span className="truncate">{t('apiTests.ui.localHint')}</span>}
+          {/* The desktop app runs requests on this computer: nothing to choose. */}
+          {!isDesktopApp() && (
+            <>
+              <i
+                className={cn('ti text-base', target === 'local' ? 'ti-device-laptop' : 'ti-cloud')}
+                aria-hidden="true"
+              />
+              <div className="w-72">
+                <SearchableSelect
+                  label={t('apiTests.target')}
+                  placeholder={t('apiTests.target')}
+                  emptyMessage=""
+                  value={target}
+                  options={[
+                    { value: 'remote', label: t('apiTests.targetRemote') },
+                    { value: 'local', label: t('apiTests.targetLocal') },
+                  ]}
+                  onChange={(value) => setTarget(value as ApiRunTarget)}
+                  searchable={false}
+                  placement="top"
+                  data-testid="run-target"
+                />
+              </div>
+              {target === 'local' && <span className="truncate">{t('apiTests.ui.localHint')}</span>}
+            </>
+          )}
           <span className="ml-auto hidden sm:inline">Ctrl + S · {t('apiTests.save')}</span>
         </footer>
       </div>
@@ -637,7 +633,7 @@ export function LoadTestsView({
           scenario={draft}
           target={target}
           starting={starting}
-          onStart={() => selectedId && void start(selectedId)}
+          onStart={() => void start()}
           onClose={() => setShowRun(false)}
         />
       )}
@@ -660,30 +656,27 @@ export function LoadTestsView({
         confirmLabel={naming === 'rename' ? t('apiTests.ui.rename') : t('apiTests.ui.create')}
         onSubmit={(name) => {
           if (naming === 'new') createScenario(name);
-          else {
-            // Renaming and duplicating are offered only for an open scenario, and the modal
-            // dialog keeps it open until it closes.
-            setDraft({ ...draft!, name });
-            if (naming === 'duplicate') {
-              setSelectedId(null);
-              setSaved('null');
-              setRuns([]);
-              setRun(null);
-            }
+          else if (naming === 'rename' && draft) setDraft({ ...draft, name });
+          else if (naming === 'duplicate' && draft) {
+            setSelectedId(null);
+            setDraft({ ...draft, name });
+            setSaved('null');
+            setRuns([]);
+            setRun(null);
           }
           setNaming(null);
         }}
         onClose={() => setNaming(null)}
       />
       <ConfirmationDialog
-        open={confirmDelete !== null}
+        open={confirmDelete}
         title={t('apiTests.loadUi.deleteScenario')}
         description={t('apiTests.deleteScenarioConfirm', { name: selectedName })}
         confirmLabel={t('apiTests.delete')}
         cancelLabel={t('common.cancel')}
         destructive
-        onCancel={() => setConfirmDelete(null)}
-        onConfirm={() => confirmDelete && void remove(confirmDelete)}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => void remove()}
       />
       <GenerateDialog
         open={showGenerate}

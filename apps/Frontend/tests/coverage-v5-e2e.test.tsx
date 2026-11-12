@@ -1,19 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { E2eConfigForm } from '../src/features/e2e/E2eConfigForm.js';
 import { E2eLocalRunnerPanel } from '../src/features/e2e/E2eLocalRunnerPanel.js';
 import { E2eTestDetail } from '../src/features/e2e/E2eTestDetail.js';
 import { E2eExecutedSteps } from '../src/features/e2e/E2eTestEvidence.js';
 import { E2eCasePicker, EMPTY_SELECTION } from '../src/features/e2e/E2eTestManagement.js';
 import type { E2eTestDetail as Dto } from '../src/features/e2e/e2e-types.js';
-import { localTunnelBridge } from '../src/features/e2e/local-tunnel-bridge.js';
-import type * as TunnelBridge from '../src/features/e2e/local-tunnel-bridge.js';
 import type { ApiClient } from '../src/lib/api-client.js';
-
-vi.mock('../src/features/e2e/local-tunnel-bridge.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof TunnelBridge>()),
-  localTunnelBridge: { start: vi.fn(), status: vi.fn(), stop: vi.fn() },
-}));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -143,49 +135,5 @@ describe('E2eLocalRunnerPanel polling', () => {
       second.reject(new Error('offline'));
     });
     expect(client.getE2eRunners).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('E2eConfigForm backend local tunnel', () => {
-  it('starts a tunnel for a local backend without storing a browser origin', async () => {
-    vi.mocked(localTunnelBridge.start).mockResolvedValueOnce({
-      tunnel: {
-        localUrl: 'http://localhost:3000',
-        publicUrl: 'https://api.trycloudflare.com',
-        accessClientId: 'id',
-        accessClientSecret: 'secret',
-      },
-    });
-    const client = {
-      apiUrl: 'https://api.adk.example.com',
-      getE2eRunners: vi.fn().mockResolvedValue([]),
-      getAgents: vi.fn().mockResolvedValue([{ id: 'qa', name: 'QA Engineer', role: 'QA' }]),
-      getE2eRepositories: vi.fn().mockResolvedValue({ repositories: [], warnings: [] }),
-      getE2eBranches: vi.fn().mockResolvedValue([]),
-      checkE2eTunnel: vi.fn().mockResolvedValue({ reachable: true, reason: 'ok', status: 200 }),
-      getTestManagementProviders: vi.fn().mockResolvedValue([]),
-    };
-    render(
-      <E2eConfigForm
-        apiClient={client as unknown as ApiClient}
-        onCreated={vi.fn()}
-        onCancel={vi.fn()}
-      />,
-    );
-    fireEvent.click(await screen.findByRole('radio', { name: 'Backend' }));
-    fireEvent.change(screen.getByLabelText('URL base'), {
-      target: { value: 'http://localhost:3000' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Iniciar t.nel no meu computador/ }));
-    await waitFor(() =>
-      expect(client.checkE2eTunnel).toHaveBeenCalledWith('https://api.trycloudflare.com', {
-        accessClientId: 'id',
-        accessClientSecret: 'secret',
-      }),
-    );
-    expect(localTunnelBridge.start).toHaveBeenCalledWith('http://localhost:3000');
-    expect(screen.getByLabelText<HTMLInputElement>('URL base').value).toBe(
-      'https://api.trycloudflare.com',
-    );
   });
 });

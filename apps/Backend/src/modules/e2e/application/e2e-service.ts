@@ -31,6 +31,35 @@ import {
   type E2eTestCase,
   type E2eTestStatus,
 } from '../domain/e2e.js';
+import {
+  buildActionMap,
+  explorationLiveKey,
+  MAX_EXPLORATION_DESCRIPTION,
+  explorationPageKey,
+  liveFrameKey,
+  liveLabelKey,
+  trailImageKey,
+  trailKey,
+  trailPrefix,
+  type E2eActionMap,
+  type E2eEnvironment,
+  type E2eExploration,
+  type E2eLiveActivity,
+  type E2eStoredTrail,
+} from '../domain/e2e-insight.js';
+import {
+  buildSourceMap,
+  sourceDiscovery,
+  sourcePageKey,
+  type E2eSource,
+  type E2eSourceMap,
+} from '../domain/e2e-source.js';
+import type { z } from 'zod';
+import type { KnowledgeSearchPort } from '../../knowledge/application/knowledge-search.js';
+import { SOURCE_RESPONSE_FORMAT, sourceDocumentationSchema, sourceRules } from './e2e-author.js';
+import { brainContext, searchSourceBrain } from './e2e-brain.js';
+import type { E2eEnvironmentService } from './e2e-environments.js';
+import { ExplorationRecorder, readExploration } from './e2e-exploration.js';
 import type { E2eScriptRepository } from './script-repository.js';
 import type { E2eArtifactStore } from './artifact-store.js';
 import type { E2eSnapshot, E2eVideoTranscoder } from './e2e-runner.js';
@@ -69,6 +98,8 @@ export interface HostPlanInput {
     readonly title: string;
     readonly description: string;
     readonly priority: E2ePriority;
+    /** Feature area that groups the test in the run view. */
+    readonly category?: string | null;
     readonly steps: readonly string[];
     readonly script: string;
     /** Before Run and After Run of the test, committed next to its spec. */
@@ -160,6 +191,9 @@ export interface E2eHostBrief {
     readonly diff: string | null;
     readonly instructions: string | null;
     readonly standardizedPrd: string | null;
+    /** The tests come from the Brain: the host agent searches it with `brainTools`. */
+    readonly useBrain: boolean;
+    readonly brainTools?: readonly string[];
   };
   readonly snapshot:
     | { readonly status: 'capturing' }
@@ -205,11 +239,19 @@ export interface CreateE2eInput {
   readonly path?: string;
   readonly username?: string;
   readonly password?: string;
+  /**
+   * Saved environment the run is configured from: its custom variables reach the specs and,
+   * for the same username, its password is used when none is given. Null unlinks the run;
+   * omitted keeps what an edited run already has.
+   */
+  readonly environmentId?: string | null;
   readonly accessClientId?: string;
   readonly accessClientSecret?: string;
   readonly clearAccessServiceToken?: boolean;
   readonly prd: string;
   readonly prdFileNames?: readonly string[];
+  /** Plans and writes the tests from the Brain; the PRD is then optional extra context. */
+  readonly useBrain?: boolean;
   readonly diff?: string;
   readonly instructions?: string;
   /** Automates these test management cases instead of planning tests from the PRD. */
@@ -277,6 +319,30 @@ export interface E2eServiceOptions {
   readonly savedCases?: SavedCaseReader;
   /** Converts recordings made before MP4 conversion existed; optional. */
   readonly transcoder?: E2eVideoTranscoder | null;
+  /** Saved environments runs can be configured from. */
+  readonly environments?: Pick<E2eEnvironmentService, 'find' | 'variables'>;
+  /** The Brain: the documentation of the system is written from it. */
+  readonly knowledge?: KnowledgeSearchPort;
+  /**
+   * The API runs on the user's own computer (the desktop app): the browser is always this
+   * process's own, so no run waits for a runner or a worker and the choice is not offered.
+   */
+  readonly runsLocally?: boolean;
+}
+
+/** The Source with its flows, and whether an exploration or a documentation is being written. */
+export interface E2eSourceState {
+  readonly source: (E2eSource & E2eSourceMap) | null;
+  /** Hidden run carrying the Source's jobs; its exploration can be followed like a run's. */
+  readonly anchorId: string | null;
+  /** The agent that documents the system; the one of the last exploration. */
+  readonly agentId: string | null;
+  readonly busy: boolean;
+}
+
+/** Loopback applications are only reachable from the user's computer. */
+function isLoopback(baseUrl: string): boolean {
+  return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(baseUrl).hostname.toLowerCase());
 }
 
 /**
@@ -333,12 +399,18 @@ export class E2eService {
           ? reportingTarget(input.reporting)
           : null;
     const imported = cases?.map(testFromCase) ?? saved?.tests ?? null;
+    const environment = input.environmentId
+      ? await this.findEnvironment(workspaceId, input.environmentId)
+      : null;
     const creation = await this.options.store.createCreation({
       ...settings,
       workspaceId,
       ownerId: context.ownerId ?? workspaceId,
       actorId: context.actorId ?? 'unknown',
-      passwordSecret: input.password ? encryptSecret(input.password) : null,
+      environmentId: environment?.id ?? null,
+      passwordSecret: input.password
+        ? encryptSecret(input.password)
+        : environmentPassword(environment, settings.username),
       accessSecret: encryptAccessToken(
         input.accessClientId,
         input.accessClientSecret,
@@ -541,6 +613,18 @@ export class E2eService {
         diff: creation.diff,
         instructions: creation.instructions,
         standardizedPrd: creation.prdSummary,
+        useBrain: creation.useBrain,
+        // The host agent searches the Brain itself with these tools.
+        ...(creation.useBrain
+          ? {
+              brainTools: [
+                'brain_search',
+                'brain_ask',
+                'brain_get_document',
+                'brain_list_relations',
+              ],
+            }
+          : {}),
       },
       snapshot: !stored
         ? { status: 'capturing' }
@@ -549,7 +633,12 @@ export class E2eService {
           : { status: 'ready', capturedAt: stored.capturedAt, data: stored.snapshot },
       rules: {
         plan: planRules(creation),
-        script: scriptRules(creation),
+        script: scriptRules(
+          creation,
+          Object.keys(
+            (await this.options.environments?.variables(workspaceId, creation.environmentId)) ?? {},
+          ),
+        ),
         beforeRun: hookRules(creation, 'beforeRun'),
         afterRun: hookRules(creation, 'afterRun'),
       },
@@ -625,8 +714,10 @@ export class E2eService {
     }
     const previous = await this.options.store.listTests(workspaceId, id);
     const tests = await this.options.store.replaceTests(creation, cases);
-    for (const test of previous)
+    for (const test of previous) {
       if (test.videoKey) await this.options.artifacts.removePrefix(test.videoKey);
+      await this.options.artifacts.removePrefix(trailPrefix(test));
+    }
     if (input.summary?.trim())
       await this.options.store.updateCreation(workspaceId, id, {
         prdSummary: input.summary.trim(),
@@ -654,10 +745,18 @@ export class E2eService {
           : input.localOrigin,
       executionTarget: input.executionTarget ?? creation.executionTarget,
     });
+    const environment = input.environmentId
+      ? await this.findEnvironment(workspaceId, input.environmentId)
+      : null;
+    // A run moved to another environment takes that environment's password for the same account.
+    const inherited =
+      environment && environment.id !== creation.environmentId
+        ? environmentPassword(environment, settings.username)
+        : null;
     const passwordSecret = input.password
       ? encryptSecret(input.password)
       : settings.username
-        ? creation.passwordSecret
+        ? (inherited ?? creation.passwordSecret)
         : null;
     const accessSecret = input.clearAccessServiceToken
       ? null
@@ -670,8 +769,11 @@ export class E2eService {
       ...settings,
       passwordSecret,
       accessSecret,
+      ...(input.environmentId === undefined ? {} : { environmentId: environment?.id ?? null }),
       // The standardized PRD is rebuilt from the new document on the next planning.
-      ...(settings.prd !== creation.prd ? { prdSummary: null } : {}),
+      ...(settings.prd !== creation.prd || settings.useBrain !== creation.useBrain
+        ? { prdSummary: null }
+        : {}),
     })) as E2eCreation;
     // A snapshot of another page or mode would mislead the next host-written plan.
     if (
@@ -941,6 +1043,7 @@ export class E2eService {
   ): Promise<E2eCreationView> {
     const creation = await this.findCreation(workspaceId, id);
     await this.assertIdle(creation);
+    if (this.options.runsLocally) executionTarget = 'remote';
     if (creation.executionTarget === executionTarget) return toView(creation);
     const baseUrl =
       executionTarget === 'local' && creation.localOrigin ? creation.localOrigin : creation.baseUrl;
@@ -951,6 +1054,320 @@ export class E2eService {
     })) as E2eCreation;
     await this.options.artifacts.removePrefix(snapshotKey(creation));
     return toView(updated);
+  }
+
+  /**
+   * What the agent saw the last time it explored the run's application: the pages it captured
+   * and what it did, updated while an exploration is in progress. Null when it never explored.
+   */
+  async exploration(workspaceId: string, id: string): Promise<E2eExploration | null> {
+    const creation = await this.findCreation(workspaceId, id);
+    const state = await readExploration(this.options.artifacts, creation);
+    if (!state || state.status === 'ready' || state.status === 'failed') return state;
+    // Still marked as in progress with no job behind it: the worker stopped half way.
+    return (await this.options.queue.hasActive(workspaceId, id))
+      ? state
+      : { ...state, status: 'failed', hasLiveFrame: false };
+  }
+
+  /**
+   * Asks a worker to explore the application again; the run and its tests are left alone.
+   * The optional description says what to explore (the whole site, one feature, a bug…): the
+   * agent follows it and it is kept with the exploration's script, which only ever goes to the
+   * database. The agent explores with the context of the run's own tests.
+   */
+  async explore(
+    workspaceId: string,
+    id: string,
+    actorId?: string,
+    options: { description?: string; source?: boolean } = {},
+  ): Promise<E2eExploration> {
+    const { description, source = false } = options;
+    const creation = await this.findCreation(workspaceId, id);
+    await this.assertIdle(creation);
+    await this.options.artifacts.removePrefix(snapshotKey(creation));
+    // Shown as started right away, before a worker picks the job up. The worker reads the
+    // description back from this state.
+    await ExplorationRecorder.start(
+      this.options.artifacts,
+      creation,
+      Boolean(creation.username && creation.passwordSecret),
+      Date.now,
+      { description: description?.slice(0, MAX_EXPLORATION_DESCRIPTION), source },
+    );
+    await this.enqueue(creation, 'explore', [], actorId);
+    return (await readExploration(this.options.artifacts, creation)) as E2eExploration;
+  }
+
+  /**
+   * The Source of the workspace (null before its first exploration) with its script turned into
+   * the map of the application: every flow the agent found, page by page.
+   */
+  async source(workspaceId: string): Promise<E2eSourceState> {
+    const { store } = this.options;
+    const source = await store.getSource(workspaceId);
+    const run =
+      (await store.getSourceAnchor(workspaceId)) ??
+      (source ? await store.getCreation(workspaceId, source.creationId) : null);
+    return {
+      source: source && { ...source, ...buildSourceMap(source) },
+      anchorId: run?.id ?? null,
+      agentId: run?.agentId ?? null,
+      // An exploration or a new documentation is being written.
+      busy: run ? await this.options.queue.hasActive(workspaceId, run.id) : false,
+    };
+  }
+
+  /**
+   * Explores the application of a saved environment, as a whole, to replace the Source of the
+   * workspace. A hidden run of the workspace carries the job (its address, account and agent
+   * come from the environment and the request); the Source in use stays until the new
+   * exploration ends well.
+   */
+  async exploreSource(
+    context: RequestContext,
+    input: {
+      readonly environmentId: string;
+      /** The agent that documents the system; the one of the last exploration when omitted. */
+      readonly agentId?: string;
+      /** Where the browser runs; a localhost environment runs on the user's computer. */
+      readonly executionTarget?: E2eExecutionTarget;
+    },
+  ): Promise<E2eExploration> {
+    const workspaceId = requireWorkspace(context);
+    const environment = await this.findEnvironment(workspaceId, input.environmentId);
+    const anchor = await this.options.store.getSourceAnchor(workspaceId);
+    const agentId = input.agentId ?? anchor?.agentId;
+    if (!agentId)
+      throw new ApplicationError(
+        'E2E_AGENT_REQUIRED',
+        'Choose the agent that documents the system.',
+        400,
+        [{ field: 'agentId' }],
+      );
+    await this.options.agents.getAgent(workspaceId, agentId);
+    const target = normalizeTargetUrl(environment.baseUrl);
+    const executionTarget = this.options.runsLocally
+      ? 'remote'
+      : (input.executionTarget ??
+        (isLoopback(target.baseUrl) ? 'local' : (this.options.defaultExecutionTarget ?? 'remote')));
+    const settings = {
+      agentId,
+      baseUrl: target.baseUrl,
+      localOrigin: null,
+      executionTarget,
+      path: '/',
+      username: environment.username,
+      passwordSecret: environment.passwordSecret,
+      accessSecret: null,
+      environmentId: environment.id,
+      ownerId: context.ownerId ?? workspaceId,
+      actorId: context.actorId ?? 'unknown',
+      locale: resolveLocale(context.locale),
+    };
+    let creation: E2eCreation;
+    if (anchor) {
+      await this.assertIdle(anchor);
+      creation = (await this.options.store.updateCreation(
+        workspaceId,
+        anchor.id,
+        settings,
+      )) as E2eCreation;
+    } else
+      creation = await this.options.store.createCreation({
+        ...settings,
+        workspaceId,
+        name: 'Source',
+        mode: 'frontend',
+        scope: 'codebase',
+        prd: '',
+        prdFileNames: [],
+        diff: null,
+        instructions: null,
+        repository: null,
+        status: 'draft',
+        useBrain: true,
+        internal: true,
+      });
+    return this.explore(workspaceId, creation.id, context.actorId, { source: true });
+  }
+
+  /**
+   * Writes the documentation of the Source again from what it already discovered, without
+   * exploring. Runs on a worker; the documentation in use stays if the new one fails.
+   */
+  async documentSource(context: RequestContext): Promise<{ readonly busy: true }> {
+    const workspaceId = requireWorkspace(context);
+    const source = await this.requireSource(workspaceId);
+    const anchor = await this.options.store.getSourceAnchor(workspaceId);
+    const creation =
+      anchor ?? (await this.options.store.getCreation(workspaceId, source.creationId));
+    if (!creation)
+      throw new ApplicationError(
+        'E2E_SOURCE_RUN_MISSING',
+        'The run that explored the Source no longer exists. Update the Source.',
+        409,
+      );
+    await this.assertIdle(creation);
+    // The documentation is written as the person asking and in their language.
+    if (creation.internal)
+      await this.options.store.updateCreation(workspaceId, creation.id, {
+        ownerId: context.ownerId ?? workspaceId,
+        actorId: context.actorId ?? 'unknown',
+        locale: resolveLocale(context.locale),
+      });
+    await this.enqueue(creation, 'document', [], context.actorId);
+    return { busy: true };
+  }
+
+  /**
+   * What an MCP host needs to write the documentation of the system itself: what the agent
+   * discovered, the Brain documents about the system and the rules to follow.
+   */
+  async sourceBrief(context: RequestContext) {
+    const workspaceId = requireWorkspace(context);
+    const source = await this.requireSource(workspaceId);
+    const requester = {
+      id: 'source',
+      workspaceId,
+      ownerId: context.ownerId ?? workspaceId,
+      actorId: context.actorId ?? 'unknown',
+      locale: resolveLocale(context.locale),
+    };
+    const documents = this.options.knowledge
+      ? await searchSourceBrain(this.options.knowledge, requester, source.pages)
+      : [];
+    return {
+      applicationUrl: source.startUrl,
+      ...brainContext(documents),
+      ...sourceDiscovery(source),
+      rules: sourceRules(requester),
+      responseFormat: SOURCE_RESPONSE_FORMAT,
+      currentDocumentation: source.documentation,
+    };
+  }
+
+  /** Keeps the documentation an MCP host wrote; it replaces the one in use. */
+  async saveSourceDocumentation(
+    workspaceId: string,
+    input: z.input<typeof sourceDocumentationSchema> & {
+      readonly brainDocuments?: readonly { readonly title: string; readonly source: string }[];
+    },
+  ): Promise<E2eSource> {
+    const source = await this.requireSource(workspaceId);
+    const parsed = sourceDocumentationSchema.parse(input);
+    return this.options.store.saveSource({
+      ...source,
+      documentation: {
+        ...parsed,
+        brainDocuments: input.brainDocuments ?? [],
+        generatedAt: new Date().toISOString(),
+      },
+      documentationError: null,
+    });
+  }
+
+  private async requireSource(workspaceId: string): Promise<E2eSource> {
+    const source = await this.options.store.getSource(workspaceId);
+    if (!source)
+      throw new ApplicationError(
+        'E2E_SOURCE_NOT_FOUND',
+        'The workspace has no Source yet. Explore the application first.',
+        404,
+      );
+    return source;
+  }
+
+  /** JPEG of a page of the Source. */
+  async sourceImage(workspaceId: string, page: number): Promise<Buffer> {
+    return this.evidence(sourcePageKey(workspaceId, page));
+  }
+
+  /** Scripts of the finished explorations, newest first; one run's, or the whole workspace's. */
+  async explorationScripts(workspaceId: string, creationId?: string) {
+    if (creationId) await this.findCreation(workspaceId, creationId);
+    return this.options.store.listExplorationScripts(workspaceId, creationId);
+  }
+
+  async explorationScript(workspaceId: string, id: string) {
+    const script = await this.options.store.getExplorationScript(workspaceId, id);
+    if (!script)
+      throw new ApplicationError('E2E_EXPLORATION_NOT_FOUND', 'Exploration script not found.', 404);
+    return script;
+  }
+
+  async deleteExplorationScript(workspaceId: string, id: string): Promise<void> {
+    if (!(await this.options.store.deleteExplorationScript(workspaceId, id)))
+      throw new ApplicationError('E2E_EXPLORATION_NOT_FOUND', 'Exploration script not found.', 404);
+  }
+
+  /** JPEG of a page the exploration captured, or the latest frame of the agent's browser. */
+  async explorationImage(workspaceId: string, id: string, page: number | 'live'): Promise<Buffer> {
+    const creation = await this.findCreation(workspaceId, id);
+    return this.evidence(
+      page === 'live' ? explorationLiveKey(creation) : explorationPageKey(creation, page),
+    );
+  }
+
+  /**
+   * The pages the run's tests went through, merged into one graph: which tests reached each
+   * page, the elements they touched there and the order each test followed.
+   */
+  async actionMap(workspaceId: string, id: string): Promise<E2eActionMap> {
+    await this.findCreation(workspaceId, id);
+    const tests = await this.options.store.listTests(workspaceId, id);
+    return buildActionMap(
+      await Promise.all(
+        tests.map(async (test) => ({
+          test,
+          trail: await this.readJson<E2eStoredTrail>(trailKey(test)),
+          live:
+            test.status === 'running'
+              ? await this.readJson<E2eLiveActivity>(liveLabelKey(test))
+              : null,
+        })),
+      ),
+    );
+  }
+
+  /** JPEG of a page or element of the trail of the test's latest execution. */
+  async trailImage(
+    workspaceId: string,
+    testId: string,
+    kind: 'page' | 'element',
+    index: number,
+  ): Promise<Buffer> {
+    return this.evidence(trailImageKey(await this.findTest(workspaceId, testId), kind, index));
+  }
+
+  /** JPEG of the browser of a test that is running right now. */
+  async liveFrame(workspaceId: string, testId: string): Promise<Buffer> {
+    return this.evidence(liveFrameKey(await this.findTest(workspaceId, testId)));
+  }
+
+  private async evidence(key: string): Promise<Buffer> {
+    const content = await this.options.artifacts.get(key);
+    if (!content)
+      throw new ApplicationError('E2E_EVIDENCE_NOT_FOUND', 'This image is not available.', 404);
+    return content;
+  }
+
+  private async readJson<T>(key: string): Promise<T | null> {
+    const content = await this.options.artifacts.get(key);
+    if (!content) return null;
+    try {
+      return JSON.parse(content.toString('utf8')) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  private async findEnvironment(workspaceId: string, id: string): Promise<E2eEnvironment> {
+    if (!this.options.environments)
+      throw new ApplicationError('E2E_ENVIRONMENT_NOT_FOUND', 'Environment not found.', 404, [
+        { field: 'environmentId' },
+      ]);
+    return this.options.environments.find(workspaceId, id);
   }
 
   /** `actorId` is who started it: a local run's browser work goes to that user's runner. */
@@ -1072,8 +1489,9 @@ export class E2eService {
     Omit<E2eCreationSettings, 'passwordSecret' | 'accessSecret'> & { repository: E2eRepositoryRef }
   > {
     await this.options.agents.getAgent(workspaceId, input.agentId);
-    const executionTarget =
-      input.executionTarget ?? this.options.defaultExecutionTarget ?? 'remote';
+    const executionTarget = this.options.runsLocally
+      ? 'remote'
+      : (input.executionTarget ?? this.options.defaultExecutionTarget ?? 'remote');
     const browserOrigin = normalizeLocalBrowserOrigin(input.localOrigin, input.mode);
     // A local runner opens the application directly: the tunnel's localhost origin is the target.
     const target = normalizeTargetUrl(
@@ -1102,6 +1520,7 @@ export class E2eService {
       username: input.username?.trim() || null,
       prd: input.prd,
       prdFileNames: [...(input.prdFileNames ?? [])],
+      useBrain: Boolean(input.useBrain),
       diff: diff || null,
       instructions: input.instructions?.trim() || null,
       repository: await this.resolveRepository(workspaceId, input.repository),
@@ -1306,6 +1725,16 @@ function toSummary(test: E2eTestCase): E2eTestSummary {
 function toStepView(step: E2eStepResult): E2eStepView {
   const { screenshotKey, ...rest } = step;
   return { ...rest, hasScreenshot: Boolean(screenshotKey) };
+}
+
+/** The environment's password signs in the environment's account only. */
+function environmentPassword(
+  environment: E2eEnvironment | null,
+  username: string | null,
+): string | null {
+  return environment && username && environment.username === username
+    ? environment.passwordSecret
+    : null;
 }
 
 function reportingTarget(input: ReportingInput): E2eReportingTarget {

@@ -25,7 +25,7 @@ export function MultiSelect({
   hasMore,
   loadingMore = false,
   onLoadMore,
-  loadingMessage = 'Loading…',
+  loadingMessage,
 }: {
   /** Id of the search input, for an external `<label htmlFor>`. */
   readonly id?: string;
@@ -78,7 +78,7 @@ export function MultiSelect({
       className="flex items-center gap-2 px-3 py-2 text-xs text-[var(--text-muted)]"
     >
       <i className="ti ti-loader-2 animate-spin" aria-hidden="true" />
-      {loadingMessage}
+      {loadingMessage ?? t('common.loading')}
     </li>
   ) : null;
   const toggle = (value: string) => {
@@ -122,7 +122,7 @@ export function MultiSelect({
     >
       <div
         className={cn(
-          'flex min-h-[40px] w-full flex-wrap items-center gap-1.5 rounded-md border bg-surface-2 px-2 py-1.5 text-sm shadow-sm transition-colors focus-within:ring-2',
+          'flex min-h-[40px] w-full flex-wrap items-center gap-1.5 rounded-md border bg-surface-2 py-1.5 pl-3.5 pr-10 text-sm shadow-sm transition-colors focus-within:ring-2',
           invalid
             ? 'border-red-500/50 focus-within:border-red-500 focus-within:ring-red-500/30'
             : 'border-border focus-within:border-border-accent focus-within:ring-[var(--bg-accent)]',
@@ -182,6 +182,14 @@ export function MultiSelect({
             setOpen(true);
           }}
           onKeyDown={onKeyDown}
+        />
+        <i
+          className={cn(
+            'ti ti-chevron-down pointer-events-none absolute inset-y-0 right-3 flex items-center text-[var(--text-secondary)] transition-transform',
+            open && 'rotate-180',
+            disabled && 'opacity-50',
+          )}
+          aria-hidden="true"
         />
       </div>
       {open && !disabled && (

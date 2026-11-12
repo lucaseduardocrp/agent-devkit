@@ -65,6 +65,54 @@ export const notificationsModule: McpModule = {
         json(await api.request({ method: 'GET', path: '/notifications/channels' })),
     }),
     defineTool({
+      name: 'notifications_list_people',
+      title: 'List the people to notify',
+      description:
+        'Lists the members of the workspace a page at a time, filtered by name or e-mail, with where each one is reached on every channel (their contacts). Contacts are personal data, so only workspace admins get them; everyone else sees the people without contacts.',
+      toolset: 'notifications',
+      access: 'read',
+      routes: ['GET /notifications/people'],
+      input: {
+        search: z.string().trim().max(100).optional().describe('Part of a name or e-mail.'),
+        offset: z.number().int().min(0).optional().describe('How many people to skip (default 0).'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('People per page (default 25, max 200).'),
+      },
+      run: async (query, { api }) =>
+        json(await api.request({ method: 'GET', path: '/notifications/people', query })),
+    }),
+    defineTool({
+      name: 'notifications_set_contacts',
+      title: 'Set where a member is notified',
+      description:
+        'Sets where a member of the workspace is reached on each channel, e.g. { "email": "ana@example.com" }. An empty address removes the contact of that channel; channels not mentioned are left as they are. Returns the contacts the member has afterwards. Requires workspace admin.',
+      toolset: 'notifications',
+      access: 'write',
+      routes: ['PUT /notifications/contacts/:userId'],
+      input: {
+        userId: z
+          .string()
+          .uuid()
+          .describe('User id of the member (see notifications_list_people).'),
+        contacts: z
+          .record(z.string().trim().min(1).max(50), z.string().trim().max(320))
+          .describe('Address by channel id (see notifications_list_channels); "" removes it.'),
+      },
+      run: async ({ userId, contacts }, { api }) =>
+        json(
+          await api.request({
+            method: 'PUT',
+            path: `/notifications/contacts/${segment(userId)}`,
+            body: { contacts },
+          }),
+        ),
+    }),
+    defineTool({
       name: 'notifications_list_events',
       title: 'List notification events',
       description:

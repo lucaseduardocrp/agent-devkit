@@ -9,6 +9,7 @@ export const PERMISSION_MODULES = [
   'design',
   'specs',
   'releaseNotes',
+  'development',
   'testplans',
   'e2e',
   'integrationTests',

@@ -6,6 +6,8 @@ import {
   type E2ePriority,
   type E2eTestCase,
 } from '../domain/e2e.js';
+import type { E2eExplorationScript, NewE2eExplorationScript } from '../domain/e2e-insight.js';
+import type { E2eSource, NewE2eSource } from '../domain/e2e-source.js';
 import type { ExternalTestCase } from '../../test-management/domain/test-run.js';
 
 export type NewE2eCreation = Pick<
@@ -35,6 +37,11 @@ export type NewE2eCreation = Pick<
   /** Defaults to queued; a draft waits for a plan written by the MCP host. */
   readonly status?: E2eCreation['status'];
   readonly reporting?: E2eCreation['reporting'];
+  readonly environmentId?: E2eCreation['environmentId'];
+  /** Defaults to false (the PRD is the source). */
+  readonly useBrain?: boolean;
+  /** The hidden run of the workspace's Source. */
+  readonly internal?: boolean;
 };
 
 /** Fields the user can change when editing a run's configuration. */
@@ -53,13 +60,26 @@ export type E2eCreationSettings = Pick<
   | 'accessSecret'
   | 'prd'
   | 'prdFileNames'
+  | 'useBrain'
   | 'diff'
   | 'instructions'
   | 'repository'
 >;
 
 export type E2eCreationChanges = Partial<
-  Pick<E2eCreation, 'status' | 'error' | 'prdSummary' | 'finishedAt' | 'reporting' | 'lastReport'> &
+  Pick<
+    E2eCreation,
+    | 'status'
+    | 'error'
+    | 'prdSummary'
+    | 'finishedAt'
+    | 'reporting'
+    | 'lastReport'
+    | 'environmentId'
+    | 'ownerId'
+    | 'actorId'
+    | 'locale'
+  > &
     E2eCreationSettings
 >;
 
@@ -68,6 +88,8 @@ export interface NewE2eTestCase {
   readonly description: string;
   readonly steps: readonly string[];
   readonly priority: E2ePriority;
+  /** Feature area that groups the test in the run view. */
+  readonly category?: string | null;
   /** Set when the test is imported from a spec that already exists in the repository. */
   readonly scriptPath?: string;
   /** Set when the test automates a case imported from a test management platform. */
@@ -99,7 +121,10 @@ export type E2eTestChanges = Partial<
 export interface E2eStore {
   createCreation(input: NewE2eCreation): Promise<E2eCreation>;
   getCreation(workspaceId: string, id: string): Promise<E2eCreation | null>;
+  /** The runs the user sees: the hidden run of the Source is left out. */
   listCreations(workspaceId: string): Promise<E2eCreation[]>;
+  /** The hidden run that explores the workspace's Source; null before its first exploration. */
+  getSourceAnchor(workspaceId: string): Promise<E2eCreation | null>;
   updateCreation(
     workspaceId: string,
     id: string,
@@ -113,6 +138,15 @@ export interface E2eStore {
   listTests(workspaceId: string, creationId?: string): Promise<E2eTestCase[]>;
   getTest(workspaceId: string, id: string): Promise<E2eTestCase | null>;
   updateTest(workspaceId: string, id: string, changes: E2eTestChanges): Promise<E2eTestCase | null>;
+  /** Keeps the script of a finished Site Exploration; explorations are never replaced. */
+  saveExplorationScript(input: NewE2eExplorationScript): Promise<E2eExplorationScript>;
+  /** Newest first; narrowed to one run when `creationId` is given. */
+  listExplorationScripts(workspaceId: string, creationId?: string): Promise<E2eExplorationScript[]>;
+  getExplorationScript(workspaceId: string, id: string): Promise<E2eExplorationScript | null>;
+  deleteExplorationScript(workspaceId: string, id: string): Promise<boolean>;
+  /** Replaces the Source of the workspace: there is only one. */
+  saveSource(input: NewE2eSource): Promise<E2eSource>;
+  getSource(workspaceId: string): Promise<E2eSource | null>;
 }
 
 export function buildTestCases(
@@ -131,6 +165,7 @@ export function buildTestCases(
     description: item.description,
     steps: [...item.steps],
     priority: item.priority,
+    category: item.category?.trim() || null,
     scriptPath: item.scriptPath ?? null,
     beforeRunInstructions: null,
     afterRunInstructions: null,
@@ -154,6 +189,52 @@ export function buildTestCases(
 export class InMemoryE2eStore implements E2eStore {
   private readonly creations = new Map<string, E2eCreation>();
   private readonly tests = new Map<string, E2eTestCase>();
+  private readonly explorationScripts = new Map<string, E2eExplorationScript>();
+  private readonly sources = new Map<string, E2eSource>();
+
+  saveSource(input: NewE2eSource): Promise<E2eSource> {
+    const source: E2eSource = { ...input, updatedAt: new Date() };
+    this.sources.set(source.workspaceId, source);
+    return Promise.resolve(source);
+  }
+
+  getSource(workspaceId: string): Promise<E2eSource | null> {
+    return Promise.resolve(this.sources.get(workspaceId) ?? null);
+  }
+
+  saveExplorationScript(input: NewE2eExplorationScript): Promise<E2eExplorationScript> {
+    const script: E2eExplorationScript = {
+      ...input,
+      id: crypto.randomUUID(),
+      createdAt: new Date(),
+    };
+    this.explorationScripts.set(script.id, script);
+    return Promise.resolve(script);
+  }
+
+  listExplorationScripts(
+    workspaceId: string,
+    creationId?: string,
+  ): Promise<E2eExplorationScript[]> {
+    return Promise.resolve(
+      [...this.explorationScripts.values()]
+        .filter(
+          (script) =>
+            script.workspaceId === workspaceId && (!creationId || script.creationId === creationId),
+        )
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+    );
+  }
+
+  getExplorationScript(workspaceId: string, id: string): Promise<E2eExplorationScript | null> {
+    const script = this.explorationScripts.get(id);
+    return Promise.resolve(script?.workspaceId === workspaceId ? script : null);
+  }
+
+  async deleteExplorationScript(workspaceId: string, id: string): Promise<boolean> {
+    if (!(await this.getExplorationScript(workspaceId, id))) return false;
+    return this.explorationScripts.delete(id);
+  }
 
   createCreation(input: NewE2eCreation): Promise<E2eCreation> {
     const now = new Date();
@@ -161,7 +242,10 @@ export class InMemoryE2eStore implements E2eStore {
       ...input,
       executionTarget: input.executionTarget ?? 'remote',
       prdFileNames: [...input.prdFileNames],
+      useBrain: input.useBrain ?? false,
+      internal: input.internal ?? false,
       reporting: input.reporting ?? null,
+      environmentId: input.environmentId ?? null,
       lastReport: null,
       id: crypto.randomUUID(),
       prdSummary: null,
@@ -183,8 +267,16 @@ export class InMemoryE2eStore implements E2eStore {
   listCreations(workspaceId: string): Promise<E2eCreation[]> {
     return Promise.resolve(
       [...this.creations.values()]
-        .filter((creation) => creation.workspaceId === workspaceId)
+        .filter((creation) => creation.workspaceId === workspaceId && !creation.internal)
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()),
+    );
+  }
+
+  getSourceAnchor(workspaceId: string): Promise<E2eCreation | null> {
+    return Promise.resolve(
+      [...this.creations.values()].find(
+        (creation) => creation.workspaceId === workspaceId && creation.internal,
+      ) ?? null,
     );
   }
 
@@ -205,6 +297,8 @@ export class InMemoryE2eStore implements E2eStore {
     this.creations.delete(id);
     for (const test of [...this.tests.values()])
       if (test.creationId === id) this.tests.delete(test.id);
+    for (const script of [...this.explorationScripts.values()])
+      if (script.creationId === id) this.explorationScripts.delete(script.id);
     return true;
   }
 

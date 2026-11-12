@@ -14,7 +14,7 @@ import { createRequestContext } from '../../shared/context.js';
 import { ApplicationError, toErrorResponse } from '../../shared/errors.js';
 import { chromiumHostArgs, hostAccessFetch } from '../../shared/host-access.js';
 import { consoleLogger, createRequestLogger, type Logger } from '../../shared/observability.js';
-import { noCache, type Cache } from '../../shared/cache.js';
+import { MemoryCacheStore, noCache, type Cache } from '../../shared/cache.js';
 import { cachedKnowledgeRepository } from '../../modules/knowledge/application/knowledge-cache.js';
 import compression from 'compression';
 import { createCompatibilityRouter, type RequestContextResolver } from './compatibility-routes.js';
@@ -30,6 +30,17 @@ import { createWorkspacesRouter } from './workspaces-routes.js';
 import { IntegrationsService } from '../../modules/integrations/application/integrations-service.js';
 import { InMemoryUserIntegrationStore } from '../../modules/integrations/adapters/in-memory-integrations-store.js';
 import { createIntegrationsRouter } from './integrations-routes.js';
+import { createMessagingRouter } from './messaging-routes.js';
+import {
+  InMemoryMessagingChatStore,
+  type MessagingChatStore,
+} from '../../modules/messaging/application/messaging-chat-store.js';
+import {
+  TelegramRunNotifier,
+  type RunNotifier,
+} from '../../modules/messaging/application/run-notifier.js';
+import { TelegramGateway } from '../../modules/messaging/telegram/telegram-gateway.js';
+import { TelegramPairingCodes } from '../../modules/messaging/telegram/telegram-pairing.js';
 
 import {
   InMemoryKnowledgeChunkRepository,
@@ -71,6 +82,13 @@ import {
   InMemoryReleaseNoteStore,
   type ReleaseNoteStore,
 } from '../../modules/release-notes/release-note-store.js';
+import { createDevelopmentRouter } from './development-routes.js';
+import { EventingDevelopmentStore } from '../../modules/development/development-events.js';
+import { DevelopmentService } from '../../modules/development/development-service.js';
+import {
+  InMemoryDevelopmentStore,
+  type DevelopmentStore,
+} from '../../modules/development/development-store.js';
 import { InMemoryRunStore, type RunStore } from '../../modules/issues/run-store.js';
 import { EmailNotificationChannel } from '../../modules/notifications/adapters/email-channel.js';
 import {
@@ -141,6 +159,11 @@ import {
   type TestSuiteStore,
 } from '../../modules/testplans/application/test-suites.js';
 import { InMemoryE2eStore, type E2eStore } from '../../modules/e2e/application/e2e-store.js';
+import {
+  E2eEnvironmentService,
+  InMemoryE2eEnvironmentStore,
+  type E2eEnvironmentStore,
+} from '../../modules/e2e/application/e2e-environments.js';
 import { E2eService, type E2eDispatcher } from '../../modules/e2e/application/e2e-service.js';
 import { E2eExecutor } from '../../modules/e2e/application/e2e-executor.js';
 import { E2eWorker } from '../../modules/e2e/application/e2e-worker.js';
@@ -187,8 +210,6 @@ export interface ReadinessProbe {
 }
 
 export interface AppOptions {
-  /** Linked from notifications. */
-  readonly frontendUrl?: string;
   /** Shared read cache (Redis in production); without one every read goes to the stores. */
   readonly cache?: Cache;
   readonly auditPersistence?: AuditPersistence;
@@ -225,6 +246,7 @@ export interface AppOptions {
   readonly pbiRelationStore?: PbiRelationStore;
   readonly fieldMappingStore?: FieldMappingStore;
   readonly releaseNoteStore?: ReleaseNoteStore;
+  readonly developmentStore?: DevelopmentStore;
   readonly runStore?: RunStore;
   /** Where live updates are published; replace it when several API replicas share a workspace. */
   readonly eventBus?: EventBus;
@@ -237,12 +259,16 @@ export interface AppOptions {
   readonly designSettings?: DesignSettingsStore;
   readonly workItemTypes?: WorkItemTypeStore;
   readonly e2eStore?: E2eStore;
+  /** Saved E2E environments (URL, test account, custom variables); in memory when omitted. */
+  readonly e2eEnvironments?: E2eEnvironmentStore;
   readonly e2eRunner?: E2eRunner;
   readonly e2eArtifacts?: E2eArtifactStore;
   /** Where attachments and images are kept; defaults to the E2E artifact storage. */
   readonly attachmentStore?: E2eArtifactStore;
   /** Where E2E runs execute unless a run says otherwise: the user's computer or the ADK worker. */
   readonly e2eDefaultExecution?: 'remote' | 'local';
+  /** The API runs on the user's own computer (desktop app): E2E runs never wait for a runner. */
+  readonly e2eRunsLocally?: boolean;
   readonly e2eAuthor?: E2eAuthor;
   readonly e2eScripts?: E2eScriptRepository;
   readonly e2eQueue?: E2eJobQueue;
@@ -269,6 +295,17 @@ export interface AppOptions {
   readonly e2eTranscoder?: E2eVideoTranscoder | null;
   /** Test management platforms for imported cases and published runs; defaults to integrations. */
   readonly testManagement?: TestManagementResolver;
+  /** Chats paired with the workspaces' Telegram bots; in memory by default. */
+  readonly messagingChats?: MessagingChatStore;
+  /** Started by the server; createApp only serves its routes. */
+  readonly telegramGateway?: TelegramGateway;
+  /** BRIDGE_SHARED_TOKEN, when the CLI Bridge (apps/Bridge) runs next to the API. */
+  readonly bridgeToken?: string;
+  readonly telegramPairing?: TelegramPairingCodes;
+  /** Run notifications to paired chats; null turns them off. */
+  readonly runNotifier?: RunNotifier | null;
+  /** Linked from notifications. */
+  readonly frontendUrl?: string;
 }
 
 const requestIdMiddleware: RequestHandler = (request, response, next) => {
@@ -413,6 +450,38 @@ export function createApp(options: AppOptions = {}) {
     ),
   );
   app.use(createIntegrationsRouter(integrationsService, contextResolver, dynamicProviderFactory));
+  const messagingChats = options.messagingChats ?? new InMemoryMessagingChatStore();
+  const telegramPairing =
+    options.telegramPairing ??
+    new TelegramPairingCodes(options.cache?.store ?? new MemoryCacheStore());
+  const runNotifier =
+    options.runNotifier === undefined
+      ? new TelegramRunNotifier({
+          integrations: integrationsService,
+          chats: messagingChats,
+          frontendUrl: options.frontendUrl,
+        })
+      : (options.runNotifier ?? undefined);
+  app.use(
+    createMessagingRouter(
+      {
+        gateway:
+          options.telegramGateway ??
+          new TelegramGateway({
+            integrations: integrationsService,
+            chats: messagingChats,
+            agents: agentService,
+            pairing: telegramPairing,
+          }),
+        chats: messagingChats,
+        pairing: telegramPairing,
+        bridgeToken: options.bridgeToken,
+        workspaceName: async (workspaceId, actorId) =>
+          (await workspaceService.getWorkspace(workspaceId, actorId)).workspace.name,
+      },
+      contextResolver,
+    ),
+  );
   app.use(
     createKnowledgeRouter(
       knowledgeRepository,
@@ -558,9 +627,25 @@ export function createApp(options: AppOptions = {}) {
     ),
   );
   const e2eStore = options.e2eStore ?? new InMemoryE2eStore();
+  const e2eEnvironments = new E2eEnvironmentService(
+    options.e2eEnvironments ?? new InMemoryE2eEnvironmentStore(),
+  );
   const e2eQueue = options.e2eQueue ?? new InMemoryE2eJobQueue();
   const e2eScripts = options.e2eScripts ?? new GitScriptRepository(integrationsService);
-  // Design browses repositories through the same Git access the E2E specs use.
+  // Development and Design browse repositories through the same Git access the E2E specs use.
+  app.use(
+    createDevelopmentRouter(
+      new DevelopmentService(
+        new EventingDevelopmentStore(
+          options.developmentStore ?? new InMemoryDevelopmentStore(),
+          eventBus,
+        ),
+        e2eScripts,
+      ),
+      contextResolver,
+      eventBus,
+    ),
+  );
   const designSettings = options.designSettings ?? new InMemoryDesignSettingsStore();
   app.use(
     createDesignRouter(
@@ -585,6 +670,7 @@ export function createApp(options: AppOptions = {}) {
       concurrency: options.e2eWorkerConcurrency,
       executor: new E2eExecutor({
         store: e2eStore,
+        runsLocally: options.e2eRunsLocally,
         runner:
           options.e2eRunner ??
           new PlaywrightE2eRunner({
@@ -600,12 +686,15 @@ export function createApp(options: AppOptions = {}) {
           artifacts: e2eArtifacts,
           testManagement,
         }),
+        notifier: runNotifier,
+        environments: e2eEnvironments,
         author:
           options.e2eAuthor ??
           new AgentE2eAuthor({
             agents: agentService,
             providers: dynamicProviderFactory,
             defaultLlm: options.defaultLlm,
+            ...(options.knowledgeSearch ? { knowledge: options.knowledgeSearch } : {}),
           }),
       }),
     });
@@ -613,6 +702,7 @@ export function createApp(options: AppOptions = {}) {
   }
   const e2eService = new E2eService({
     defaultExecutionTarget: options.e2eDefaultExecution ?? 'remote',
+    runsLocally: options.e2eRunsLocally,
     store: e2eStore,
     queue: e2eQueue,
     dispatcher: e2eDispatcher,
@@ -622,6 +712,8 @@ export function createApp(options: AppOptions = {}) {
     agents: agentService,
     testManagement,
     savedCases: new SavedTestCaseReader(audited.tests, testSuites),
+    environments: e2eEnvironments,
+    ...(options.knowledgeSearch ? { knowledge: options.knowledgeSearch } : {}),
   });
   // Picks up work left in the queue and closes runs that lost their job.
   void e2eService
@@ -632,7 +724,7 @@ export function createApp(options: AppOptions = {}) {
     artifacts: e2eArtifacts,
     store: e2eStore,
   });
-  app.use(createE2eRouter(e2eService, contextResolver, localRunners));
+  app.use(createE2eRouter(e2eService, contextResolver, localRunners, e2eEnvironments));
   app.use(createE2eRunnerRouter(localRunners));
   const specRepository = audited.specs;
   let apiTestDispatcher = options.apiTestDispatcher;
@@ -646,10 +738,10 @@ export function createApp(options: AppOptions = {}) {
       specs: specRepository,
       pbis: pbiStore,
     }),
-    // Set just below before any request can start a run.
-    dispatcher: { wake: () => apiTestDispatcher!.wake() },
+    dispatcher: { wake: () => apiTestDispatcher?.wake() ?? Promise.resolve() },
     dynamicProviderFactory,
     defaultLlm: options.defaultLlm,
+    notifier: runNotifier,
     // Pipelines are committed through the same Git access the E2E specs use.
     repositories: e2eScripts,
   });

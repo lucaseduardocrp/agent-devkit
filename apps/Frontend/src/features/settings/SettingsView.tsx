@@ -110,8 +110,8 @@ export function SettingsView({
   const canEditWorkspace = workspaceAccess.editWorkspace;
   const canDeleteWorkspace = workspaceAccess.deleteWorkspace;
   const sections: readonly SettingsSection[] = canManageGroups
-    ? ['general', 'members', 'groups', 'workspace', 'types', 'tokens']
-    : ['general', 'members', 'workspace', 'types', 'tokens'];
+    ? ['general', 'members', 'groups', 'types', 'tokens', 'workspace']
+    : ['general', 'members', 'types', 'tokens', 'workspace'];
   const groupName = (id: string) => groups.find((group) => group.id === id)?.name;
   const loadMembers = useCallback(async () => {
     if (!apiClient || !activeWorkspaceId) return;
@@ -699,7 +699,9 @@ export function SettingsView({
                                   }}
                                   className="text-muted hover:bg-red-500/10 hover:text-red-400"
                                   title={t('workspaces.removeMember')}
-                                  aria-label={`Remover ${displayName}`}
+                                  aria-label={t('workspaces.removeMemberNamed', {
+                                    name: displayName,
+                                  })}
                                 >
                                   <i className="ti ti-trash text-sm" aria-hidden="true" />
                                 </Button>

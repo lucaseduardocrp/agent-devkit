@@ -18,6 +18,16 @@ export class InMemoryUserIntegrationStore implements UserIntegrationStore {
     return Promise.resolve(list);
   }
 
+  public listByProvider(
+    category: IntegrationCategory,
+    providerId: string,
+  ): Promise<readonly UserIntegrationRecord[]> {
+    const list = Array.from(this.store.values()).filter(
+      (item) => item.category === category && item.providerId === providerId,
+    );
+    return Promise.resolve(list);
+  }
+
   public getByOwner(
     ownerId: string,
     category: IntegrationCategory,

@@ -614,7 +614,10 @@ describe('AgentsView', () => {
       const before = getIssues.mock.calls.length;
       let fail!: () => void;
       getIssues.mockImplementation(
-        () => new Promise<readonly Issue[]>((_resolve, reject) => (fail = () => reject(new Error('x')))),
+        () =>
+          new Promise<readonly Issue[]>(
+            (_resolve, reject) => (fail = () => reject(new Error('x'))),
+          ),
       );
       act(() => {
         stream().onRun(event({ id: 'run-2', issueId: 'issue-2' }));

@@ -5,7 +5,9 @@
  * (no Node modules, process access, file paths or custom browser launches).
  * It is a deny-list and therefore defense in depth, not a sandbox.
  */
-const ALLOWED_ENV = /\bprocess\.env\.(E2E_USERNAME|E2E_PASSWORD|E2E_BASE_URL)\b/g;
+// E2E_VAR_<NAME> are the custom variables of the run's environment.
+const ALLOWED_ENV =
+  /\bprocess\.env\.(E2E_USERNAME|E2E_PASSWORD|E2E_BASE_URL|E2E_VAR_[A-Z][A-Z0-9_]*)\b/g;
 const STRINGS_AND_COMMENTS = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
 const KEYWORDS_BEFORE_ARRAY = new Set(['of', 'in', 'return', 'case', 'typeof', 'await', 'yield']);
 

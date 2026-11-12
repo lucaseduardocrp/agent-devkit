@@ -46,43 +46,6 @@ export interface TestCaseModalProps {
   readonly onAutomate?: () => void;
 }
 
-const copy = {
-  'pt-BR': {
-    testCase: 'Caso de teste',
-    plan: 'Test Plan',
-    steps: 'Passos',
-    origin: 'Origem',
-    createdInAdk: 'Criado no ADK',
-    remoteId: 'ID no provedor',
-    remotePlan: 'Plano',
-    remoteSuite: 'Suíte',
-    importedAt: 'Importado em',
-    openOnPlatform: 'Abrir no provedor',
-    providerFields: 'Campos do provedor',
-    providerFieldsHint: 'Trazidos de {provider}. Importe de novo para atualizar.',
-    noProviderFields: 'Este caso não tem campos do provedor.',
-    automate: 'Automatizar com E2E',
-    close: 'Fechar',
-  },
-  'en-US': {
-    testCase: 'Test case',
-    plan: 'Test Plan',
-    steps: 'Steps',
-    origin: 'Origin',
-    createdInAdk: 'Created in ADK',
-    remoteId: 'Provider ID',
-    remotePlan: 'Plan',
-    remoteSuite: 'Suite',
-    importedAt: 'Imported on',
-    openOnPlatform: 'Open on the provider',
-    providerFields: 'Provider fields',
-    providerFieldsHint: 'Brought from {provider}. Import again to refresh them.',
-    noProviderFields: 'This case has no provider fields.',
-    automate: 'Automate with E2E',
-    close: 'Close',
-  },
-} as const;
-
 /**
  * A single test case in its own window, like PBIs and issues: title and actions on top,
  * description and steps on the left, and on the right where the case came from with every
@@ -98,8 +61,8 @@ export function TestCaseModal({
   onClose,
   onAutomate,
 }: TestCaseModalProps) {
-  const { t, locale, formatDate } = useI18n();
-  const c = copy[locale];
+  const { t, formatDate, messages } = useI18n();
+  const c = messages.testCaseEditor;
   const [draft, setDraft] = useState<TestCase>(testCase);
   const editor = useRef<HTMLDivElement>(null);
   const origin = testCaseOrigin(testCase.metadata);

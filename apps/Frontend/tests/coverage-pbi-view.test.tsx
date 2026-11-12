@@ -797,7 +797,7 @@ describe('PbiView coverage: item editor', () => {
     await waitFor(() =>
       expect(api.updatePbiItem).toHaveBeenCalledWith(
         'root',
-        expect.objectContaining({ description: '<p>Edited </p>' }),
+        expect.objectContaining({ description: '<p>Edited <img></p>' }),
       ),
     );
   });

@@ -48,6 +48,8 @@ export interface MarkdownViewerProps {
   readonly showModeToggle?: boolean;
   readonly documentTitle?: string;
   readonly sourceUrl?: string;
+  /** Extra actions rendered in the toolbar, before the export button. */
+  readonly toolbarActions?: React.ReactNode;
   readonly onWikilinkClick?: (target: string) => void;
 }
 
@@ -57,6 +59,7 @@ export function MarkdownViewer({
   showModeToggle = true,
   documentTitle,
   sourceUrl,
+  toolbarActions,
   onWikilinkClick,
 }: MarkdownViewerProps): React.JSX.Element {
   const [mode, setMode] = useState<'preview' | 'raw'>('preview');
@@ -79,18 +82,21 @@ export function MarkdownViewer({
           ? cleanTitle
           : `${cleanTitle}.md`
         : 'documento.md';
-      await runActivity({ kind: 'download', title: `Baixando “${fileName}”` }, () => {
-        const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        return Promise.resolve();
-      });
+      await runActivity(
+        { kind: 'download', title: t('brain.downloadingFile', { name: fileName }) },
+        () => {
+          const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = fileName;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+          return Promise.resolve();
+        },
+      );
       setExported(true);
       setTimeout(() => setExported(false), 2000);
     } catch {
@@ -175,6 +181,8 @@ export function MarkdownViewer({
                 {t('brain.openSource')}
               </Button>
             )}
+
+            {toolbarActions}
 
             <Button
               type="button"

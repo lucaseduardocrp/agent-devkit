@@ -8,6 +8,16 @@ export interface PbiLink {
   boardId: string | null;
   syncedAt: string;
 }
+/** An item as a search for a select lists it: just what its row shows. */
+export interface PbiOption {
+  id: string;
+  kind: PbiKind;
+  title: string;
+  status: string;
+  /** Work item type in its provider (Task, Bug, Analysis...). */
+  type: string | null;
+  links: readonly Pick<PbiLink, 'providerId' | 'externalId' | 'externalUrl'>[];
+}
 export interface PbiComment {
   id: string;
   body: string;

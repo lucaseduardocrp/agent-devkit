@@ -453,6 +453,8 @@ function misbehave(stream: http2.ServerHttp2Stream, id: string): boolean {
 }
 
 function handle(stream: http2.ServerHttp2Stream, headers: http2.IncomingHttpHeaders): void {
+  // The misbehaving paths reset streams on purpose; the server side must not throw for that.
+  stream.on('error', () => undefined);
   seenHeaders.push(headers);
   const path = String(headers[':path']);
   const send = (payloads: Buffer[], trailers: Record<string, string> = { 'grpc-status': '0' }) => {

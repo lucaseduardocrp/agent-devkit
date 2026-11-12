@@ -187,7 +187,7 @@ describe('CollectionSettingsPane', () => {
     );
     tab(view, /Proxy/);
     const proxy = view.getByTestId('proxy-settings');
-    expect(within(proxy).getByLabelText<HTMLInputElement>('Host').disabled).toBe(true);
+    expect((within(proxy).getByLabelText('Host') as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(view.getByTestId('proxy-enabled'));
     fireEvent.change(within(proxy).getByLabelText('Protocolo'), { target: { value: 'socks5' } });
     fireEvent.change(within(proxy).getByLabelText('Host'), { target: { value: 'proxy.local' } });
@@ -434,7 +434,7 @@ describe('CollectionSettingsPane', () => {
       presets: { kind: 'grpc', baseUrl: '{{host}}' },
     });
     expect(
-      within(network).getByLabelText<HTMLInputElement>('Máximo de redirecionamentos').disabled,
+      (within(network).getByLabelText('Máximo de redirecionamentos') as HTMLInputElement).disabled,
     ).toBe(true);
   });
 

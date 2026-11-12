@@ -16,6 +16,7 @@ import { E2eWorker } from '../src/modules/e2e/application/e2e-worker.js';
 import { LocalE2eDispatcher } from '../src/modules/e2e/adapters/e2e-dispatchers.js';
 import { FakeScriptRepository } from './helpers/fake-script-repository.js';
 import { snapshotKey } from '../src/modules/e2e/domain/e2e.js';
+import type { RunNotifier } from '../src/modules/messaging/application/run-notifier.js';
 
 const VALID = `import { test, expect } from '@playwright/test';
 test('TC001 - ok', async ({ page }) => {
@@ -63,6 +64,7 @@ function setup(
   overrides: Partial<E2eAuthor> = {},
   runResults: E2eRunResult[] = [passed],
   transcoder?: E2eVideoTranscoder,
+  notifier?: RunNotifier,
 ) {
   const store = new InMemoryE2eStore();
   const artifacts = new InMemoryE2eArtifactStore();
@@ -100,6 +102,7 @@ function setup(
       runner,
       transcoder,
       scripts,
+      notifier,
     }),
   });
   const service = Object.assign(
@@ -497,6 +500,105 @@ export default async function afterRun({ request }: { request: APIRequestContext
     const after = await service.getTest('ws', first!.id);
     expect(after).toMatchObject({ status: 'error' });
     expect(after.error).toContain('Before Run: import from "node:fs" is not allowed');
+  });
+
+  it('rewrites an unsafe hook once and rejects it when it stays unsafe', async () => {
+    const unsafe = "import fs from 'node:fs';\nexport default async function beforeRun() {}";
+    const safe = 'export default async function beforeRun() {}';
+    const writeHook = vi
+      .fn()
+      .mockImplementation(({ kind, previous }: { kind: string; previous?: unknown }) =>
+        Promise.resolve(kind === 'beforeRun' ? (previous ? safe : unsafe) : null),
+      );
+    const { service, scripts } = setup({ writeHook });
+    const created = await service.create(context, input);
+    await service.idle();
+    const retry = writeHook.mock.calls.find(([request]) => request.previous)?.[0];
+    expect(retry.previous.problem).toContain(
+      'The script was rejected by the security checks: import from "node:fs" is not allowed',
+    );
+    expect(scripts.commits.find((commit) => commit.path.endsWith('.before.ts'))?.message).toContain(
+      'Before Run of TC001',
+    );
+    expect((await service.get('ws', created.id)).tests[0]?.status).toBe('passed');
+
+    const stubborn = setup({ writeHook: vi.fn().mockResolvedValue(unsafe) });
+    const failed = await stubborn.service.create(context, input);
+    await stubborn.service.idle();
+    const detail = await stubborn.service.get('ws', failed.id);
+    expect(detail.tests[0]?.status).toBe('error');
+    expect(detail.tests[0]?.error).toContain('Before Run: import from "node:fs" is not allowed');
+  });
+
+  it('writes no Before Run when the rewrite of an unsafe one finds nothing to prepare', async () => {
+    const unsafe =
+      "import fs from 'node:fs';" +
+      String.fromCharCode(10) +
+      'export default async function beforeRun() {}';
+    const writeHook = vi
+      .fn()
+      .mockImplementation(({ previous }: { previous?: unknown }) =>
+        Promise.resolve(previous ? null : unsafe),
+      );
+    const { service, scripts } = setup({ writeHook });
+    const created = await service.create(context, input);
+    await service.idle();
+    expect(scripts.commits.some((commit) => commit.path.endsWith('.before.ts'))).toBe(false);
+    expect((await service.get('ws', created.id)).tests[0]?.status).toBe('passed');
+  });
+
+  it('tells the paired chats when a run fails before its tests finish', async () => {
+    const notifier = { runFinished: vi.fn().mockResolvedValue(undefined) };
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { service } = setup(
+      { plan: vi.fn().mockRejectedValue(new Error('Model unavailable\nretry later')) },
+      [passed],
+      undefined,
+      notifier,
+    );
+    const created = await service.create(context, input);
+    await service.idle();
+    expect((await service.get('ws', created.id)).status).toBe('failed');
+    expect(notifier.runFinished).toHaveBeenCalledWith({
+      workspaceId: 'ws',
+      kind: 'e2e',
+      name: 'ama',
+      status: 'error',
+      summary: expect.stringContaining('Model unavailable'),
+    });
+    expect(notifier.runFinished.mock.calls[0]![0].summary).not.toContain('\n');
+    errorLog.mockRestore();
+  });
+
+  it('commits the hooks of a plan written by the MCP host and rejects unsafe ones', async () => {
+    const { service, scripts } = setup();
+    const created = await service.create(context, { ...input, planning: 'host' });
+    await service.idle();
+    const test = {
+      title: 'Create event',
+      description: 'd',
+      priority: 'high' as const,
+      steps: ['a'],
+      script: VALID,
+    };
+    const beforeRun = 'export default async function beforeRun() {}';
+    await expect(
+      service.savePlan('ws', created.id, {
+        tests: [{ ...test, beforeRun: "import fs from 'node:fs';", afterRun: '   ' }],
+      }),
+    ).rejects.toMatchObject({
+      code: 'E2E_SCRIPT_REJECTED',
+      technicalMessage: expect.stringContaining('TC001: Before Run: '),
+    });
+    await service.savePlan('ws', created.id, {
+      tests: [{ ...test, beforeRun, afterRun: '   ' }],
+    });
+    expect(scripts.commits.map((commit) => commit.path)).toEqual([
+      'tests/e2e/tc001-create-event.spec.ts',
+      'tests/e2e/tc001-create-event.before.ts',
+    ]);
+    expect(scripts.commits[1]?.message).toBe('test(e2e): add Before Run of TC001 - Create event');
+    await service.idle();
   });
 
   it('rewrites specs that were deleted from the repository', async () => {

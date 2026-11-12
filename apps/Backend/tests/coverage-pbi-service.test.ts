@@ -223,6 +223,31 @@ describe('PbiService pull', () => {
     expect(item).toMatchObject({ title: 'Lost', parentId: null, kind: 'card' });
   });
 
+  it('pulls only the chosen provider and refuses one that is not configured', async () => {
+    const pull = vi.fn(() => Promise.resolve([remote('1')]));
+    use(fakeProvider({ pull }));
+    const service = new PbiService(
+      new InMemoryPbiStore(),
+      integrations([{ providerId: 'trello' }, { providerId: 'jira' }]),
+    );
+    expect((await service.pull('ws', false, 'jira')).results).toEqual([
+      { providerId: 'jira', imported: 1 },
+    ]);
+    expect(pull).toHaveBeenCalledTimes(1);
+    await expect(service.pull('ws', false, 'github_projects')).rejects.toMatchObject({
+      code: 'PBI_PROVIDER_CONFIG',
+      message: 'Configure github_projects in Integrations first.',
+    });
+  });
+
+  it('lists summaries as JSON straight from the store when there is no cache', async () => {
+    const store = new InMemoryPbiStore();
+    await store.create('ws', { kind: 'pbi', title: 'Listed' });
+    const service = new PbiService(store, integrations([]));
+    const json = JSON.parse(await service.summariesJson('ws')) as { items: { title: string }[] };
+    expect(json.items.map((item) => item.title)).toEqual(['Listed']);
+  });
+
   it('reports store failures, cyclic hierarchies and non-error rejections per provider', async () => {
     const store = new InMemoryPbiStore();
     const service = new PbiService(store, integrations([{ providerId: 'jira' }]));

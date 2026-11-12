@@ -338,7 +338,7 @@ export function NotificationsView({
           </section>
 
           <section aria-labelledby="notification-people" className="space-y-3">
-            <div className="flex min-h-10 items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-3">
               <h2 id="notification-people" className="text-sm font-semibold">
                 {t('notifications.contactsTitle')}
               </h2>
@@ -432,7 +432,7 @@ export function NotificationsView({
           </section>
 
           <section aria-labelledby="notification-rules" className="space-y-3">
-            <div className="flex min-h-10 items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-3">
               <h2 id="notification-rules" className="text-sm font-semibold">
                 {t('notifications.rulesTitle')}
               </h2>
@@ -440,6 +440,7 @@ export function NotificationsView({
                 <Button
                   type="button"
                   size="sm"
+                  className="-my-1.5"
                   onClick={() => setEditing({ rule: null })}
                   data-testid="notification-new-rule"
                 >

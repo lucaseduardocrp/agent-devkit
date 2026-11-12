@@ -6,6 +6,7 @@ import { SearchableSelect } from '../../components/ui/searchable-select.js';
 import { ApiClient } from '../../lib/api-client.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { cn } from '../../lib/utils.js';
+import { isDesktopApp } from '../../lib/desktop.js';
 import {
   flattenItems,
   isActiveRun,
@@ -125,7 +126,7 @@ function SplitPane({
   useEffect(() => {
     if (!dragging) return;
     const move = (event: PointerEvent) => {
-      // The listeners only live while the pane is mounted.
+      // The listeners only exist while dragging, when the container is mounted.
       const rect = container.current!.getBoundingClientRect();
       onRatio(
         clamp(
@@ -344,8 +345,8 @@ export function IntegrationTestsView({
 
   const save = useCallback(
     async (collectionId: string): Promise<ApiCollection | null> => {
-      const collection = loadedRef.current[collectionId];
-      if (!collection) return null;
+      // Only called for collections that are open, so they are loaded.
+      const collection = loadedRef.current[collectionId]!;
       try {
         const saved = await apiClient.saveApiCollection(collection, collection.id);
         setLoaded((all) => ({ ...all, [collectionId]: saved }));
@@ -360,10 +361,7 @@ export function IntegrationTestsView({
     [apiClient, loadLists],
   );
 
-  /**
-   * Runs read the saved collection, so pending edits are saved first. Only called from the
-   * request, runner and settings pages, which show a loaded collection.
-   */
+  /** Runs read the saved collection, so pending edits are saved first. */
   const saveIfDirty = useCallback(
     async (collectionId: string) =>
       dirtyRef.current[collectionId]?.size ? save(collectionId) : loadedRef.current[collectionId]!,
@@ -402,10 +400,7 @@ export function IntegrationTestsView({
   /** Sends the request as it is in the editor: unsaved changes go along and stay unsaved. */
   const send = useCallback(
     async (collectionId: string, requestId: string) => {
-      // Both callers (the Send button and the Ctrl+Enter shortcut) only ever name a request
-      // tab that is already open, which only happens once its collection has loaded.
-      /* v8 ignore next */
-      const request = findRequest(loadedRef.current[collectionId]?.items ?? [], requestId);
+      const request = findRequest(loadedRef.current[collectionId]!.items, requestId);
       if (isReadOnly || pending[requestId] || !request) return;
       setError(null);
       try {
@@ -469,15 +464,13 @@ export function IntegrationTestsView({
     [apiClient, environmentId, follow, t, target],
   );
 
-  /** Offered only while the request is being sent. */
-  const cancelSend = (requestId: string) =>
-    void apiClient.cancelApiRun('integration', pending[requestId]!.runId).catch(fail);
+  const cancelSend = (requestId: string) => {
+    const run = pending[requestId];
+    if (run) void apiClient.cancelApiRun('integration', run.runId).catch(fail);
+  };
 
+  // Every way to start a run (runner button, tree menu) is hidden from read only members.
   const runCollection = async (collectionId: string, options: RunnerOptions) => {
-    // Its only callers are the Runner pane's Run button and the sidebar's Run menu item, both
-    // of which the read-only member never sees.
-    /* v8 ignore next */
-    if (isReadOnly) return;
     setError(null);
     openTab({ kind: 'runner', collectionId });
     const saved = await saveIfDirty(collectionId);
@@ -532,11 +525,7 @@ export function IntegrationTestsView({
   useEffect(() => {
     const gone = tabs.filter((tab) => {
       if (tab.kind !== 'request' && tab.kind !== 'folder') return false;
-      const collection = loaded[tab.collectionId];
-      // Every opener of a request or folder tab only runs once its collection has loaded, so
-      // this is never actually missing - it only narrows the type below.
-      /* v8 ignore next */
-      if (!collection) return false;
+      const collection = loaded[tab.collectionId]!;
       return tab.kind === 'request'
         ? !findRequest(collection.items, tab.requestId)
         : findItem(collection.items, tab.folderId)?.type !== 'folder';
@@ -622,12 +611,9 @@ export function IntegrationTestsView({
     }
   };
 
-  /** Collections not loaded yet are acted on from the sidebar, which lists their summary. */
-  const collectionName = (collectionId: string) =>
-    loaded[collectionId]?.name ?? summaries.find((item) => item.id === collectionId)!.name;
-
   const deleteCollection = (collectionId: string) => {
-    const name = collectionName(collectionId);
+    const name =
+      loaded[collectionId]?.name ?? summaries.find((item) => item.id === collectionId)!.name;
     setConfirming({
       title: t('apiTests.deleteCollection'),
       description: t('apiTests.deleteCollectionConfirm', { name }),
@@ -644,7 +630,8 @@ export function IntegrationTestsView({
   const renameCollection = (collectionId: string) =>
     setNaming({
       title: t('apiTests.ui.renameCollection'),
-      initial: collectionName(collectionId),
+      initial:
+        loaded[collectionId]?.name ?? summaries.find((item) => item.id === collectionId)!.name,
       confirmLabel: t('apiTests.ui.rename'),
       submit: (name) => {
         setNaming(null);
@@ -875,14 +862,13 @@ export function IntegrationTestsView({
         : null;
     }
     if (tab.kind === 'request') {
-      const request = findRequest(collection.items, tab.requestId);
-      return request
-        ? {
-            icon: <MethodLabel method={request.method} kind={request.kind} />,
-            label: request.name,
-            dirty: dirtyIds.has(request.id),
-          }
-        : null;
+      // A deleted request closes its tab in the same update, so it is always found here.
+      const request = findRequest(collection.items, tab.requestId)!;
+      return {
+        icon: <MethodLabel method={request.method} kind={request.kind} />,
+        label: request.name,
+        dirty: dirtyIds.has(request.id),
+      };
     }
     return {
       icon: (
@@ -1005,12 +991,13 @@ export function IntegrationTestsView({
         />
       );
     }
-    if (!activeRequest) return null;
-    const requestId = activeRequest.id;
+    // What is left is a request tab, and a deleted request closes its tab with it.
+    const request = activeRequest!;
+    const requestId = request.id;
     return (
       <div className="flex h-full min-h-0 flex-col">
         <UrlBar
-          request={activeRequest}
+          request={request}
           collection={activeCollection}
           readOnly={isReadOnly}
           dirty={dirtyIds.has(requestId) || Boolean(dirty[collectionId]?.size)}
@@ -1028,7 +1015,7 @@ export function IntegrationTestsView({
           first={
             <RequestPane
               key={requestId}
-              request={activeRequest}
+              request={request}
               collection={activeCollection}
               actions={requestActions}
               readOnly={isReadOnly}
@@ -1059,7 +1046,7 @@ export function IntegrationTestsView({
 
   return (
     <div
-      className="-m-5 flex h-[calc(100%+2.5rem)] min-h-[560px] overflow-hidden bg-[var(--surface-0)]"
+      className="flex h-full min-h-[560px] gap-4 overflow-hidden"
       data-testid="integration-tests-view"
     >
       <CollectionsSidebar
@@ -1085,7 +1072,7 @@ export function IntegrationTestsView({
         onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0])}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
         {/* Collection header: name, environment, where to run, runner and settings */}
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--surface-1)] px-3">
           <i className="ti ti-box text-[var(--text-accent)]" aria-hidden="true" />
@@ -1258,27 +1245,32 @@ export function IntegrationTestsView({
 
         {/* Status bar */}
         <footer className="flex shrink-0 items-center gap-2 border-t border-[var(--border)] bg-[var(--surface-1)] px-3 py-1.5 text-[11px] text-[var(--text-muted)]">
-          <i
-            className={cn('ti text-base', target === 'local' ? 'ti-device-laptop' : 'ti-cloud')}
-            aria-hidden="true"
-          />
-          <div className="w-72">
-            <SearchableSelect
-              label={t('apiTests.target')}
-              placeholder={t('apiTests.target')}
-              emptyMessage={t('apiTests.ui.noMatches')}
-              value={target}
-              options={[
-                { value: 'remote', label: t('apiTests.targetRemote') },
-                { value: 'local', label: t('apiTests.targetLocal') },
-              ]}
-              onChange={(value) => setTarget(value as ApiRunTarget)}
-              searchable={false}
-              placement="top"
-              data-testid="run-target"
-            />
-          </div>
-          {target === 'local' && <span className="truncate">{t('apiTests.ui.localHint')}</span>}
+          {/* The desktop app runs requests on this computer: nothing to choose. */}
+          {!isDesktopApp() && (
+            <>
+              <i
+                className={cn('ti text-base', target === 'local' ? 'ti-device-laptop' : 'ti-cloud')}
+                aria-hidden="true"
+              />
+              <div className="w-72">
+                <SearchableSelect
+                  label={t('apiTests.target')}
+                  placeholder={t('apiTests.target')}
+                  emptyMessage={t('apiTests.ui.noMatches')}
+                  value={target}
+                  options={[
+                    { value: 'remote', label: t('apiTests.targetRemote') },
+                    { value: 'local', label: t('apiTests.targetLocal') },
+                  ]}
+                  onChange={(value) => setTarget(value as ApiRunTarget)}
+                  searchable={false}
+                  placement="top"
+                  data-testid="run-target"
+                />
+              </div>
+              {target === 'local' && <span className="truncate">{t('apiTests.ui.localHint')}</span>}
+            </>
+          )}
           <span className="ml-auto hidden sm:inline">
             Ctrl + Enter · {t('apiTests.ui.shortcutSend')}
           </span>
@@ -1357,10 +1349,9 @@ export function IntegrationTestsView({
         destructive
         onCancel={() => setConfirming(null)}
         onConfirm={() => {
-          // The dialog is open only while there is something to confirm.
-          const prompt = confirming!;
+          const prompt = confirming;
           setConfirming(null);
-          void Promise.resolve(prompt.confirm()).catch(fail);
+          if (prompt) void Promise.resolve(prompt.confirm()).catch(fail);
         }}
       />
     </div>

@@ -39,6 +39,7 @@ const toolNames = Object.fromEntries(
       'design',
       'e2e',
       'releasenotes',
+      'development',
       'integrationtests',
       'loadtests',
       'audit',

@@ -202,10 +202,6 @@ function writeValue(writer: Writer, registry: Registry, field: FieldInfo, value:
 
 function enumNumber(registry: Registry, field: FieldInfo, value: Json): number {
   const info = registry.enum(field.type);
-  // The caller's field loop already skips a field whose value is null, unless the field is
-  // itself typed google.protobuf.Value — never NullValue (the type of Value's own null_value
-  // member) — so this field is never reached with a null value to encode.
-  /* v8 ignore next */
   if (value === null && field.type === `${WKT}NullValue`) return 0;
   if (typeof value === 'number' && Number.isInteger(value)) return value;
   if (typeof value === 'string') {
@@ -388,10 +384,10 @@ function floatJson(value: number, single: boolean): Json {
   if (value === -Infinity) return '-Infinity';
   if (!single) return value;
   // 9 significant digits always round trip a float32, so the loop ends by then.
-  for (let digits = 1; ; digits++) {
-    const short = Number(value.toPrecision(digits));
-    if (Math.fround(short) === value) return short;
-  }
+  let digits = 1;
+  let short = Number(value.toPrecision(digits));
+  while (Math.fround(short) !== value) short = Number(value.toPrecision(++digits));
+  return short;
 }
 
 function defaultValue(registry: Registry, field: FieldInfo): Json {
@@ -400,9 +396,7 @@ function defaultValue(registry: Registry, field: FieldInfo): Json {
     const info = registry.enum(field.type);
     return info.byNumber.get(0) ?? info.values[0]?.name ?? 0;
   }
-  /* v8 ignore next -- a message-kind field always has presence, so this is never the field
-   * `defaultValue` is called for (see the `!field.presence` guard at its call site). */
-  if (field.kind === 'message') return null;
+  // Message fields always have presence, so they never get a default here.
   switch (field.type as ScalarType) {
     case 'string':
     case 'bytes':
@@ -439,13 +433,8 @@ function wktToPlain(registry: Registry, typeName: string, value: Json): Json {
       return { values: value };
     case `${WKT}Value`:
       return valueToPlain(value);
-    case `${WKT}Any`:
+    default: // Any: the last special type
       return anyToPlain(registry, value);
-    // Every caller checks SPECIAL_JSON before calling wktToPlain, and the cases above list
-    // every member of it besides the wrappers, which the `if` above already handles.
-    /* v8 ignore next 2 */
-    default:
-      return value;
   }
 }
 
@@ -492,13 +481,8 @@ function wktFromPlain(registry: Registry, typeName: string, plain: JsonObject): 
       const set = Object.entries(plain).find(([, v]) => v !== undefined);
       return set ? set[1] : null;
     }
-    case `${WKT}Any`:
+    default: // Any: the last special type
       return anyFromPlain(registry, String(plain.typeUrl), String(plain.value));
-    // Every caller checks SPECIAL_JSON before calling wktFromPlain, and the cases above list
-    // every member of it besides the wrappers, which the `if` above already handles.
-    /* v8 ignore next 2 */
-    default:
-      return plain;
   }
 }
 

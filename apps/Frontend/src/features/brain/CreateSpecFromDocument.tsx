@@ -45,7 +45,7 @@ export function CreateSpecFromDocument({
     setError(null);
     try {
       const spec = await runActivity(
-        { kind: 'agent', title: `Criando Spec para “${document.title}”` },
+        { kind: 'agent', title: t('brain.creatingSpec', { title: document.title }) },
         () =>
           apiClient.createSpecificationFromKnowledge({
             pageId: document.pageId,

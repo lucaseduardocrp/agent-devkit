@@ -164,6 +164,23 @@ const workflowToolNames: Record<AgentWorkflowToolset, readonly string[]> = {
     'release_notes_generate',
     'release_notes_update',
   ],
+  development: [
+    'development_cancel_session',
+    'development_claim_session',
+    'development_comment',
+    'development_complete_session',
+    'development_create_change',
+    'development_create_session',
+    'development_delete_change',
+    'development_delete_session',
+    'development_report',
+    'development_resolve_comment',
+    'development_retry_session',
+    'development_review_session',
+    'development_submit_diff',
+    'development_transition_change',
+    'development_update_change',
+  ],
   integrationtests: [
     'integration_cancel_run',
     'integration_delete_collection',
@@ -629,11 +646,13 @@ export function AgentsView({
   return (
     <div
       className={cn(
-        visibleTab === 'map' && 'flex min-h-full flex-col gap-4 p-4',
+        visibleTab === 'map' && 'flex min-h-full shrink-0 flex-col gap-4',
         // The workflow fills the screen it is on, so the whole flow is in view without scrolling;
         // only a screen too short for the flow falls back to the page scroll.
         visibleTab === 'workflow' && 'flex h-full min-h-[520px] flex-col gap-3 p-4',
-        visibleTab !== 'map' && visibleTab !== 'workflow' && 'flex min-h-full flex-col gap-6 p-6',
+        visibleTab !== 'map' &&
+          visibleTab !== 'workflow' &&
+          'flex min-h-full shrink-0 flex-col gap-6 p-6',
         className,
       )}
       data-testid="agents-view"

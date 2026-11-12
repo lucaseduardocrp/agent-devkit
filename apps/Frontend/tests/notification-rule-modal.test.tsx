@@ -91,7 +91,7 @@ describe('the variables and the preview of a rule', () => {
     expect(screen.queryByTestId('rule-message')).toBeNull();
     expect(screen.queryByTestId('rule-variables')).toBeNull();
     expect(preview).toHaveTextContent('Issue #42 was assigned to you');
-    expect(preview).toHaveTextContent('Ana assigned you Fix the login page.');
+    expect(preview).toHaveTextContent('Ana assigned you Corrigir a página de login.');
 
     fireEvent.click(screen.getByTestId('rule-tab-edit'));
     fireEvent.change(modal.subject(), { target: { value: 'Hi {{recipient.name}}' } });

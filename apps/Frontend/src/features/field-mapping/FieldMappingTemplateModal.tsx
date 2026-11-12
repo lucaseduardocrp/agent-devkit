@@ -52,8 +52,7 @@ export function FieldMappingTemplateModal({
   onSaved,
   onDeleted,
 }: Props) {
-  const { locale } = useI18n();
-  const pt = locale === 'pt-BR';
+  const c = useI18n().messages.fieldMapping;
   const titleId = useId();
   const [name, setName] = useState(template?.name ?? '');
   const [rules, setRules] = useState<FieldMappingRule[]>(template?.rules ?? []);
@@ -103,13 +102,7 @@ export function FieldMappingTemplateModal({
     <Modal open labelledBy={titleId} closeOnBackdrop={!saving} onClose={onClose}>
       <div className="flex max-h-[calc(100vh-2rem)] w-[40rem] max-w-[calc(100vw-2rem)] flex-col gap-4 rounded-xl border border-border bg-surface-1 p-6 text-sm shadow-2xl">
         <h2 id={titleId} className="text-lg font-semibold text-[var(--text-primary)]">
-          {template
-            ? pt
-              ? 'Editar template de campos'
-              : 'Edit field template'
-            : pt
-              ? 'Novo template de campos'
-              : 'New field template'}
+          {template ? c.editFieldTemplate : c.newFieldTemplate}
         </h2>
         {error && (
           <p role="alert" className="text-red-300">
@@ -117,7 +110,7 @@ export function FieldMappingTemplateModal({
           </p>
         )}
         <label className="block">
-          {pt ? 'Nome do template' : 'Template name'}
+          {c.templateName}
           <Input
             value={name}
             maxLength={200}
@@ -126,7 +119,7 @@ export function FieldMappingTemplateModal({
           />
         </label>
         <label className="block">
-          {pt ? 'Buscar campo de destino' : 'Find destination field'}
+          {c.findDestinationField}
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
@@ -163,18 +156,18 @@ export function FieldMappingTemplateModal({
                         );
                       }}
                     >
-                      <option value="">{pt ? 'Não preencher' : 'Leave unchanged'}</option>
+                      <option value="">{c.leaveUnchanged}</option>
                       {sources.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
                       ))}
-                      <option value="constant">{pt ? 'Valor fixo' : 'Fixed value'}</option>
+                      <option value="constant">{c.fixedValue}</option>
                     </Select>
                   </label>
                   {rule?.source.kind === 'constant' && (
                     <label className="mt-2 block">
-                      {pt ? 'Valor' : 'Value'}
+                      {c.value}
                       {field.options?.length ? (
                         <Select
                           value={String(rule.source.value ?? '')}
@@ -183,7 +176,7 @@ export function FieldMappingTemplateModal({
                           }
                           containerClassName="mt-1"
                         >
-                          <option value="">{pt ? 'Selecione' : 'Select'}</option>
+                          <option value="">{c.select}</option>
                           {field.options.map((option) => (
                             <option key={option.id} value={option.id}>
                               {option.name}
@@ -206,19 +199,19 @@ export function FieldMappingTemplateModal({
                   ['single_select', 'multi_select', 'iteration'].includes(field.type) ? (
                     <div className="mt-2 space-y-2">
                       <span className="text-xs text-[var(--text-muted)]">
-                        {pt ? 'Converter valores da origem' : 'Convert source values'}
+                        {c.convertSourceValues}
                       </span>
                       {Object.entries(rule.choices ?? {}).map(([sourceValue, targetValue]) => (
                         <div key={sourceValue} className="flex items-center gap-2">
                           <Input
-                            aria-label={pt ? 'Valor de origem' : 'Source value'}
+                            aria-label={c.sourceValue}
                             value={sourceValue}
                             readOnly
                             className="min-w-0 flex-1"
                           />
                           {field.options?.length ? (
                             <Select
-                              aria-label={pt ? 'Valor de destino' : 'Target value'}
+                              aria-label={c.targetValue}
                               value={targetValue}
                               onChange={(event) =>
                                 updateChoices(field.id, {
@@ -228,7 +221,7 @@ export function FieldMappingTemplateModal({
                               }
                               containerClassName="min-w-0 flex-1"
                             >
-                              <option value="">{pt ? 'Selecione' : 'Select'}</option>
+                              <option value="">{c.select}</option>
                               {field.options.map((option) => (
                                 <option key={option.id} value={option.id}>
                                   {option.name}
@@ -237,7 +230,7 @@ export function FieldMappingTemplateModal({
                             </Select>
                           ) : (
                             <Input
-                              aria-label={pt ? 'Valor de destino' : 'Target value'}
+                              aria-label={c.targetValue}
                               value={targetValue}
                               onChange={(event) =>
                                 updateChoices(field.id, {
@@ -245,9 +238,7 @@ export function FieldMappingTemplateModal({
                                   [sourceValue]: event.target.value,
                                 })
                               }
-                              placeholder={
-                                pt ? 'ID ou valor de destino' : 'Destination ID or value'
-                              }
+                              placeholder={c.destinationIdOrValue}
                               className="min-w-0 flex-1"
                             />
                           )}
@@ -261,13 +252,13 @@ export function FieldMappingTemplateModal({
                               updateChoices(field.id, next);
                             }}
                           >
-                            {pt ? 'Remover' : 'Remove'}
+                            {c.remove}
                           </Button>
                         </div>
                       ))}
                       <div className="flex gap-2">
                         <Input
-                          aria-label={pt ? 'Novo valor de origem' : 'New source value'}
+                          aria-label={c.newSourceValue}
                           value={choiceDrafts[field.id] ?? ''}
                           onChange={(event) =>
                             setChoiceDrafts((current) => ({
@@ -275,7 +266,7 @@ export function FieldMappingTemplateModal({
                               [field.id]: event.target.value,
                             }))
                           }
-                          placeholder={pt ? 'Valor de origem' : 'Source value'}
+                          placeholder={c.sourceValue}
                           className="min-w-0 flex-1"
                         />
                         <Button
@@ -292,7 +283,7 @@ export function FieldMappingTemplateModal({
                             setChoiceDrafts((current) => ({ ...current, [field.id]: '' }));
                           }}
                         >
-                          {pt ? 'Adicionar valor' : 'Add value'}
+                          {c.addValue}
                         </Button>
                       </div>
                     </div>
@@ -309,15 +300,15 @@ export function FieldMappingTemplateModal({
               disabled={saving}
               onClick={() => void remove(template.id)}
             >
-              {pt ? 'Excluir' : 'Delete'}
+              {c.delete}
             </Button>
           )}
           <div className="ml-auto flex gap-2">
             <Button type="button" variant="outline" disabled={saving} onClick={onClose}>
-              {pt ? 'Cancelar' : 'Cancel'}
+              {c.cancel}
             </Button>
             <Button type="button" disabled={saving || !name.trim()} onClick={() => void save()}>
-              {pt ? 'Salvar template' : 'Save template'}
+              {c.saveTemplate}
             </Button>
           </div>
         </div>

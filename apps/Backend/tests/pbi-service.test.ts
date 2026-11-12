@@ -6,8 +6,8 @@ import { PbiService } from '../src/modules/pbi/pbi-service.js';
 import { createPbiProvider } from '../src/modules/pbi/providers.js';
 import { InMemoryIssueStore } from '../src/modules/issues/issue-store.js';
 import { InMemoryRunStore } from '../src/modules/issues/run-store.js';
-import { RunService } from '../src/modules/issues/run-service.js';
 import { fakeRunAgents } from './helpers/fake-run-agents.js';
+import { RunService } from '../src/modules/issues/run-service.js';
 import { EntityAuditLog } from '../src/modules/audit/entity-audit.js';
 import type { AuditEvent, AuditPersistence, AuditUnit } from '../src/modules/audit/audit.js';
 
@@ -687,9 +687,11 @@ describe('PBI board synchronization', () => {
       assigneeAgentId: 'agent',
     });
     await pbiStore.update('ws', card.id, { description: 'Updated acceptance rule' });
-    const agents = fakeRunAgents(vi.fn().mockResolvedValue({ result: 'Done', provider: 'test' }), {
-      agent: { id: 'agent', name: 'Agent' },
-    });
+    const agents = fakeRunAgents(
+      vi.fn().mockResolvedValue({ result: 'Done', provider: 'test' }),
+      {},
+      { id: 'agent' },
+    );
     const runs = new RunService(new InMemoryRunStore(), issues, agents, pbiStore);
     const run = await runs.create(issue.id, {
       requestId: 'pbi-test',

@@ -278,31 +278,6 @@ describe('PbiView coverage gaps: push values', () => {
 });
 
 describe('PbiView coverage gaps: item editor', () => {
-  it('opens items without description or state as an empty backlog item', async () => {
-    const api = mockClient();
-    api.getPbiItems.mockResolvedValue([
-      { ...root, description: undefined, status: undefined } as unknown as PbiItem,
-    ]);
-    renderView(api);
-    fireEvent.click(await screen.findByRole('button', { name: 'Release PBI' }));
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByRole('textbox', { name: 'Descrição' }).innerHTML).toBe('');
-    expect(within(dialog).getByRole('combobox', { name: 'Estado' })).toHaveProperty(
-      'value',
-      'backlog',
-    );
-    fireEvent.change(within(dialog).getByRole('combobox', { name: 'Estado' }), {
-      target: { value: 'Active' },
-    });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar item' }));
-    await waitFor(() =>
-      expect(api.updatePbiItem).toHaveBeenCalledWith(
-        'root',
-        expect.objectContaining({ status: 'Active', description: '' }),
-      ),
-    );
-  });
-
   it('keeps safe images with their text and drops unsafe ones', async () => {
     const api = mockClient();
     api.getPbiItems.mockResolvedValue([

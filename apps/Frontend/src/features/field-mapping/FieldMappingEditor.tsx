@@ -48,8 +48,7 @@ export function FieldMappingEditor({
   values = {},
   onValuesChange,
 }: Props) {
-  const { locale } = useI18n();
-  const pt = locale === 'pt-BR';
+  const c = useI18n().messages.fieldMapping;
   const [templates, setTemplates] = useState<FieldMappingTemplate[]>([]);
   const [definitions, setDefinitions] = useState<FieldDefinition[]>([]);
   const [editing, setEditing] = useState<FieldMappingTemplate | 'new' | null>(null);
@@ -101,15 +100,13 @@ export function FieldMappingEditor({
     const field = definitions.find((item) => item.id === rule.targetFieldId);
     const source =
       rule.source.kind === 'constant'
-        ? `${pt ? 'Valor fixo' : 'Fixed value'}: ${
+        ? `${c.fixedValue}: ${
             field?.options?.find((option) => option.id === rule.source.value)?.name ??
             (String(rule.source.value ?? '') || '—')
           }`
         : sourceLabel(rule);
     const conversions = Object.keys(rule.choices ?? {}).length;
-    return conversions
-      ? `${source} · ${conversions} ${pt ? 'conversão(ões) de valor' : 'value conversion(s)'}`
-      : source;
+    return conversions ? `${source} · ${conversions} ${c.valueConversions}` : source;
   };
   const fieldInput = (
     rule: FieldMappingRule,
@@ -118,7 +115,7 @@ export function FieldMappingEditor({
     const field = definitions.find((item) => item.id === rule.targetFieldId);
     const fixed = rule.source.kind === 'constant';
     // Fields filled from the case keep that source until a value is typed.
-    const fromSource = fixed ? '' : `${pt ? 'Usar origem' : 'Use source'}: ${sourceLabel(rule)}`;
+    const fromSource = fixed ? '' : `${c.useSource}: ${sourceLabel(rule)}`;
     const current = Object.hasOwn(values, rule.targetFieldId)
       ? values[rule.targetFieldId]
       : fixed
@@ -140,7 +137,7 @@ export function FieldMappingEditor({
         onChange={(event) => update(event.target.value)}
         containerClassName="mt-1"
       >
-        <option value="">{fromSource || (pt ? 'Selecione' : 'Select')}</option>
+        <option value="">{fromSource || c.select}</option>
         {field.options.map((option) => (
           <option key={option.id} value={option.id}>
             {option.name}
@@ -153,9 +150,9 @@ export function FieldMappingEditor({
         onChange={(event) => update(event.target.value)}
         containerClassName="mt-1"
       >
-        <option value="">{fromSource || (pt ? 'Selecione' : 'Select')}</option>
-        <option value="true">{pt ? 'Sim' : 'Yes'}</option>
-        <option value="false">{pt ? 'Não' : 'No'}</option>
+        <option value="">{fromSource || c.select}</option>
+        <option value="true">{c.yes}</option>
+        <option value="false">{c.no}</option>
       </Select>
     ) : (
       <Input
@@ -176,7 +173,7 @@ export function FieldMappingEditor({
         >
           <span className="min-w-0 truncate">{field?.name ?? rule.targetFieldId}</span>
           {required && (
-            <span className="shrink-0 text-red-400" title={pt ? 'Obrigatório' : 'Required'}>
+            <span className="shrink-0 text-red-400" title={c.required}>
               *
             </span>
           )}
@@ -191,12 +188,10 @@ export function FieldMappingEditor({
 
   return (
     <section
-      aria-label={pt ? 'Mapeamento de campos' : 'Field mapping'}
+      aria-label={c.fieldMapping}
       className="space-y-3 border-t border-[var(--border)] pt-4 text-sm"
     >
-      <h3 className="font-semibold">
-        {pt ? 'Template de campos personalizados' : 'Custom field template'}
-      </h3>
+      <h3 className="font-semibold">{c.customFieldTemplate}</h3>
       {error && (
         <div role="alert" className="text-red-300">
           {error}{' '}
@@ -206,23 +201,23 @@ export function FieldMappingEditor({
             size="sm"
             onClick={() => setRetry((value) => value + 1)}
           >
-            {pt ? 'Tentar novamente' : 'Retry'}
+            {c.retry}
           </Button>
         </div>
       )}
       {loading ? (
-        <p role="status">{pt ? 'Carregando campos...' : 'Loading fields...'}</p>
+        <p role="status">{c.loadingFields}</p>
       ) : (
         <>
           <div className="flex items-end gap-2">
             <label className="block min-w-0 flex-1">
-              {pt ? 'Template salvo' : 'Saved template'}
+              {c.savedTemplate}
               <Select
                 value={selected?.id ?? ''}
                 onChange={(event) => onSelected(event.target.value)}
                 containerClassName="mt-1"
               >
-                <option value="">{pt ? 'Nenhum template' : 'No template'}</option>
+                <option value="">{c.noTemplate}</option>
                 {available.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
@@ -232,11 +227,11 @@ export function FieldMappingEditor({
             </label>
             {selected && (
               <Button type="button" variant="outline" onClick={() => setEditing(selected)}>
-                {pt ? 'Editar' : 'Edit'}
+                {c.edit}
               </Button>
             )}
             <Button type="button" variant="outline" onClick={() => setEditing('new')}>
-              {pt ? 'Novo template' : 'New template'}
+              {c.newTemplate}
             </Button>
           </div>
           {selected &&
@@ -246,7 +241,7 @@ export function FieldMappingEditor({
               </div>
             ) : selected.rules.length ? (
               <ul
-                aria-label={pt ? 'Campos do template' : 'Template fields'}
+                aria-label={c.templateFields}
                 className="space-y-1 rounded border border-[var(--border)] p-2"
               >
                 {selected.rules.map((rule) => (
@@ -260,11 +255,7 @@ export function FieldMappingEditor({
                 ))}
               </ul>
             ) : (
-              <p className="text-xs text-[var(--text-muted)]">
-                {pt
-                  ? 'Este template não preenche nenhum campo.'
-                  : 'This template does not fill any field.'}
-              </p>
+              <p className="text-xs text-[var(--text-muted)]">{c.noFieldsFilled}</p>
             ))}
         </>
       )}

@@ -33,11 +33,11 @@ export function PersonalHint({ className }: { readonly className?: string }): Re
   return (
     <p
       className={cn(
-        'flex items-start gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-1)] px-3 py-2 text-[11px] text-[var(--text-secondary)]',
+        'flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-1)] px-3 py-2 text-[11px] text-[var(--text-secondary)]',
         className,
       )}
     >
-      <i className="ti ti-lock mt-px text-sm text-[var(--text-pro)]" aria-hidden="true" />
+      <i className="ti ti-lock text-sm text-[var(--text-pro)]" aria-hidden="true" />
       <span>
         {t('apiTests.workbench.personalHint')} {t('apiTests.workbench.personalUseVariables')}
       </span>

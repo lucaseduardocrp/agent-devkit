@@ -58,7 +58,6 @@ function nth<T>(items: readonly T[], index: number): T {
 
 const R = { id: 'r1', marker: true };
 const F = { title: 'Fields', value: 1 };
-const BRIEF_EDITS = { considerations: ['Fields'] };
 
 type Endpoint = readonly [
   name: string,
@@ -73,6 +72,141 @@ type Endpoint = readonly [
 /* Every endpoint that maps 1:1 to a JSON request, with the payload it sends and its unwrapping. */
 const endpoints: readonly Endpoint[] = [
   ['getIssues', (c) => c.getIssues(), 'GET', '/issues', undefined, { issues: [R] }, [R]],
+  [
+    'getDevelopmentChanges',
+    (c) => c.getDevelopmentChanges(),
+    'GET',
+    '/development/changes',
+    undefined,
+    { changes: [R] },
+    [R],
+  ],
+  [
+    'createDevelopmentChange',
+    (c) => c.createDevelopmentChange(F),
+    'POST',
+    '/development/changes',
+    F,
+    { change: R },
+    R,
+  ],
+  [
+    'updateDevelopmentChange',
+    (c) => c.updateDevelopmentChange('a b', F),
+    'PUT',
+    '/development/changes/a%20b',
+    F,
+    { change: R },
+    R,
+  ],
+  [
+    'transitionDevelopmentChange',
+    (c) => c.transitionDevelopmentChange('a b', 'approve'),
+    'POST',
+    '/development/changes/a%20b/transition',
+    { action: 'approve' },
+    { change: R },
+    R,
+  ],
+  [
+    'deleteDevelopmentChange',
+    (c) => c.deleteDevelopmentChange('a b'),
+    'DELETE',
+    '/development/changes/a%20b',
+    undefined,
+    {},
+    undefined,
+  ],
+  [
+    'getDevelopmentPipeline',
+    (c) => c.getDevelopmentPipeline(),
+    'GET',
+    '/development/pipeline',
+    undefined,
+    { stages: R },
+    R,
+  ],
+  [
+    'getDevelopmentSessions',
+    (c) => c.getDevelopmentSessions(),
+    'GET',
+    '/development/sessions',
+    undefined,
+    { sessions: [R] },
+    [R],
+  ],
+  [
+    'createDevelopmentSession',
+    (c) => c.createDevelopmentSession(F as never),
+    'POST',
+    '/development/sessions',
+    F,
+    { session: R },
+    R,
+  ],
+  [
+    'changeDevelopmentSession',
+    (c) => c.changeDevelopmentSession('a b', 'retry'),
+    'POST',
+    '/development/sessions/a%20b/retry',
+    {},
+    { session: R },
+    R,
+  ],
+  [
+    'reviewDevelopmentSession',
+    (c) => c.reviewDevelopmentSession('a b', 'request_changes', 'Fix it'),
+    'POST',
+    '/development/sessions/a%20b/review',
+    { verdict: 'request_changes', note: 'Fix it' },
+    { session: R },
+    R,
+  ],
+  [
+    'reviewDevelopmentSession without a note',
+    (c) => c.reviewDevelopmentSession('s1', 'approve'),
+    'POST',
+    '/development/sessions/s1/review',
+    { verdict: 'approve' },
+    { session: R },
+    R,
+  ],
+  [
+    'addDevelopmentComment',
+    (c) => c.addDevelopmentComment('a b', 'Why?', 'src/a.ts'),
+    'POST',
+    '/development/sessions/a%20b/comments',
+    { body: 'Why?', path: 'src/a.ts' },
+    { session: R },
+    R,
+  ],
+  [
+    'addDevelopmentComment without a file',
+    (c) => c.addDevelopmentComment('s1', 'Why?'),
+    'POST',
+    '/development/sessions/s1/comments',
+    { body: 'Why?' },
+    { session: R },
+    R,
+  ],
+  [
+    'resolveDevelopmentComment',
+    (c) => c.resolveDevelopmentComment('a b', 'c d', true),
+    'PUT',
+    '/development/sessions/a%20b/comments/c%20d',
+    { resolved: true },
+    { session: R },
+    R,
+  ],
+  [
+    'deleteDevelopmentSession',
+    (c) => c.deleteDevelopmentSession('a b'),
+    'DELETE',
+    '/development/sessions/a%20b',
+    undefined,
+    {},
+    undefined,
+  ],
   [
     'getReleaseNotes',
     (c) => c.getReleaseNotes(),
@@ -281,10 +415,10 @@ const endpoints: readonly Endpoint[] = [
   ],
   [
     'updateIssueBrief',
-    (c) => c.updateIssueBrief('i1', BRIEF_EDITS),
+    (c) => c.updateIssueBrief('i1', F as Parameters<ApiClient['updateIssueBrief']>[1]),
     'PUT',
     '/issues/i1/brief',
-    BRIEF_EDITS,
+    F,
     { brief: R },
     R,
   ],
@@ -758,6 +892,97 @@ const endpoints: readonly Endpoint[] = [
     {},
     {},
     undefined,
+  ],
+  [
+    'getE2eEnvironments',
+    (c) => c.getE2eEnvironments(),
+    'GET',
+    '/e2e/environments',
+    undefined,
+    { environments: [R] },
+    [R],
+  ],
+  [
+    'saveE2eEnvironment (new)',
+    (c) => c.saveE2eEnvironment(F as never),
+    'POST',
+    '/e2e/environments',
+    F,
+    { environment: R },
+    R,
+  ],
+  [
+    'saveE2eEnvironment (existing)',
+    (c) => c.saveE2eEnvironment(F as never, 'env 1'),
+    'PUT',
+    '/e2e/environments/env%201',
+    F,
+    { environment: R },
+    R,
+  ],
+  [
+    'deleteE2eEnvironment',
+    (c) => c.deleteE2eEnvironment('env1'),
+    'DELETE',
+    '/e2e/environments/env1',
+    undefined,
+    {},
+    undefined,
+  ],
+  [
+    'getE2eExploration',
+    (c) => c.getE2eExploration('e1'),
+    'GET',
+    '/e2e/creations/e1/exploration',
+    undefined,
+    { exploration: R },
+    R,
+  ],
+  [
+    'exploreE2eCreation with a description',
+    (c) => c.exploreE2eCreation('e1', { description: 'Billing only' }),
+    'POST',
+    '/e2e/creations/e1/explore',
+    { description: 'Billing only' },
+    { exploration: R },
+    R,
+  ],
+  [
+    'exploreE2eCreation',
+    (c) => c.exploreE2eCreation('e1'),
+    'POST',
+    '/e2e/creations/e1/explore',
+    {},
+    { exploration: R },
+    R,
+  ],
+  ['getE2eSource', (c) => c.getE2eSource(), 'GET', '/e2e/source', undefined, R, R],
+  [
+    'exploreE2eSource',
+    (c) => c.exploreE2eSource({ environmentId: 'v1', agentId: 'a1' }),
+    'POST',
+    '/e2e/source/explore',
+    { environmentId: 'v1', agentId: 'a1' },
+    { exploration: R },
+    R,
+  ],
+  [
+    'documentE2eSource',
+    (c) => c.documentE2eSource(),
+    'POST',
+    '/e2e/source/document',
+    {},
+    {},
+    undefined,
+  ],
+  [
+    'getE2eActionMap',
+    (c) => c.getE2eActionMap('e1'),
+    'GET',
+    '/e2e/creations/e1/action-map',
+    undefined,
+    { map: R },
+    R,
   ],
   [
     'deleteE2eCreation',
@@ -1512,16 +1737,19 @@ describe('ApiClient special responses', () => {
     const { client, calls } = setup({ blob, text: '# Spec' });
     await expect(client.getE2eTestVideo('t1')).resolves.toBe(blob);
     await expect(client.getE2eStepScreenshot('t1', 2)).resolves.toBe(blob);
+    await expect(client.getE2eImage('tests/t1/live')).resolves.toBe(blob);
     await expect(client.exportSpecification('sp1')).resolves.toBe('# Spec');
     expect(calls.map((c) => c.url)).toEqual([
       'http://api/e2e/tests/t1/video',
       'http://api/e2e/tests/t1/steps/2/screenshot',
+      'http://api/e2e/tests/t1/live',
       'http://api/spec/specifications/sp1/export',
     ]);
 
     const failing = setup({ status: 403, json: { message: 'Forbidden' } }).client;
     await expect(failing.getE2eTestVideo('t1')).rejects.toMatchObject({ status: 403 });
     await expect(failing.getE2eStepScreenshot('t1', 1)).rejects.toMatchObject({ status: 403 });
+    await expect(failing.getE2eImage('tests/t1/live')).rejects.toMatchObject({ status: 403 });
     await expect(failing.exportSpecification('sp1')).rejects.toMatchObject({ status: 403 });
   });
 

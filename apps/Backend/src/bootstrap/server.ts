@@ -41,6 +41,8 @@ import { PrismaPbiStore } from '../modules/pbi/pbi-store.js';
 import { PrismaPbiRelationStore } from '../modules/pbi/pbi-relations.js';
 import { PrismaFieldMappingStore } from '../modules/field-mapping/prisma-field-mapping.js';
 import { PrismaReleaseNoteStore } from '../modules/release-notes/release-note-store.js';
+import { PrismaDevelopmentStore } from '../modules/development/development-store.js';
+import { developmentEventFromKey } from '../modules/development/development-events.js';
 import { PrismaNotificationOutbox } from '../modules/notifications/adapters/prisma-outbox.js';
 import type { NotificationOutboxWorker } from '../modules/notifications/application/outbox-worker.js';
 import { PrismaNotificationContactStore } from '../modules/notifications/adapters/prisma-contact-store.js';
@@ -64,6 +66,7 @@ import { PrismaSpecRepository } from '../modules/spec/adapters/prisma-spec-repos
 import { PrismaWorkItemTypeStore } from '../modules/work-item-types/work-item-types.js';
 import { PrismaDesignSettingsStore } from '../modules/design/adapters/prisma-design-settings-store.js';
 import { PrismaE2eStore } from '../modules/e2e/adapters/prisma-e2e-store.js';
+import { PrismaE2eEnvironmentStore } from '../modules/e2e/adapters/prisma-e2e-environment-store.js';
 import { PrismaE2eJobQueue } from '../modules/e2e/adapters/prisma-e2e-queue.js';
 import { PrismaE2eRunnerTaskStore } from '../modules/e2e/adapters/prisma-runner-task-store.js';
 import {
@@ -83,6 +86,15 @@ import {
 } from '../modules/identity/adapters/oauth-providers.js';
 import type { OAuthProvider } from '../modules/identity/application/oauth-provider.js';
 import { hostAliasFromEnv } from '../shared/host-access.js';
+import {
+  InMemoryMessagingChatStore,
+  PrismaMessagingChatStore,
+} from '../modules/messaging/application/messaging-chat-store.js';
+import { TelegramRunNotifier } from '../modules/messaging/application/run-notifier.js';
+import { HttpCliBridge } from '../modules/messaging/application/cli-bridge.js';
+import { AccessTokenMcpConnector } from '../modules/messaging/application/mcp-connector.js';
+import { TelegramGateway } from '../modules/messaging/telegram/telegram-gateway.js';
+import { TelegramPairingCodes } from '../modules/messaging/telegram/telegram-pairing.js';
 
 const config = loadRuntimeConfig(process.env);
 // Stop at startup, not at the first saved integration, when INTEGRATION_ENCRYPTION_KEY is missing.
@@ -187,6 +199,31 @@ const agentService = new AgentService({
   dynamicProviderFactory,
   knowledgeSearch: knowledge.search,
 });
+// Telegram bots: long polling on a local install, a webhook when API_PUBLIC_URL is https.
+const messagingChats = database
+  ? new PrismaMessagingChatStore(database.client)
+  : new InMemoryMessagingChatStore();
+const telegramPairing = new TelegramPairingCodes(cache.store);
+// The AI CLIs (apps/Bridge): both must be set. The Bridge answers back through the API.
+const bridgeUrl = process.env['BRIDGE_URL']?.trim() || undefined;
+const bridgeToken = process.env['BRIDGE_SHARED_TOKEN']?.trim() || undefined;
+const telegramGateway = new TelegramGateway({
+  integrations: integrationsService,
+  chats: messagingChats,
+  agents: agentService,
+  pairing: telegramPairing,
+  publicUrl: apiPublicUrl,
+  bridge:
+    bridgeUrl && bridgeToken
+      ? new HttpCliBridge({ url: bridgeUrl, token: bridgeToken })
+      : undefined,
+  // `/mcp adk`: the address of the ADK MCP server (…/mcp), when this install runs one.
+  mcp: process.env['ADK_MCP_URL']?.trim()
+    ? new AccessTokenMcpConnector(process.env['ADK_MCP_URL'].trim(), accessTokens)
+    : undefined,
+});
+const frontendUrl = process.env['FRONTEND_URL']?.trim() || undefined;
+
 const savedTestPlans = database
   ? new PrismaSavedTestPlanStore(database.client)
   : new InMemorySavedTestPlanStore();
@@ -224,8 +261,10 @@ const eventBus =
   database && config.databaseUrl && runStore
     ? new PostgresEventBus({
         createClient: () => new pg.Client({ connectionString: config.databaseUrl }),
-        resolve: async (workspaceId, _type, runId) => {
-          const run = await runStore.get(workspaceId, runId);
+        resolve: async (workspaceId, type, key) => {
+          // Development tells which change or session moved; the client reads it by id.
+          if (type === 'development') return developmentEventFromKey(key);
+          const run = await runStore.get(workspaceId, key);
           return run ? runEventPayload(run) : null;
         },
       })
@@ -238,6 +277,8 @@ if (e2eDefaultExecution && !['local', 'remote'].includes(e2eDefaultExecution))
 
 const app = createApp({
   e2eDefaultExecution: e2eDefaultExecution === 'local' ? 'local' : 'remote',
+  // The desktop app runs the API on the user's computer, so the tests never need a runner.
+  e2eRunsLocally: process.env['ADK_DESKTOP'] === '1',
   eventBus,
   cache,
   auditPersistence: database ? new PrismaAuditPersistence(database.client) : undefined,
@@ -267,6 +308,7 @@ const app = createApp({
   pbiRelationStore: database ? new PrismaPbiRelationStore(database.client) : undefined,
   fieldMappingStore: database ? new PrismaFieldMappingStore(database.client) : undefined,
   releaseNoteStore: database ? new PrismaReleaseNoteStore(database.client) : undefined,
+  developmentStore: database ? new PrismaDevelopmentStore(database.client) : undefined,
   runStore,
   emailSender: emailSender ?? undefined,
   notificationRules: database ? new PrismaNotificationRuleStore(database.client) : undefined,
@@ -279,6 +321,7 @@ const app = createApp({
   workItemTypes: database ? new PrismaWorkItemTypeStore(database.client) : undefined,
   designSettings: database ? new PrismaDesignSettingsStore(database.client) : undefined,
   e2eStore: database ? new PrismaE2eStore(database.client) : undefined,
+  e2eEnvironments: database ? new PrismaE2eEnvironmentStore(database.client) : undefined,
   e2eQueue: database ? new PrismaE2eJobQueue(database.client) : undefined,
   e2eRunnerTasks: database ? new PrismaE2eRunnerTaskStore(database.client) : undefined,
   e2eArtifacts: e2eArtifacts.store,
@@ -296,6 +339,16 @@ const app = createApp({
   apiTestAllowPrivateNetwork: process.env['API_TESTS_ALLOW_PRIVATE_NETWORK'] === 'true',
   hostAlias: hostAliasFromEnv(),
   e2eTranscoder: ffmpegPath ? new FfmpegVideoTranscoder({ ffmpegPath }) : null,
+  messagingChats,
+  telegramGateway,
+  telegramPairing,
+  bridgeToken,
+  runNotifier: new TelegramRunNotifier({
+    integrations: integrationsService,
+    chats: messagingChats,
+    frontendUrl,
+  }),
+  frontendUrl,
   readinessProbes: database
     ? [{ name: `database:${database.provider}`, check: () => database.check() }]
     : [],
@@ -305,9 +358,19 @@ const app = createApp({
 const notificationWorker = app.locals['notificationWorker'] as NotificationOutboxWorker;
 notificationWorker.start();
 
-const server = app.listen(config.port, () => {
+// HOST limits the interface the API listens on (the desktop app sets 127.0.0.1 so other devices
+// on the network cannot reach it). Unset, it listens on every interface, as the containers need.
+const listenHost = process.env['HOST']?.trim() || undefined;
+const onListening = () => {
   console.log(`Backend listening on port ${config.port}`);
-});
+  void telegramGateway
+    .start()
+    .catch((error: unknown) => console.error('[Telegram] Could not start the bots:', error));
+};
+const server =
+  listenHost === undefined
+    ? app.listen(config.port, onListening)
+    : app.listen(config.port, listenHost, onListening);
 
 // Files uploaded for an item that was never saved (the save failed or the tab closed
 // mid-save) are pending; once they are an hour old nothing can claim them anymore.
@@ -323,6 +386,7 @@ setInterval(() => void sweepUploads(), 30 * 60_000).unref();
 
 async function shutdown(): Promise<void> {
   server.close();
+  await telegramGateway.stop();
   await notificationWorker.stop();
   await eventBus?.close();
   await cache.close();

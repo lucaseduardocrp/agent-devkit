@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useKanbanDraft } from '../../lib/use-kanban-draft.js';
 import type { ApiClient } from '../../lib/api-client.js';
-import { useI18n } from '../../lib/i18n/index.js';
+import { formatMessage, useI18n } from '../../lib/i18n/index.js';
+import type { I18nDictionary } from '../../lib/i18n/index.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
@@ -82,8 +83,8 @@ function formatIssueDescription(value: string): string {
   const parser = new DOMParser();
   let parsed = parser.parseFromString(value, 'text/html');
   // Some imported work items contain HTML that was escaped before being stored.
-  if (!/<\/?[a-z][^>]*>/i.test(value) && /<\/?[a-z][^>]*>/i.test(parsed.body.textContent ?? ''))
-    parsed = parser.parseFromString(parsed.body.textContent ?? value, 'text/html');
+  if (!/<\/?[a-z][^>]*>/i.test(value) && /<\/?[a-z][^>]*>/i.test(parsed.body.textContent))
+    parsed = parser.parseFromString(parsed.body.textContent, 'text/html');
   for (const element of [...parsed.body.querySelectorAll<HTMLElement>('*')]) {
     if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'MATH'].includes(element.tagName)) {
       element.remove();
@@ -145,323 +146,6 @@ function isHtmlDescription(value: string): boolean {
     value.replace(/&lt;/gi, '<').replace(/&gt;/gi, '>'),
   );
 }
-
-const copy = {
-  'pt-BR': {
-    dashboard: 'Dashboard',
-    inbox: 'Inbox',
-    issues: 'Issues',
-    perPage: 'Issues por página',
-    newIssue: 'Nova issue',
-    agents: 'Agentes',
-    recentIssues: 'Issues recentes',
-    recentActivity: 'Atividade recente',
-    agentsEnabled: 'Agentes habilitados',
-    tasksInProgress: 'Tarefas em andamento',
-    openTasks: 'Tarefas abertas',
-    totalTasks: 'Total de tarefas',
-    issuesByPriority: 'Issues por prioridade',
-    issuesByStatus: 'Issues por status',
-    last14Days: 'Últimos 14 dias',
-    noActivity: 'Ainda não há atividade.',
-    noAgents: 'Nenhum agente configurado.',
-    noIssues: 'Nenhuma issue encontrada.',
-    moveTo: 'Mover para',
-    savingMove: 'Salvando movimento',
-    draftPendingCard: 'Alteração pendente',
-    draftLabels: {
-      pending: 'movimento(s) pendente(s): salvos automaticamente quando você parar de mexer',
-      saving: 'Salvando alterações',
-      offline:
-        'Sem conexão: as alterações ficam guardadas neste navegador e serão enviadas ao reconectar.',
-      error: 'Não foi possível salvar',
-      saveNow: 'Salvar agora',
-      retry: 'Tentar novamente',
-      discard: 'Descartar',
-    },
-    createFirst: 'Crie a primeira issue para começar.',
-    mine: 'Minhas',
-    inboxEmpty: 'Nenhuma execução foi feita enquanto uma issue estava atribuída a você.',
-    runCount: (count: number) => (count === 1 ? '1 execução' : `${count} execuções`),
-    recent: 'Recentes',
-    unread: 'Não lidas',
-    blocked: 'Bloqueadas',
-    all: 'Todas',
-    search: 'Buscar issues',
-    filterStatus: 'Filtrar status',
-    listView: 'Lista',
-    boardView: 'Kanban',
-    anyStatus: 'Todos os status',
-    allAssignees: 'Todos os responsáveis',
-    noAssignee: 'Sem responsável',
-    allAgents: 'Todos os agentes',
-    allPriorities: 'Todas as prioridades',
-    allIterations: 'Todas as iterações',
-    iteration: 'Iteração',
-    savedFilters: 'Filtros salvos',
-    saveFilter: 'Salvar filtro',
-    detailsTab: 'Detalhes',
-    agentInfoTab: 'Informações do Agente',
-    showFilters: 'Filtros',
-    hideFilters: 'Ocultar filtros',
-    saveFilterTitle: 'Salvar filtros atuais',
-    filterName: 'Nome do filtro',
-    deleteSavedFilter: 'Excluir filtro salvo',
-    clearFilters: 'Limpar filtros',
-    title: 'Título',
-    description: 'Descrição',
-    status: 'Status',
-    priority: 'Prioridade',
-    type: 'Tipo',
-    noType: 'Sem tipo',
-    assignee: 'Responsável',
-    unassigned: 'Sem responsável',
-    proofreader: 'Revisor',
-    unsavedTitle: 'Deseja sair sem salvar?',
-    unsavedBody:
-      'Você tem alterações não salvas. Você pode salvar, descartar ou cancelar para continuar editando.',
-    discardChanges: 'Descartar alterações',
-    saveChanges: 'Salvar alterações',
-    noProofreader: 'Sem revisor',
-    agent: 'Agente',
-    noAgent: 'Sem agente',
-    create: 'Criar issue',
-    save: 'Salvar',
-    edit: 'Editar',
-    cancel: 'Cancelar',
-    close: 'Fechar',
-    comments: 'Comentários',
-    addComment: 'Adicionar comentário',
-    commentPlaceholder: 'Escreva um comentário...',
-    archive: 'Arquivar',
-    restore: 'Restaurar',
-    markRead: 'Marcar como lida',
-    markUnread: 'Marcar como não lida',
-    refresh: 'Atualizar',
-    retry: 'Tentar novamente',
-    loadError: 'Não foi possível carregar os dados.',
-    loadingDetails: 'Carregando detalhes da issue...',
-    saveError: 'Não foi possível salvar.',
-    delete: 'Excluir',
-    deleteConfirm: 'Excluir esta issue?',
-    liveIssue: 'Issue atual',
-    noAssignedIssue: 'Sem issue em andamento',
-    monthSpend: 'Gasto do mês',
-    totalTokens: 'Total de tokens usados',
-    tokenBreakdown: 'Entrada / saída',
-    monthlyBudget: 'Orçamento mensal (USD; 0 = sem limite)',
-    costRates: 'Tarifas por modelo (USD por 1 milhão de tokens)',
-    inputRate: 'Entrada',
-    outputRate: 'Saída',
-    provider: 'Provedor',
-    model: 'Modelo',
-    addRate: 'Salvar tarifa',
-    unpricedRuns: 'execuções sem tarifa',
-    mcpUsage: 'Uso via MCP neste mês',
-    mcpUsageHint:
-      'Tokens que o assistente (Claude, Codex...) gastou lendo e enviando dados do ADK pelo MCP. Valores com ≈ são estimados (cerca de 4 caracteres por token).',
-    mcpCalls: 'Chamadas',
-    mcpTokens: 'Tokens',
-    mcpSpend: 'Gasto',
-    mcpTopTools: 'Ferramentas que mais consumiram',
-    mcpClients: 'Clientes MCP',
-    mcpUnpriced:
-      'chamadas sem tarifa: cadastre uma tarifa com provedor "mcp" e o nome do cliente como modelo.',
-    mcpEmpty: 'Nenhum uso via MCP neste mês.',
-    runs: 'Execuções do agente',
-    startRun: 'Executar agente',
-    cancelRun: 'Cancelar execução',
-    noRuns: 'Nenhuma execução ainda.',
-    stepProgress: 'Etapa',
-    of: 'de',
-    approveAndContinue: 'Aprovar e continuar',
-    approveFinal: 'Aprovar resultado final',
-    revisionPlaceholder: 'Descreva o ajuste necessário...',
-    requestRevision: 'Pedir ajuste',
-    answerQuestion: 'Responder ao agente',
-    answerPlaceholder: 'Escreva sua resposta para continuar esta etapa...',
-    submitAnswer: 'Enviar resposta',
-    waitingForReview: 'Revise o resultado desta etapa para liberar a próxima.',
-    waitingForAnswer: 'O agente pausou porque precisa desta informação:',
-    runStatus: {
-      queued: 'Na fila',
-      running: 'Executando',
-      waiting_review: 'Aguardando sua aprovação',
-      waiting_input: 'Aguardando sua resposta',
-      succeeded: 'Concluída',
-      failed: 'Falhou',
-      cancelled: 'Cancelada',
-    },
-    updated: 'Atualizada',
-    statusNames: {
-      backlog: 'Backlog',
-      todo: 'A fazer',
-      in_progress: 'Em andamento',
-      in_review: 'Em revisão',
-      blocked: 'Bloqueada',
-      done: 'Concluída',
-      cancelled: 'Cancelada',
-    },
-    priorityNames: { urgent: 'Urgente', high: 'Alta', medium: 'Média', low: 'Baixa' },
-  },
-  'en-US': {
-    dashboard: 'Dashboard',
-    inbox: 'Inbox',
-    issues: 'Issues',
-    perPage: 'Issues per page',
-    newIssue: 'New issue',
-    agents: 'Agents',
-    recentIssues: 'Recent issues',
-    recentActivity: 'Recent activity',
-    agentsEnabled: 'Agents enabled',
-    tasksInProgress: 'Tasks in progress',
-    openTasks: 'Open tasks',
-    totalTasks: 'Total tasks',
-    issuesByPriority: 'Issues by priority',
-    issuesByStatus: 'Issues by status',
-    last14Days: 'Last 14 days',
-    noActivity: 'No activity yet.',
-    noAgents: 'No agents configured.',
-    noIssues: 'No issues found.',
-    moveTo: 'Move to',
-    savingMove: 'Saving move',
-    draftPendingCard: 'Pending change',
-    draftLabels: {
-      pending: 'pending move(s): saved automatically once you stop',
-      saving: 'Saving changes',
-      offline: 'Offline: changes are kept in this browser and sent when you reconnect.',
-      error: 'Could not save',
-      saveNow: 'Save now',
-      retry: 'Try again',
-      discard: 'Discard',
-    },
-    createFirst: 'Create your first issue to get started.',
-    mine: 'Mine',
-    inboxEmpty: 'No runs were executed while an issue was assigned to you.',
-    runCount: (count: number) => (count === 1 ? '1 run' : `${count} runs`),
-    recent: 'Recent',
-    unread: 'Unread',
-    blocked: 'Blocked',
-    all: 'All',
-    search: 'Search issues',
-    filterStatus: 'Filter status',
-    listView: 'List',
-    boardView: 'Kanban',
-    anyStatus: 'All statuses',
-    allAssignees: 'All assignees',
-    noAssignee: 'No assignee',
-    allAgents: 'All agents',
-    allPriorities: 'All priorities',
-    allIterations: 'All iterations',
-    iteration: 'Iteration',
-    savedFilters: 'Saved filters',
-    saveFilter: 'Save filter',
-    detailsTab: 'Details',
-    agentInfoTab: 'Agent Information',
-    showFilters: 'Filters',
-    hideFilters: 'Hide filters',
-    saveFilterTitle: 'Save current filters',
-    filterName: 'Filter name',
-    deleteSavedFilter: 'Delete saved filter',
-    clearFilters: 'Clear filters',
-    title: 'Title',
-    description: 'Description',
-    status: 'Status',
-    priority: 'Priority',
-    type: 'Type',
-    noType: 'No type',
-    assignee: 'Assignee',
-    unassigned: 'Unassigned',
-    proofreader: 'Proofreader',
-    unsavedTitle: 'Are you sure you want to leave?',
-    unsavedBody:
-      'You have unsaved changes. You can save your changes, discard them, or cancel to continue editing.',
-    discardChanges: 'Discard Changes',
-    saveChanges: 'Save Changes',
-    noProofreader: 'No proofreader',
-    agent: 'Agent',
-    noAgent: 'No agent',
-    create: 'Create issue',
-    save: 'Save',
-    edit: 'Edit',
-    cancel: 'Cancel',
-    close: 'Close',
-    comments: 'Comments',
-    addComment: 'Add comment',
-    commentPlaceholder: 'Write a comment...',
-    archive: 'Archive',
-    restore: 'Restore',
-    markRead: 'Mark as read',
-    markUnread: 'Mark as unread',
-    refresh: 'Refresh',
-    retry: 'Try again',
-    loadError: 'Could not load the data.',
-    loadingDetails: 'Loading issue details...',
-    saveError: 'Could not save.',
-    delete: 'Delete',
-    deleteConfirm: 'Delete this issue?',
-    liveIssue: 'Current issue',
-    noAssignedIssue: 'No issue in progress',
-    monthSpend: 'Month spend',
-    totalTokens: 'Total tokens used',
-    tokenBreakdown: 'Input / output',
-    monthlyBudget: 'Monthly budget (USD; 0 = unlimited)',
-    costRates: 'Model rates (USD per 1 million tokens)',
-    inputRate: 'Input',
-    outputRate: 'Output',
-    provider: 'Provider',
-    model: 'Model',
-    addRate: 'Save rate',
-    unpricedRuns: 'runs without a rate',
-    mcpUsage: 'MCP usage this month',
-    mcpUsageHint:
-      'Tokens the assistant (Claude, Codex...) spent reading and sending ADK data through MCP. Values marked ≈ are estimates (about 4 characters per token).',
-    mcpCalls: 'Calls',
-    mcpTokens: 'Tokens',
-    mcpSpend: 'Spend',
-    mcpTopTools: 'Top tools by tokens',
-    mcpClients: 'MCP clients',
-    mcpUnpriced:
-      'calls without a rate: add a rate with provider "mcp" and the client name as the model.',
-    mcpEmpty: 'No MCP usage this month.',
-    runs: 'Agent runs',
-    startRun: 'Run agent',
-    cancelRun: 'Cancel run',
-    noRuns: 'No runs yet.',
-    stepProgress: 'Step',
-    of: 'of',
-    approveAndContinue: 'Approve and continue',
-    approveFinal: 'Approve final result',
-    revisionPlaceholder: 'Describe the change needed...',
-    requestRevision: 'Request changes',
-    answerQuestion: 'Answer the agent',
-    answerPlaceholder: 'Write your answer to continue this step...',
-    submitAnswer: 'Send answer',
-    waitingForReview: 'Review this step result to release the next step.',
-    waitingForAnswer: 'The agent paused because it needs this information:',
-    runStatus: {
-      queued: 'Queued',
-      running: 'Running',
-      waiting_review: 'Waiting for your approval',
-      waiting_input: 'Waiting for your answer',
-      succeeded: 'Succeeded',
-      failed: 'Failed',
-      cancelled: 'Cancelled',
-    },
-    updated: 'Updated',
-    statusNames: {
-      backlog: 'Backlog',
-      todo: 'To do',
-      in_progress: 'In progress',
-      in_review: 'In review',
-      blocked: 'Blocked',
-      done: 'Done',
-      cancelled: 'Cancelled',
-    },
-    priorityNames: { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' },
-  },
-} as const;
-
 function memberLabel(member: WorkspaceMember): string {
   return member.user?.name || member.user?.email || member.userId;
 }
@@ -579,8 +263,8 @@ export function WorkView({
   focus,
   onFocusHandled,
 }: WorkViewProps) {
-  const { locale } = useI18n();
-  const t = copy[locale];
+  const { locale, messages } = useI18n();
+  const t = messages.issues;
   const workItemTypes = useWorkItemTypes(apiClient, workspaceId);
   const permissions = usePermissions();
   const canDelete = !isReadOnly && permissions.can('issues', 'delete');
@@ -903,11 +587,10 @@ export function WorkView({
 
   /** Records a field change in the draft; going back to the stored value removes it. */
   const updateIssue = (changes: IssueChanges) => {
-    if (!selectedIssue) return;
     setSidebarDraft((current) => {
       const next: Record<string, unknown> = { ...current, ...changes };
       for (const [key, value] of Object.entries(changes))
-        if (((selectedIssue as unknown as Record<string, unknown>)[key] ?? '') === (value ?? ''))
+        if (((selectedIssue! as unknown as Record<string, unknown>)[key] ?? '') === (value ?? ''))
           delete next[key];
       return next;
     });
@@ -936,13 +619,13 @@ export function WorkView({
       setEditingDetails(false);
       setSidebarDraft({});
       await reload();
-      return true;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t.saveError);
       return false;
     } finally {
       setBusy(false);
     }
+    return true;
   };
 
   const closeDetail = () => {
@@ -1144,7 +827,10 @@ export function WorkView({
           className="hidden shrink-0 text-xs text-[var(--text-secondary)] sm:inline"
           data-testid={`inbox-runs-${issue.id}`}
         >
-          {t.runCount(item.runs.length)} · {t.runStatus[item.runs[0].status]}
+          {item.runs.length === 1
+            ? t.runCountOne
+            : formatMessage(t.runCountOther, { count: item.runs.length })}{' '}
+          · {t.runStatus[item.runs[0].status]}
         </span>
       )}
       <span className="hidden rounded bg-[var(--surface-2)] px-2 py-0.5 text-xs text-[var(--text-secondary)] sm:inline">
@@ -2620,7 +2306,7 @@ export function WorkView({
                                   {run.provider}
                                   {run.model ? ` / ${run.model}` : ''}
                                   {run.inputTokens !== null
-                                    ? ` · ${run.inputTokens} / ${run.outputTokens} tokens`
+                                    ? ` · ${formatMessage(t.tokenUsage, { input: run.inputTokens, output: String(run.outputTokens) })}`
                                     : ''}
                                 </p>
                               )}
@@ -2848,7 +2534,7 @@ function McpUsagePanel({
 }: {
   usage: McpUsageSummary;
   locale: string;
-  t: (typeof copy)[keyof typeof copy];
+  t: I18nDictionary['issues'];
 }) {
   const number = (value: number) => new Intl.NumberFormat(locale).format(value);
   const tokens = (value: number) => `${usage.estimated ? '≈ ' : ''}${number(value)}`;

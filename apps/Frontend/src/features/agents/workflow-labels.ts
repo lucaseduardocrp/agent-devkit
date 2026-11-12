@@ -19,6 +19,7 @@ export const toolsetLabels: Record<AgentWorkflowToolset, TranslationKey> = {
   design: 'agents.workflowModuleDesign',
   e2e: 'agents.workflowModuleE2e',
   releasenotes: 'agents.workflowModuleReleaseNotes',
+  development: 'agents.workflowModuleDevelopment',
   integrationtests: 'agents.workflowModuleIntegrationTests',
   loadtests: 'agents.workflowModuleLoadTests',
   audit: 'agents.workflowModuleAudit',

@@ -6,7 +6,7 @@ import {
   SearchableSelect,
   type SearchableSelectOption,
 } from '../../components/ui/searchable-select.js';
-import { useI18n } from '../../lib/i18n/index.js';
+import { formatMessage, useI18n } from '../../lib/i18n/index.js';
 import type { ApiClient } from '../../lib/api-client.js';
 import {
   ATTACHMENT_ACCEPT,
@@ -28,92 +28,6 @@ import {
 /** The backend rejects a longer list on save. */
 const MAX_REFERENCES = 30;
 const MAX_LABEL = 300;
-
-const copy = {
-  'pt-BR': {
-    useTyped: (text: string) => `Usar “${text}”`,
-    kind: 'Tipo',
-    kinds: {
-      pbi: 'PBI',
-      issue: 'Issue',
-      attachment: 'Anexo',
-      brain: 'Brain',
-      spec: 'Spec',
-      testplan: 'Plano de testes',
-      file: 'Arquivo',
-    },
-    target: 'Item',
-    reason: 'Motivo',
-    reasonPlaceholder: 'Por que o agente deve ler isto primeiro?',
-    pick: {
-      pbi: 'Buscar PBI…',
-      issue: 'Buscar issue…',
-      attachment: 'Escolher anexo…',
-      brain: 'Buscar página do Brain…',
-      spec: 'Buscar spec…',
-      testplan: 'Buscar plano de testes…',
-      file: 'Escolher arquivo…',
-    },
-    loading: 'Carregando…',
-    open: 'Abrir',
-    openHint: 'Abrir o item referenciado',
-    openFile: 'Abrir o arquivo',
-    openFailed: 'Não foi possível abrir o arquivo.',
-    empty: 'Nada encontrado',
-    loadFailed: 'Não foi possível carregar a lista.',
-    noAttachments: 'Nenhum arquivo anexado ainda. Use “Anexar arquivo”.',
-    upload: 'Anexar arquivo',
-    uploading: 'Enviando…',
-    uploadHint: 'O arquivo passa a fazer parte dos anexos da issue ao salvar.',
-    unsupported: 'Tipo de arquivo não suportado.',
-    tooLarge: (name: string, limit: number) => `${name} passa do limite de ${limit} MB.`,
-    limit: `Máximo de ${MAX_ATTACHMENTS} anexos na issue.`,
-    uploadFailed: 'Não foi possível enviar o arquivo.',
-    remove: 'Remover referência',
-  },
-  'en-US': {
-    useTyped: (text: string) => `Use “${text}”`,
-    kind: 'Type',
-    kinds: {
-      pbi: 'PBI',
-      issue: 'Issue',
-      attachment: 'Attachment',
-      brain: 'Brain',
-      spec: 'Spec',
-      testplan: 'Test plan',
-      file: 'File',
-    },
-    target: 'Item',
-    reason: 'Reason',
-    reasonPlaceholder: 'Why should the agent read this first?',
-    pick: {
-      pbi: 'Search PBIs…',
-      issue: 'Search issues…',
-      attachment: 'Choose attachment…',
-      brain: 'Search Brain pages…',
-      spec: 'Search specs…',
-      testplan: 'Search test plans…',
-      file: 'Choose file…',
-    },
-    loading: 'Loading…',
-    open: 'Open',
-    openHint: 'Open the referenced item',
-    openFile: 'Open the file',
-    openFailed: 'The file could not be opened.',
-    empty: 'Nothing found',
-    loadFailed: 'The list could not be loaded.',
-    noAttachments: 'No attached files yet. Use “Attach file”.',
-    upload: 'Attach file',
-    uploading: 'Uploading…',
-    uploadHint: 'The file becomes an attachment of the issue when you save.',
-    unsupported: 'Unsupported file type.',
-    tooLarge: (name: string, limit: number) => `${name} is over the ${limit} MB limit.`,
-    limit: `Up to ${MAX_ATTACHMENTS} attachments per issue.`,
-    uploadFailed: 'The file could not be uploaded.',
-    remove: 'Remove reference',
-  },
-} as const;
-
 /**
  * A list of known values that also takes one the list does not have (a private model, a new
  * provider): the user types it in the same field and picks "Use “text”" in the list.
@@ -135,8 +49,9 @@ export function ChoiceField({
   placeholder: string;
   emptyMessage: string;
 }) {
-  const { locale } = useI18n();
-  const useTyped = copy[locale].useTyped;
+  const { messages } = useI18n();
+  const useTypedTemplate = messages.agentBriefFields.useTyped;
+  const useTyped = (text: string) => formatMessage(useTypedTemplate, { text });
   return (
     <SearchableSelect
       label={label}
@@ -266,8 +181,8 @@ function ReferenceRow({
   /** Shows what the reference points at; a file is opened, anything else in the viewer. */
   onOpen: (() => void | Promise<void>) | undefined;
 }) {
-  const { locale } = useI18n();
-  const c = copy[locale];
+  const { messages } = useI18n();
+  const c = messages.agentBriefFields;
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => ensure(item.kind), [ensure, item.kind]);
@@ -298,8 +213,13 @@ function ReferenceRow({
     const kind = fileKind(file);
     if (!kind) return setError(`${file.name}: ${c.unsupported}`);
     if (file.size > ATTACHMENT_LIMITS[kind])
-      return setError(c.tooLarge(file.name, ATTACHMENT_LIMITS[kind] / 1024 / 1024));
-    if (uploadsLeft <= 0) return setError(c.limit);
+      return setError(
+        formatMessage(c.tooLarge, {
+          name: file.name,
+          limit: ATTACHMENT_LIMITS[kind] / 1024 / 1024,
+        }),
+      );
+    if (uploadsLeft <= 0) return setError(formatMessage(c.limit, { max: MAX_ATTACHMENTS }));
     setError('');
     setUploading(true);
     try {

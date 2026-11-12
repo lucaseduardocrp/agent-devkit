@@ -4,16 +4,16 @@ import type { AgentRunEvent } from '../issues/issue-types.js';
 /** `live` once the server confirmed the stream; `offline` until it can be reached again. */
 export type LiveStatus = 'connecting' | 'live' | 'offline';
 
-export interface RunStreamHandlers {
+export interface RunStreamHandlers<Event = AgentRunEvent> {
   readonly onReady: () => void;
-  readonly onRun: (run: AgentRunEvent) => void;
+  readonly onRun: (run: Event) => void;
 }
 
-interface UseRunStreamOptions {
+interface UseRunStreamOptions<Event> {
   readonly enabled: boolean;
   /** Opens the stream; resolves when the server closes it and rejects when it cannot be opened. */
-  readonly connect: (handlers: RunStreamHandlers, signal: AbortSignal) => Promise<void>;
-  readonly onRun: (run: AgentRunEvent) => void;
+  readonly connect: (handlers: RunStreamHandlers<Event>, signal: AbortSignal) => Promise<void>;
+  readonly onRun: (run: Event) => void;
   /** The stream is open: load the current state, then let the events keep it up to date. */
   readonly onReady: () => void;
 }
@@ -25,7 +25,12 @@ const LAST_RETRY_MS = 30_000;
  * Keeps a live stream open while `enabled`, reconnecting with a growing delay when it drops. Every
  * connection starts with `onReady`, so a client that missed events while offline reloads its state.
  */
-export function useRunStream({ enabled, connect, onRun, onReady }: UseRunStreamOptions): LiveStatus {
+export function useRunStream<Event = AgentRunEvent>({
+  enabled,
+  connect,
+  onRun,
+  onReady,
+}: UseRunStreamOptions<Event>): LiveStatus {
   const [status, setStatus] = useState<LiveStatus>('connecting');
   // The callbacks change on every render; the connection must not restart because of that.
   const latest = useRef({ connect, onRun, onReady });

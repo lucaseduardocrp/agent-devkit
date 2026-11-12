@@ -85,15 +85,11 @@ export function SpecView({
   const [specs, setSpecs] = useState<readonly SpecificationDto[]>([]);
   const [agents, setAgents] = useState<readonly CustomAgentDto[]>([]);
   const [editingTemplateId, setEditingTemplateId] = useState<string>();
-  const editingTemplate = templates.find((item) => item.id === editingTemplateId);
   const [templateName, setTemplateName] = useState(() => t('spec.defaultTemplate'));
   const [templateSections, setTemplateSections] =
     useState<readonly SpecTemplateSectionDto[]>(defaultSections);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedSpec, setSelectedSpec] = useState<SpecificationDto | null>(null);
-  // Read after awaits: the person may open another Spec while a request is pending.
-  const selectedSpecRef = useRef(selectedSpec);
-  selectedSpecRef.current = selectedSpec;
   const [title, setTitle] = useState(() => t('spec.defaultSpecificationTitle'));
   const [sections, setSections] = useState<SpecificationDto['sections']>(
     emptySections(defaultSections),
@@ -322,7 +318,7 @@ export function SpecView({
       const specification =
         !selectedSpec || isSpecEditing ? await persistCurrentSpec() : selectedSpec;
       const saved = await runActivity(
-        { kind: 'agent', title: `Agente trabalhando em “${specification.title}”` },
+        { kind: 'agent', title: t('spec.agentWorkingOn', { title: specification.title }) },
         () => apiClient.chatSpecification(specification.id, agentId, message.trim()),
       );
       setSelectedSpec(saved);
@@ -388,7 +384,7 @@ export function SpecView({
   const download = async (specification: SpecificationDto) => {
     try {
       const markdown = await runActivity(
-        { kind: 'download', title: `Baixando “${specification.title}.md”` },
+        { kind: 'download', title: t('spec.downloadingMarkdown', { title: specification.title }) },
         () => apiClient.exportSpecification(specification.id),
       );
       const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' }));
@@ -421,7 +417,7 @@ export function SpecView({
         }
         return all.filter((item) => !removed.has(item.id));
       });
-      if (selectedSpecRef.current?.id === specification.id) newSpec();
+      if (selectedSpec?.id === specification.id) newSpec();
       setSpecToDelete(null);
       reportSuccess(t('spec.specificationDeleted'));
     } catch (value) {
@@ -433,17 +429,18 @@ export function SpecView({
 
   return (
     <div
-      className="flex h-full min-h-0 w-full max-w-full overflow-hidden"
+      className="flex h-full min-h-0 w-full max-w-full gap-4 overflow-hidden"
       data-testid="screen-spec"
     >
       <ResizableSidebar
         aria-label={t('spec.saved')}
         data-testid="spec-navigation-sidebar"
+        gap
         defaultWidth={280}
         minWidth={220}
         maxWidth="container"
         resizeLabel={t('spec.resize')}
-        className="overflow-hidden border-r border-border bg-surface-1"
+        className="overflow-hidden rounded-lg border border-border bg-surface-1"
       >
         <nav className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4">
           {!isReadOnly && (
@@ -488,7 +485,7 @@ export function SpecView({
         </nav>
       </ResizableSidebar>
 
-      <main className="min-w-0 flex-1 overflow-y-auto p-5">
+      <main className="min-w-0 flex-1 overflow-y-auto rounded-lg border border-border bg-surface-1 p-5">
         {isLoading ? (
           <SpecLoadingSkeleton t={t} />
         ) : page === 'create' && isReadOnly && !selectedSpec ? (
@@ -593,9 +590,10 @@ export function SpecView({
             setTemplateName={setTemplateName}
             setTemplateSections={setTemplateSections}
             saveTemplate={() => void saveTemplate()}
-            requestDeleteTemplate={
-              editingTemplate ? () => setTemplateToDelete(editingTemplate) : undefined
-            }
+            requestDeleteTemplate={() => {
+              const template = templates.find((item) => item.id === editingTemplateId);
+              if (template) setTemplateToDelete(template);
+            }}
           />
         )}
       </main>
@@ -779,7 +777,7 @@ interface CreatePageProps {
 
 function CreatePage(props: CreatePageProps) {
   return (
-    <section className="mx-auto max-w-5xl space-y-4" aria-labelledby="spec-create-title">
+    <section className="space-y-4" aria-labelledby="spec-create-title">
       <header className="flex items-start justify-between gap-4">
         <div>
           <h1 id="spec-create-title" className="text-xl font-semibold">
@@ -829,7 +827,7 @@ function CreatePage(props: CreatePageProps) {
           )}
         </ActionsMenu>
       </header>
-      <div className="space-y-3 rounded-lg border border-border bg-surface-1 p-4">
+      <div className="space-y-3">
         <label className="block text-sm font-medium" htmlFor="spec-template">
           {props.t('spec.template')}
         </label>
@@ -937,8 +935,7 @@ interface SettingsPageProps {
       | ((current: readonly SpecTemplateSectionDto[]) => readonly SpecTemplateSectionDto[]),
   ): void;
   saveTemplate(): void;
-  /** Present while a saved template is open for editing. */
-  requestDeleteTemplate?: () => void;
+  requestDeleteTemplate(): void;
 }
 
 function SettingsPage(props: SettingsPageProps) {
@@ -956,12 +953,12 @@ function SettingsPage(props: SettingsPageProps) {
           {props.canManageTemplates && (
             <ActionsMenu key={props.editingTemplateId ?? 'new-template'}>
               {props.historyControl}
-              {props.requestDeleteTemplate && (
+              {props.editingTemplateId && (
                 <Button
                   variant="destructive"
                   disabled={props.pending || props.isEditing}
                   data-destructive
-                  onClick={props.requestDeleteTemplate}
+                  onClick={() => props.requestDeleteTemplate()}
                 >
                   {props.t('spec.deleteTemplate')}
                 </Button>
@@ -989,7 +986,6 @@ function SettingsPage(props: SettingsPageProps) {
                 onChange={(event) => {
                   const template = props.templates.find((item) => item.id === event.target.value);
                   if (template) props.editTemplate(template);
-                  else props.newTemplate();
                 }}
               >
                 <option value="">{props.t('spec.newTemplate')}</option>
@@ -1089,12 +1085,13 @@ function AgentPanel(props: AgentPanelProps) {
     <ResizableSidebar
       aria-label={props.t('spec.collaboration')}
       data-testid="spec-agent-sidebar"
+      gap
       defaultWidth={360}
       minWidth={280}
       maxWidth="container"
       resizeEdge="left"
       resizeLabel={props.t('spec.resize')}
-      className="overflow-hidden border-l border-border bg-surface-1"
+      className="overflow-hidden rounded-lg border border-border bg-surface-1"
     >
       <section className="flex min-h-0 flex-1 flex-col p-4">
         <div className="flex items-center justify-between gap-3">
@@ -1134,7 +1131,7 @@ function AgentPanel(props: AgentPanelProps) {
                   className={`ti ${item.role === 'assistant' ? 'ti-sparkles' : 'ti-user'}`}
                   aria-hidden="true"
                 />
-                {item.role === 'assistant' ? 'Agent' : props.t('spec.you')}
+                {item.role === 'assistant' ? props.t('spec.assistantRole') : props.t('spec.you')}
               </header>
               {item.role === 'assistant' ? (
                 <MarkdownViewer

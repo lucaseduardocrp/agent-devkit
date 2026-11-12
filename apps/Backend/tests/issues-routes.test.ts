@@ -176,6 +176,11 @@ describe('issues, inbox and dashboard routes', () => {
       const response = await request(app).get('/runs').query({ issueId: id });
       expect(response.body.runs[0]?.status).toBe('waiting_review');
     });
+    const runId = (await request(app).get('/runs').query({ issueId: id })).body.runs[0]
+      .id as string;
+    expect((await request(app).get(`/issues/${id}`)).body.issue.status).toBe('in_review');
+    await request(app).post(`/runs/${runId}/continue`).send({ action: 'approve' }).expect(200);
+    expect((await request(app).get(`/issues/${id}`)).body.issue.status).toBe('done');
     const costs = await request(app).get('/costs').expect(200);
     expect(costs.body).toMatchObject({
       monthSpendMicros: 400,
@@ -186,7 +191,7 @@ describe('issues, inbox and dashboard routes', () => {
     });
     const dashboard = await request(app).get('/dashboard').expect(200);
     expect(dashboard.body).toMatchObject({
-      activeRuns: 1, // the run waits for final review
+      activeRuns: 0,
       costs: {
         monthSpendMicros: 400,
         totalInputTokens: 100,
@@ -194,7 +199,6 @@ describe('issues, inbox and dashboard routes', () => {
         totalTokens: 150,
       },
     });
-    expect((await request(app).get(`/issues/${id}`)).body.issue.status).toBe('in_review');
   });
   it('creates numbered issues per workspace and keeps workspaces isolated', async () => {
     const { app, as } = setup();

@@ -1,0 +1,49 @@
+{
+  "name": "@agent-devkit/desktop",
+  "productName": "Agent DevKit",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "ADK as a desktop app: the API, web app, database and MCP server in one installer, with no Docker or terminal.",
+  "author": "Lucas Eduardo Continentino de Carvalho",
+  "type": "module",
+  "main": "dist/src/main/index.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/finish-build.mjs",
+    "stage": "node scripts/stage.mjs",
+    "start": "npm run build && electron .",
+    "dev": "npm run stage && npm start",
+    "dev:live": "node scripts/dev-live.mjs",
+    "pack": "npm run stage && npm run build && electron-builder --dir",
+    "dist": "npm run stage && npm run build && electron-builder",
+    "format": "prettier --write \"**/*.{js,mjs,cjs,ts,cts,json,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{js,mjs,cjs,ts,cts,json,yml,yaml}\"",
+    "lint": "eslint \"src/**/*.{ts,cts}\" \"tests/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11",
+    "embedded-postgres": "17.11.0-beta.19",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^24.13.6",
+    "@types/pg": "^8.23.1",
+    "@vitest/coverage-v8": "^3.2.7",
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.9",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^3.2.7"
+  }
+}

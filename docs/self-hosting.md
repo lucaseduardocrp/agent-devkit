@@ -70,6 +70,9 @@ LLM providers, Azure DevOps, GitHub repositories and other integrations are not 
 each workspace adds them in the web app under **Connect**, and their credentials are stored
 encrypted with `INTEGRATION_ENCRYPTION_KEY`.
 
+A workspace's [Telegram bot](telegram.md) works on a local install without a public address:
+the API long-polls Telegram. Behind HTTPS it uses a webhook instead.
+
 ## Access from other devices and HTTPS
 
 By default every port listens on `127.0.0.1`, so only this computer can open ADK.

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Button } from '../../components/ui/button.js';
 import { Textarea } from '../../components/ui/textarea.js';
-import { useI18n } from '../../lib/i18n/index.js';
+import { formatMessage, useI18n } from '../../lib/i18n/index.js';
 import { cn } from '../../lib/utils.js';
 import { estimateTokens, fullPrompt } from './agent-brief-prompt-text.js';
 import type { BriefPrompt } from './agent-brief-types.js';
@@ -9,54 +9,6 @@ import type { BriefPrompt } from './agent-brief-types.js';
 const PART_KEYS = ['system', 'task', 'outputFormat'] as const;
 type PartKey = (typeof PART_KEYS)[number];
 type Tab = PartKey | 'preview';
-
-const copy = {
-  'pt-BR': {
-    tabs: {
-      system: 'Instrução do sistema',
-      task: 'Tarefa',
-      outputFormat: 'Formato da resposta',
-      preview: 'Prévia',
-    },
-    hints: {
-      system: 'Define o papel e as regras do agente em toda a execução.',
-      task: 'O trabalho a fazer, com o contexto e as referências a ler primeiro.',
-      outputFormat: 'Como o agente deve responder ao terminar.',
-    },
-    previewHint: 'É exatamente este texto que o agente recebe, na ordem abaixo.',
-    edited: 'Editado',
-    chars: (count: number) => `${count.toLocaleString('pt-BR')} caracteres`,
-    tokens: (count: number) => `≈ ${count.toLocaleString('pt-BR')} tokens`,
-    overBudget: (tokens: number, limit: number) =>
-      `O prompt tem cerca de ${tokens.toLocaleString('pt-BR')} tokens e o máximo de entrada é ${limit.toLocaleString('pt-BR')}. Aumente o orçamento ou reduza o texto.`,
-    revert: 'Desfazer edição',
-    copy: 'Copiar prompt',
-    copied: 'Prompt copiado',
-  },
-  'en-US': {
-    tabs: {
-      system: 'System instruction',
-      task: 'Task',
-      outputFormat: 'Output format',
-      preview: 'Preview',
-    },
-    hints: {
-      system: 'Sets the role and rules of the agent for the whole run.',
-      task: 'The work to do, with the context and the references to read first.',
-      outputFormat: 'How the agent should answer when it finishes.',
-    },
-    previewHint: 'This is exactly the text the agent receives, in the order below.',
-    edited: 'Edited',
-    chars: (count: number) => `${count.toLocaleString('en-US')} characters`,
-    tokens: (count: number) => `≈ ${count.toLocaleString('en-US')} tokens`,
-    overBudget: (tokens: number, limit: number) =>
-      `The prompt is about ${tokens.toLocaleString('en-US')} tokens and the input limit is ${limit.toLocaleString('en-US')}. Raise the budget or shorten the text.`,
-    revert: 'Undo edit',
-    copy: 'Copy prompt',
-    copied: 'Prompt copied',
-  },
-} as const;
-
 /**
  * One part of the prompt at a time (tabs) instead of three tall boxes, a size counter per
  * part, a preview of what the agent receives, and a warning when it exceeds the input budget.
@@ -79,8 +31,8 @@ export function PromptEditor({
   onCopy: () => void;
   copied: boolean;
 }) {
-  const { locale } = useI18n();
-  const c = copy[locale];
+  const { messages, formatNumber } = useI18n();
+  const c = messages.agentBriefPrompt;
   const [tab, setTab] = useState<Tab>('system');
   const area = useRef<HTMLTextAreaElement>(null);
   const tabs: readonly Tab[] = [...PART_KEYS, 'preview'];
@@ -90,8 +42,7 @@ export function PromptEditor({
 
   // The box grows with its text so long prompts are read without an inner scrollbar.
   useLayoutEffect(() => {
-    const element = area.current;
-    if (!element) return;
+    const element = area.current!;
     element.style.height = 'auto';
     element.style.height = `${Math.min(element.scrollHeight + 2, 480)}px`;
   }, [tab, text]);
@@ -166,7 +117,8 @@ export function PromptEditor({
         />
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
           <span>
-            {c.chars(text.length)} · {c.tokens(estimateTokens(text))}
+            {formatMessage(c.chars, { count: formatNumber(text.length) })} ·{' '}
+            {formatMessage(c.tokens, { count: formatNumber(estimateTokens(text)) })}
           </span>
           {tab !== 'preview' && changed(tab) && !disabled && (
             <Button
@@ -185,7 +137,10 @@ export function PromptEditor({
       {over && (
         <p className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           <i className="ti ti-alert-triangle mt-0.5" aria-hidden="true" />
-          {c.overBudget(total, maxInputTokens)}
+          {formatMessage(c.overBudget, {
+            tokens: formatNumber(total),
+            limit: formatNumber(maxInputTokens),
+          })}
         </p>
       )}
     </div>

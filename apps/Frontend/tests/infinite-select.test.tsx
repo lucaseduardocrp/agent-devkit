@@ -127,7 +127,7 @@ describe('SearchableSelect infinite scroll', () => {
     rerender(<Single count={10} hasMore loadingMore onLoadMore={onLoadMore} />);
     scrollToEnd('Pick');
     expect(onLoadMore).not.toHaveBeenCalled();
-    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
+    expect(screen.getByRole('status')).toHaveTextContent('Carregando...');
   });
 
   it('shows a loading row, with its own text, while the first page of a source arrives', () => {

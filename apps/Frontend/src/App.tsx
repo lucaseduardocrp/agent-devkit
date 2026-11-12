@@ -11,6 +11,8 @@ import { TestPlansView } from './features/testplans/TestPlansView.js';
 import type { AutomateSelection } from './features/testplans/TestSuiteTree.js';
 import { SpecView } from './features/spec/SpecView.js';
 import { ReleaseNotesView } from './features/release-notes/ReleaseNotesView.js';
+import { DevelopmentView } from './features/development/DevelopmentView.js';
+import type { DevelopmentSection } from './features/development/development-types.js';
 import { ConnectView } from './features/connect/ConnectView.js';
 import { SettingsView } from './features/settings/SettingsView.js';
 import { WorkspacesView } from './features/workspaces/WorkspacesView.js';
@@ -29,6 +31,7 @@ import { WorkView } from './features/issues/WorkView.js';
 import { NotificationsView } from './features/notifications/NotificationsView.js';
 import { PbiView } from './features/pbi/PbiView.js';
 import { E2eView } from './features/e2e/E2eView.js';
+import { E2eSourcesPage } from './features/e2e/E2eSourcesPage.js';
 import { IntegrationTestsView } from './features/apitests/IntegrationTestsView.js';
 import { LoadTestsView } from './features/apitests/LoadTestsView.js';
 import { accessFor, allows, PermissionsProvider } from './features/workspaces/permissions.js';
@@ -58,7 +61,11 @@ function readDeepLink(): { readonly issue: string; readonly workspace?: string }
   return { issue, ...(workspace ? { workspace } : {}) };
 }
 
-const defaultApiClient = new ApiClient({ baseUrl: import.meta.env.VITE_API_BASE_URL });
+// The desktop app (apps/Desktop) starts the API on a port it picks at launch and hands the address
+// over through its preload script; the web build keeps using VITE_API_BASE_URL.
+const defaultApiClient = new ApiClient({
+  baseUrl: window.adkDesktop?.apiUrl ?? import.meta.env.VITE_API_BASE_URL,
+});
 
 /** The Agents submodules, as navigation tabs and as the section the view renders. */
 /** The module each kind of "read first" reference lives in; files have no module. */
@@ -82,6 +89,21 @@ const AGENTS_TAB_BY_SECTION: Readonly<Record<AgentsSection, NavTab>> = {
   playground: 'agentsPlayground',
   map: 'agentsMap',
   workflow: 'agentsWorkflow',
+};
+
+/** The Development screens, as navigation tabs and as the section the view renders. */
+const DEVELOPMENT_SECTION_BY_TAB: Readonly<Record<string, DevelopmentSection>> = {
+  developmentArtifacts: 'artifacts',
+  developmentReview: 'review',
+  developmentCode: 'code',
+  developmentPipeline: 'pipeline',
+};
+
+const DEVELOPMENT_TAB_BY_SECTION: Readonly<Record<DevelopmentSection, NavTab>> = {
+  artifacts: 'developmentArtifacts',
+  review: 'developmentReview',
+  code: 'developmentCode',
+  pipeline: 'developmentPipeline',
 };
 
 export function App({
@@ -265,6 +287,24 @@ function AppContent({
     setOwnerId(created.workspace.id);
   };
 
+  const handleDeleteWorkspace = async (workspaceId: string) => {
+    await apiClient.deleteWorkspace(workspaceId);
+    const remaining = workspaces.filter((w) => w.workspace.id !== workspaceId);
+    setWorkspaces(remaining);
+    const nextWs = remaining[0];
+    if (nextWs) {
+      setActiveWorkspace(nextWs.workspace.id);
+      apiClient.setWorkspaceId(nextWs.workspace.id);
+      setOwnerId(nextWs.workspace.id);
+    } else {
+      setActiveWorkspace(null);
+      apiClient.setWorkspaceId(null);
+      if (currentUser) {
+        setOwnerId(currentUser.id);
+      }
+    }
+  };
+
   const activeMembership = workspaces.find((w) => w.workspace.id === activeWorkspaceId);
   const access = accessFor(activeMembership);
   const can = (module: PermissionModule, operation: ModuleOperation = 'view') =>
@@ -292,11 +332,11 @@ function AppContent({
     setActiveTab(tab);
   };
   // A tab the member may not view (e.g. after switching workspace) falls back to the first
-  // visible one, so hidden modules are never rendered. Settings closes the order and is always
-  // visible, so a tab is always found.
+  // visible one, so hidden modules are never rendered.
   const currentTab = canSeeTab(activeTab, can)
     ? activeTab
-    : NAV_TAB_ORDER.find((tab) => canSeeTab(tab, can))!;
+    : /* v8 ignore next -- Settings is in the order and always visible, so a tab is always found */
+      (NAV_TAB_ORDER.find((tab) => canSeeTab(tab, can)) ?? 'settings');
   if (authStatus === 'checking') {
     return (
       <main
@@ -326,24 +366,6 @@ function AppContent({
       />
     );
   }
-
-  // Defined after the session guard: the views that can delete a workspace only render for a
-  // signed-in user, so `currentUser` is known here.
-  const handleDeleteWorkspace = async (workspaceId: string) => {
-    await apiClient.deleteWorkspace(workspaceId);
-    const remaining = workspaces.filter((w) => w.workspace.id !== workspaceId);
-    setWorkspaces(remaining);
-    const nextWs = remaining[0];
-    if (nextWs) {
-      setActiveWorkspace(nextWs.workspace.id);
-      apiClient.setWorkspaceId(nextWs.workspace.id);
-      setOwnerId(nextWs.workspace.id);
-    } else {
-      setActiveWorkspace(null);
-      apiClient.setWorkspaceId(null);
-      setOwnerId(currentUser.id);
-    }
-  };
 
   return (
     <PermissionsProvider access={access}>
@@ -436,6 +458,13 @@ function AppContent({
             onOpenIntegrations={can('integrations') ? openIntegrations : undefined}
           />
         )}
+        {currentTab === 'e2eSources' && (
+          <E2eSourcesPage
+            key={activeWorkspaceId ?? 'no-workspace'}
+            apiClient={apiClient}
+            isReadOnly={readOnly('e2e')}
+          />
+        )}
         {currentTab === 'e2e' && (
           <E2eView
             key={`${activeWorkspaceId ?? 'no-workspace'}:${e2eSeed?.id ?? ''}`}
@@ -478,6 +507,16 @@ function AppContent({
             apiClient={apiClient}
             workspaceId={activeWorkspaceId}
             isReadOnly={readOnly('releaseNotes')}
+          />
+        )}
+        {DEVELOPMENT_SECTION_BY_TAB[currentTab] && (
+          <DevelopmentView
+            key={activeWorkspaceId ?? 'no-workspace'}
+            apiClient={apiClient}
+            workspaceId={activeWorkspaceId}
+            isReadOnly={readOnly('development')}
+            section={DEVELOPMENT_SECTION_BY_TAB[currentTab]}
+            onSelectSection={(section) => setActiveTab(DEVELOPMENT_TAB_BY_SECTION[section])}
           />
         )}
         {currentTab === 'design' && (

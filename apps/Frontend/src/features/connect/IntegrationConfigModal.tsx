@@ -9,33 +9,10 @@ import type { ApiClient, IntegrationCategory, UserIntegrationDto } from '../../l
 import { useI18n, type TranslationKey } from '../../lib/i18n/index.js';
 import { getLlmModelCatalog } from './llm-model-catalog.js';
 import { usePermissions } from '../workspaces/permissions.js';
+import { TelegramConfigForm } from './TelegramIntegrationPanel.js';
+import { readTelegramSettings, type TelegramSettingsValue } from './telegram-settings.js';
 
 const CUSTOM_MODEL_VALUE = '__custom_model__';
-const boardFieldLabels = {
-  'pt-BR': {
-    organization: 'Organização',
-    project: 'Projeto',
-    apiKey: 'API key',
-    boardId: 'Board ID',
-    jiraUrl: 'URL do Jira Cloud',
-    jiraUrlPlaceholder: 'https://empresa.atlassian.net',
-    email: 'Email',
-    projectKey: 'Chave do projeto',
-    projectNumber: 'Número do projeto',
-  },
-  'en-US': {
-    organization: 'Organization',
-    project: 'Project',
-    apiKey: 'API key',
-    boardId: 'Board ID',
-    jiraUrl: 'Jira Cloud URL',
-    jiraUrlPlaceholder: 'https://company.atlassian.net',
-    email: 'Email',
-    projectKey: 'Project key',
-    projectNumber: 'Project number',
-  },
-} as const;
-
 export interface IntegrationCardItem {
   readonly id: string;
   readonly providerId: string;
@@ -75,12 +52,16 @@ export function IntegrationConfigModal({
   isReadOnly = false,
   className,
 }: IntegrationConfigModalProps) {
-  const { t, locale } = useI18n();
-  const boardLabels = boardFieldLabels[locale];
+  const { t, messages } = useI18n();
+  const boardLabels = messages.integrationFields;
   const canRemoveIntegrations = usePermissions().can('integrations', 'delete');
   const [isEnabled, setIsEnabled] = useState(true);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [isCustomModel, setIsCustomModel] = useState(false);
+  // Telegram keeps booleans and nested values, which the string settings above cannot hold.
+  const [telegramSettings, setTelegramSettings] = useState<TelegramSettingsValue>(() =>
+    readTelegramSettings(),
+  );
   const [secret, setSecret] = useState('');
   const [probeResult, setProbeResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [isProbing, setIsProbing] = useState(false);
@@ -110,6 +91,7 @@ export function IntegrationConfigModal({
         setIsCustomModel(false);
       }
       setSettings(strSettings);
+      setTelegramSettings(readTelegramSettings(currentConfig?.settings));
       setSecret('');
       setProbeResult(null);
       setErrorMessage(null);
@@ -133,6 +115,8 @@ export function IntegrationConfigModal({
   const updateSetting = (key: string, value: string) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
   };
+  const isTelegram = integration.providerId === 'telegram';
+  const settingsToSave: Record<string, unknown> = isTelegram ? { ...telegramSettings } : settings;
 
   const handleProbe = async () => {
     if (!apiClient) return;
@@ -142,7 +126,7 @@ export function IntegrationConfigModal({
 
     try {
       const result = await apiClient.testIntegration(integration.category, integration.providerId, {
-        settings,
+        settings: settingsToSave,
         secret: secret.trim() || undefined,
       });
       setProbeResult(result);
@@ -163,7 +147,7 @@ export function IntegrationConfigModal({
     try {
       const saved = await apiClient.saveIntegration(integration.category, integration.providerId, {
         isEnabled,
-        settings,
+        settings: settingsToSave,
         secret: secret.trim() || undefined,
       });
       onSaveSuccess(saved);
@@ -206,7 +190,8 @@ export function IntegrationConfigModal({
     >
       <div
         className={cn(
-          'relative w-full max-w-lg rounded-xl border border-border bg-surface-1 p-6 shadow-2xl overflow-y-auto max-h-[90vh]',
+          'relative w-full rounded-xl border border-border bg-surface-1 p-6 shadow-2xl overflow-y-auto max-h-[90vh]',
+          isTelegram ? 'max-w-2xl' : 'max-w-lg',
           className,
         )}
       >
@@ -494,39 +479,6 @@ export function IntegrationConfigModal({
                   onChange={(event) => updateSetting('projectNumber', event.target.value)}
                 />
               </div>
-              <div>
-                <label
-                  htmlFor="cfg-gh-branch"
-                  className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
-                >
-                  Branch
-                </label>
-                <Input
-                  id="cfg-gh-branch"
-                  value={settings.branch ?? 'main'}
-                  onChange={(event) => updateSetting('branch', event.target.value)}
-                  placeholder="main"
-                  autoComplete="off"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="cfg-gh-repo"
-                  className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
-                >
-                  {t('connect.repositoryProject')}
-                </label>
-                <Input
-                  id="cfg-gh-repo"
-                  name="gh-repo"
-                  type="text"
-                  placeholder={t('connect.repositoryPlaceholder')}
-                  value={settings.repo ?? ''}
-                  onChange={(e) => updateSetting('repo', e.target.value)}
-                  autoComplete="off"
-                  data-1p-ignore="true"
-                />
-              </div>
             </>
           )}
 
@@ -557,7 +509,7 @@ export function IntegrationConfigModal({
                 htmlFor="cfg-cloud-model"
                 className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
               >
-                {modelCatalog.label}
+                {t('connect.providerModel', { provider: modelCatalog.label })}
               </label>
               <Select
                 id="cfg-cloud-model"
@@ -621,7 +573,7 @@ export function IntegrationConfigModal({
                     htmlFor="cfg-ollama-model"
                     className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
                   >
-                    {modelCatalog.label}
+                    {t('connect.providerModel', { provider: modelCatalog.label })}
                   </label>
                   <Select
                     id="cfg-ollama-model"
@@ -661,6 +613,22 @@ export function IntegrationConfigModal({
             </>
           )}
 
+          {isTelegram && (
+            <TelegramConfigForm
+              value={telegramSettings}
+              onChange={setTelegramSettings}
+              apiClient={apiClient}
+              isReadOnly={isReadOnly}
+              canRemove={canRemoveIntegrations}
+              isSaved={Boolean(currentConfig)}
+              secret={secret}
+              onSecretChange={setSecret}
+              hasExistingSecret={hasExistingSecret}
+              isEnabled={isEnabled}
+              onEnabledChange={setIsEnabled}
+            />
+          )}
+
           {/* Generic fallback for other integrations (PostgreSQL, Slack, SharePoint, REST API) */}
           {![
             'azure_devops_wiki',
@@ -676,6 +644,7 @@ export function IntegrationConfigModal({
             'claude',
             'groq',
             'ollama',
+            'telegram',
           ].includes(integration.providerId) && (
             <div>
               <label
@@ -696,53 +665,57 @@ export function IntegrationConfigModal({
             </div>
           )}
 
-          {/* Credentials / Secret input */}
-          <div>
-            <label
-              htmlFor="cfg-secret"
-              className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
-            >
-              {t('connect.secretLabel')}
-            </label>
-            <Input
-              id="cfg-secret"
-              name="integration-secret-pat"
-              type="password"
-              placeholder={
-                hasExistingSecret
-                  ? t('connect.keepSecretPlaceholder')
-                  : t('connect.secretPlaceholder')
-              }
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
-              disabled={isReadOnly}
-              autoComplete="new-password"
-              data-1p-ignore="true"
-              data-lpignore="true"
-            />
-            {hasExistingSecret && (
-              <span className="mt-1 block text-[11px] text-muted">
-                {t('connect.existingSecretHelp')}
-              </span>
-            )}
-          </div>
+          {/* Credentials / Secret input (Telegram has its own, inside its Connection section) */}
+          {!isTelegram && (
+            <div>
+              <label
+                htmlFor="cfg-secret"
+                className="mb-1 block text-xs font-medium text-[var(--text-secondary)]"
+              >
+                {t('connect.secretLabel')}
+              </label>
+              <Input
+                id="cfg-secret"
+                name="integration-secret-pat"
+                type="password"
+                placeholder={
+                  hasExistingSecret
+                    ? t('connect.keepSecretPlaceholder')
+                    : t('connect.secretPlaceholder')
+                }
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+                disabled={isReadOnly}
+                autoComplete="new-password"
+                data-1p-ignore="true"
+                data-lpignore="true"
+              />
+              {hasExistingSecret && (
+                <span className="mt-1 block text-[11px] text-muted">
+                  {t('connect.existingSecretHelp')}
+                </span>
+              )}
+            </div>
+          )}
 
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              id="cfg-enable"
-              type="checkbox"
-              checked={isEnabled}
-              onChange={(e) => setIsEnabled(e.target.checked)}
-              disabled={isReadOnly}
-              className="h-4 w-4 rounded border-border bg-surface-2 text-accent-foreground focus:ring-1 focus:ring-border-accent disabled:opacity-50"
-            />
-            <label
-              htmlFor="cfg-enable"
-              className="text-xs text-[var(--text-secondary)] select-none"
-            >
-              {t('connect.enableIntegration')}
-            </label>
-          </div>
+          {!isTelegram && (
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                id="cfg-enable"
+                type="checkbox"
+                checked={isEnabled}
+                onChange={(e) => setIsEnabled(e.target.checked)}
+                disabled={isReadOnly}
+                className="h-4 w-4 rounded border-border bg-surface-2 text-accent-foreground focus:ring-1 focus:ring-border-accent disabled:opacity-50"
+              />
+              <label
+                htmlFor="cfg-enable"
+                className="text-xs text-[var(--text-secondary)] select-none"
+              >
+                {t('connect.enableIntegration')}
+              </label>
+            </div>
+          )}
 
           {isReadOnly ? (
             <div className="flex items-center justify-between gap-2 pt-3 border-t border-border">
@@ -752,7 +725,14 @@ export function IntegrationConfigModal({
               </Button>
             </div>
           ) : (
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-border">
+            <div
+              className={cn(
+                'flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-border',
+                // The actions stay in view while the long Telegram form scrolls.
+                isTelegram &&
+                  'sticky -bottom-6 z-10 -mx-6 -mb-6 rounded-b-xl bg-surface-1 px-6 pb-6',
+              )}
+            >
               <div className="flex items-center gap-2">
                 <Button
                   type="button"

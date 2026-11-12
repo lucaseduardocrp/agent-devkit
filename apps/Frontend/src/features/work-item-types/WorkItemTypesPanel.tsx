@@ -14,60 +14,6 @@ import {
   workItemTypePalette,
   type WorkItemType,
 } from './work-item-types.js';
-
-const copy = {
-  'pt-BR': {
-    title: 'Tipos de item',
-    description:
-      'Defina nome, cor e ícone de cada tipo. As cores valem para os cards do backlog e para as issues.',
-    label: 'Nome',
-    key: 'Chave',
-    color: 'Cor',
-    icon: 'Ícone',
-    aliases: 'Apelidos (separados por vírgula)',
-    add: 'Adicionar tipo',
-    remove: 'Remover tipo',
-    save: 'Salvar tipos',
-    reset: 'Restaurar padrão',
-    saved: 'Tipos salvos.',
-    loadError: 'Não foi possível carregar os tipos.',
-    saveError: 'Não foi possível salvar os tipos.',
-    newType: 'Novo tipo',
-    preview: 'Pré-visualização',
-    customColor: 'Cor personalizada',
-    chooseIcon: 'Escolher ícone',
-    searchIcons: 'Pesquisar ícones',
-    noIcons: 'Nenhum ícone encontrado.',
-    close: 'Fechar',
-    loading: 'Carregando tipos...',
-  },
-  'en-US': {
-    title: 'Work item types',
-    description:
-      'Set the name, color and icon of each type. Colors apply to backlog cards and issues.',
-    label: 'Name',
-    key: 'Key',
-    color: 'Color',
-    icon: 'Icon',
-    aliases: 'Aliases (comma separated)',
-    add: 'Add type',
-    remove: 'Remove type',
-    save: 'Save types',
-    reset: 'Restore defaults',
-    saved: 'Types saved.',
-    loadError: 'Could not load the types.',
-    saveError: 'Could not save the types.',
-    newType: 'New type',
-    preview: 'Preview',
-    customColor: 'Custom color',
-    chooseIcon: 'Choose icon',
-    searchIcons: 'Search icons',
-    noIcons: 'No icons found.',
-    close: 'Close',
-    loading: 'Loading types...',
-  },
-} as const;
-
 const slug = (value: string) =>
   value
     .normalize('NFD')
@@ -84,8 +30,8 @@ interface Props {
 }
 
 export function WorkItemTypesPanel({ apiClient, canEdit, onSaved }: Props) {
-  const { locale } = useI18n();
-  const c = copy[locale];
+  const { messages } = useI18n();
+  const c = messages.workItemTypes;
   const [types, setTypes] = useState<WorkItemType[]>([]);
   const [aliasDrafts, setAliasDrafts] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -247,9 +193,7 @@ export function WorkItemTypesPanel({ apiClient, canEdit, onSaved }: Props) {
               {c.aliases}
               <Input
                 className="mt-1"
-                // aliasDrafts and types change together, so the draft always exists.
-                /* v8 ignore next */
-                value={aliasDrafts[index] ?? ''}
+                value={aliasDrafts[index]}
                 disabled={!canEdit}
                 onChange={(event) =>
                   setAliasDrafts((current) =>
@@ -353,67 +297,63 @@ export function WorkItemTypesPanel({ apiClient, canEdit, onSaved }: Props) {
           </Button>
         </div>
       )}
-      <Modal
-        open={iconPickerIndex !== null}
-        onClose={() => setIconPickerIndex(null)}
-        labelledBy="work-item-icon-title"
-      >
-        <div className="flex h-[min(80vh,640px)] w-[min(94vw,560px)] flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-5">
-          <div className="flex items-center justify-between">
-            <h2 id="work-item-icon-title" className="text-sm font-semibold">
-              {c.chooseIcon}
-            </h2>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={c.close}
-              onClick={() => setIconPickerIndex(null)}
-            >
-              <i className="ti ti-x" aria-hidden="true" />
-            </Button>
+      {iconPickerIndex !== null && (
+        <Modal open onClose={() => setIconPickerIndex(null)} labelledBy="work-item-icon-title">
+          <div className="flex h-[min(80vh,640px)] w-[min(94vw,560px)] flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-5">
+            <div className="flex items-center justify-between">
+              <h2 id="work-item-icon-title" className="text-sm font-semibold">
+                {c.chooseIcon}
+              </h2>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={c.close}
+                onClick={() => setIconPickerIndex(null)}
+              >
+                <i className="ti ti-x" aria-hidden="true" />
+              </Button>
+            </div>
+            <Input
+              autoFocus
+              aria-label={c.searchIcons}
+              placeholder={c.searchIcons}
+              leftIcon={<i className="ti ti-search" aria-hidden="true" />}
+              value={iconSearch}
+              onChange={(event) => setIconSearch(event.target.value)}
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+              {filteredIcons.length === 0 ? (
+                <p className="py-8 text-center text-sm text-[var(--text-muted)]">{c.noIcons}</p>
+              ) : (
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-2">
+                  {filteredIcons.map((icon) => (
+                    <Button
+                      key={icon}
+                      type="button"
+                      variant="ghost"
+                      aria-label={icon}
+                      title={icon}
+                      className={`flex h-auto flex-col gap-1 px-1 py-2 text-[10px] ${
+                        types[iconPickerIndex]?.icon === icon
+                          ? 'bg-[var(--fill-ghost-hover)] ring-2 ring-[var(--border-accent)]'
+                          : ''
+                      }`}
+                      onClick={() => {
+                        change(iconPickerIndex, { icon });
+                        setIconPickerIndex(null);
+                      }}
+                    >
+                      <i className={`ti ti-${icon} text-xl`} aria-hidden="true" />
+                      <span className="w-full truncate">{icon}</span>
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-          <Input
-            autoFocus
-            aria-label={c.searchIcons}
-            placeholder={c.searchIcons}
-            leftIcon={<i className="ti ti-search" aria-hidden="true" />}
-            value={iconSearch}
-            onChange={(event) => setIconSearch(event.target.value)}
-          />
-          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-            {filteredIcons.length === 0 ? (
-              <p className="py-8 text-center text-sm text-[var(--text-muted)]">{c.noIcons}</p>
-            ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-2">
-                {filteredIcons.map((icon) => (
-                  <Button
-                    key={icon}
-                    type="button"
-                    variant="ghost"
-                    aria-label={icon}
-                    title={icon}
-                    className={`flex h-auto flex-col gap-1 px-1 py-2 text-[10px] ${
-                      iconPickerIndex !== null && types[iconPickerIndex]?.icon === icon
-                        ? 'bg-[var(--fill-ghost-hover)] ring-2 ring-[var(--border-accent)]'
-                        : ''
-                    }`}
-                    onClick={() => {
-                      // The picker is only open while an index is chosen.
-                      /* v8 ignore next */
-                      if (iconPickerIndex !== null) change(iconPickerIndex, { icon });
-                      setIconPickerIndex(null);
-                    }}
-                  >
-                    <i className={`ti ti-${icon} text-xl`} aria-hidden="true" />
-                    <span className="w-full truncate">{icon}</span>
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </Modal>
+        </Modal>
+      )}
     </div>
   );
 }

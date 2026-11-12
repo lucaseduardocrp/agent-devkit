@@ -118,7 +118,7 @@ describe('BrainView assistants', () => {
     const agentSelect = within(sidebar).getByLabelText('Selecionar um agente');
     await within(agentSelect).findByRole('option', { name: 'Writer' });
     fireEvent.change(agentSelect, { target: { value: 'writer' } });
-    const prompt = within(sidebar).getByLabelText<HTMLTextAreaElement>(/Peça para criar/);
+    const prompt = within(sidebar).getByLabelText(/Peça para criar/) as HTMLTextAreaElement;
     fireEvent.change(prompt, { target: { value: 'Draft' } });
 
     view.rerender(<BrainView initialDocuments={[appDoc]} />);

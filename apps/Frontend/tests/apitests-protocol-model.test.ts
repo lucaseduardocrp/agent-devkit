@@ -212,9 +212,9 @@ describe('GraphQL schema', () => {
         result('{', { response: { headers: {}, bodyPreview: '{', truncated: true } }),
       ),
     ).toThrow('truncated');
-    expect(() => parseIntrospection(result('<html>'))).toThrow('HTTP 200: not JSON');
+    expect(() => parseIntrospection(result('<html>'))).toThrow('HTTP 200: a resposta não é JSON');
     expect(() => parseIntrospection(result('{}', { status: null, response: undefined }))).toThrow(
-      'HTTP —: not JSON',
+      'HTTP —: a resposta não é JSON',
     );
     expect(() => parseIntrospection(result('{"errors":[{"message":"no"}]}'))).toThrow('no');
     expect(() => parseIntrospection(result('{"data":{}}', { status: null }))).toThrow(

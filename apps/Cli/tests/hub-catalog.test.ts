@@ -57,12 +57,15 @@ describe('hub catalog', () => {
     await expect(fetchLatestHubIndex(limited)).resolves.toEqual(stale);
     const offline = serve(() => Promise.reject(new Error('offline')));
     await expect(fetchLatestHubIndex(offline)).resolves.toEqual(stale);
-    const other = 'a'.repeat(40);
-    const unpublished = serve(() => Promise.resolve(new Response(other)));
+
+    const unpublished = vi.fn((url: string | URL | Request) => {
+      const href = String(url);
+      if (href.startsWith('https://api.github.com/')) return Promise.resolve(new Response(sha));
+      if (href.endsWith('/main/index.json')) return Promise.resolve(Response.json(stale));
+      return Promise.resolve(new Response('missing', { status: 404 }));
+    });
     await expect(fetchLatestHubIndex(unpublished)).resolves.toEqual(stale);
-    expect(unpublished.mock.calls.map(([url]) => String(url))).toContain(
-      `https://raw.githubusercontent.com/lucaseduardocrp/agent-devkit-hub/${other}/index.json`,
-    );
+    expect(unpublished).toHaveBeenCalledTimes(3);
   });
 
   it('refuses skill paths that escape the skill folder', async () => {
@@ -145,11 +148,12 @@ describe('hub catalog', () => {
 
   it('compares versions against a >= floor', () => {
     expect(satisfiesFloor('0.2.0', '>=0.1')).toBe(true);
-    expect(satisfiesFloor('0.2.5', '>=0.2')).toBe(true);
     expect(satisfiesFloor('0.2.0', '>=0.2.0')).toBe(true);
     expect(satisfiesFloor('0.2.0', '>=0.2.1')).toBe(false);
     expect(satisfiesFloor('1.0.0', '>=0.9.9')).toBe(true);
     expect(satisfiesFloor('0.1.0', undefined)).toBe(true);
+    expect(satisfiesFloor('0.2.0', '>=0.2')).toBe(true);
+    expect(satisfiesFloor('0.2.1', '>=0.2')).toBe(true);
     expect(satisfiesFloor('dev', '>=1.0.0')).toBe(true);
   });
 });

@@ -16,7 +16,7 @@ description: Use when the user wants test cases, a test plan, QA coverage or an 
 4. Follow the returned `instruction` **exactly**. It is the same contract ADK's own model uses:
    - a JSON array of `{ title, description, steps: [{ order, action, expectedResult }] }`;
    - `description` is an object, never free text: `{ useCase, preconditions, inputData,
-     expectedResult, postconditions, flow }`. Write plain text in each field (no HTML, no `##`).
+expectedResult, postconditions, flow }`. Write plain text in each field (no HTML, no `##`).
      ADK renders it into the team's default template: bold `## Caso de uso`, `## Pré-condições`,
      `## Dados de entrada`, `## Resultado esperado`, `## Pós-condições` and a `## Fluxo do Processo`
      box diagram. `flow` has 2-8 short nodes in execution order, `{ "step": "Acessar Painel" }` or

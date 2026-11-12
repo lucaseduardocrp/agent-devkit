@@ -108,7 +108,7 @@ describe('NotificationsView', () => {
     expect(row).toHaveTextContent(
       'Issue assigned to a person · The person it was assigned to, Pessoas escolhidas: 1 · E-mail',
     );
-    expect(within(row).getByRole('switch').checked).toBe(true);
+    expect((within(row).getByRole('switch') as HTMLInputElement).checked).toBe(true);
 
     expect(
       within(screen.getByTestId('channel-card-email')).getByText('Pronto'),
@@ -140,7 +140,7 @@ describe('NotificationsView', () => {
     expect(second).toHaveTextContent('Evento desconhecido');
     expect(second).toHaveTextContent('Pessoas escolhidas: 1');
     expect(second).toHaveTextContent('pigeon');
-    expect(within(second).getByRole('switch').checked).toBe(false);
+    expect((within(second).getByRole('switch') as HTMLInputElement).checked).toBe(false);
   });
 
   it('invites to create the first rule', async () => {
@@ -184,7 +184,7 @@ describe('NotificationsView', () => {
     expect(screen.queryByTestId('notification-new-rule')).toBeNull();
     expect(screen.queryByTestId('rule-edit-r1')).toBeNull();
     expect(screen.queryByTestId('channel-test-email')).toBeNull();
-    expect(within(row).getByRole('switch').disabled).toBe(true);
+    expect((within(row).getByRole('switch') as HTMLInputElement).disabled).toBe(true);
   });
 
   it('turns a rule on or off, and says so when that fails', async () => {
@@ -196,7 +196,9 @@ describe('NotificationsView', () => {
       expect.objectContaining({ enabled: false, name: 'Tell the assignee' }),
       'r1',
     );
-    await waitFor(() => expect(screen.getByTestId('rule-toggle-r1').checked).toBe(false));
+    await waitFor(() =>
+      expect((screen.getByTestId('rule-toggle-r1') as HTMLInputElement).checked).toBe(false),
+    );
 
     apiClient.saveNotificationRule.mockRejectedValueOnce(new Error('No access'));
     fireEvent.click(screen.getByTestId('rule-toggle-r1'));
@@ -331,7 +333,7 @@ describe('NotificationsView', () => {
     expect(
       screen.getByRole('heading', { name: 'Editar regra de notificação' }),
     ).toBeInTheDocument();
-    expect(screen.getByTestId('rule-name').value).toBe('Tell the assignee');
+    expect((screen.getByTestId('rule-name') as HTMLInputElement).value).toBe('Tell the assignee');
     fireEvent.change(screen.getByTestId('rule-name'), { target: { value: 'Renamed' } });
     fireEvent.click(screen.getByTestId('rule-save'));
     expect(await screen.findByText('Renamed')).toBeInTheDocument();
@@ -421,7 +423,7 @@ describe('NotificationRuleModal', () => {
     open({
       rule: rule({ channels: ['pigeon'], recipients: { subject: false, userIds: ['u-gone'] } }),
     });
-    expect(screen.getByTestId('channel-pigeon').checked).toBe(true);
+    expect((screen.getByTestId('channel-pigeon') as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByTestId('channel-pigeon'));
     expect(screen.queryByTestId('channel-pigeon')).toBeNull();
   });
@@ -529,14 +531,14 @@ describe('NotificationActionEditor', () => {
   it('shows who the node tells even if they left, and can be read-only', () => {
     edit({ ...config, userIds: ['u-gone'] }, { disabled: true });
     expect(screen.getByText('Alguém que saiu')).toBeInTheDocument();
-    expect(screen.getByTestId('node-subject').disabled).toBe(true);
-    expect(screen.getByTestId('node-role-assignee').disabled).toBe(true);
+    expect((screen.getByTestId('node-subject') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByTestId('node-role-assignee') as HTMLInputElement).disabled).toBe(true);
   });
 
   it('says when the channels and members could not be loaded', () => {
     edit(config, { options: { channels: [], members: [], failed: true } });
     expect(screen.getByRole('status')).toHaveTextContent('Integrações');
     // The channel the node uses is still shown, so it can be seen and removed.
-    expect(screen.getByTestId('channel-email').checked).toBe(true);
+    expect((screen.getByTestId('channel-email') as HTMLInputElement).checked).toBe(true);
   });
 });

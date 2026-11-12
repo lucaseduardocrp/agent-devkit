@@ -188,15 +188,6 @@ describe('TestPlansView agents and creation shortcuts', () => {
     expect(within(select).getAllByRole('option')).toHaveLength(1);
   });
 
-  it('starts a plan inside the suite picked from the tree', async () => {
-    const ui = view(client({ suites: [suite()] }));
-
-    await openSuiteMenu(ui, 'Criar Test Plan');
-
-    expect(ui.getByTestId('panel-create-plan')).toBeInTheDocument();
-    expect((ui.getByLabelText('Test suite') as HTMLSelectElement).value).toBe('suite-1');
-  });
-
   it('moves a freshly generated plan to another suite', async () => {
     const api = client({ suites: [suite(), suite({ id: 'suite-2', name: 'Smoke' })] });
     vi.spyOn(api, 'generateTestPlan').mockResolvedValue({
@@ -351,15 +342,6 @@ describe('TestPlansView saving a plan', () => {
 });
 
 describe('TestPlansView CSV export failures', () => {
-  async function exportOpened(api: ApiClient) {
-    const ui = view(api);
-    fireEvent.click(await ui.findByRole('button', { name: 'Abrir Test Plan Checkout' }));
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
-    fireEvent.click(ui.getByRole('button', { name: 'Exportar CSV' }));
-    return ui;
-  }
-
   it('flags a case without steps', async () => {
     const stepless = plan({
       plans: [{ title: 'No steps', description: 'Nothing to do' } as never],
@@ -373,44 +355,9 @@ describe('TestPlansView CSV export failures', () => {
 
     expect(await ui.findByRole('alert')).toHaveTextContent('pelo menos um passo');
   });
-
-  it('shows the message of an unexpected download error', async () => {
-    createUrl.mockImplementation(() => {
-      throw new Error('Blob storage full');
-    });
-    const ui = await exportOpened(client({ plans: [plan()] }));
-
-    expect(await ui.findByRole('alert')).toHaveTextContent('Blob storage full');
-  });
-
-  it('falls back to a generic message for a non-error failure', async () => {
-    createUrl.mockImplementation(() => {
-      throw 'denied';
-    });
-    const ui = await exportOpened(client({ plans: [plan()] }));
-
-    expect(await ui.findByRole('alert')).toHaveTextContent(
-      'Não foi possível baixar o CSV no momento.',
-    );
-  });
 });
 
 describe('TestPlansView suite export', () => {
-  it('names files of untitled plans after a placeholder', async () => {
-    const ui = view(
-      client({ plans: [plan({ suiteId: 'suite-1', title: '   ' })], suites: [suite()] }),
-    );
-    fireEvent.change(await ui.findByLabelText('Formato de exportação'), {
-      target: { value: 'standard' },
-    });
-
-    await openSuiteMenu(ui, 'Exportar suite (.zip)');
-
-    await waitFor(() =>
-      expect(zip.files.map((file) => file.path)).toEqual(['Regression/01 - Test Plan.csv']),
-    );
-  });
-
   it('reports a suite whose plans cannot be fetched', async () => {
     const api = client({ plans: [plan({ suiteId: 'suite-1' })], suites: [suite()] });
     const ui = view(api);

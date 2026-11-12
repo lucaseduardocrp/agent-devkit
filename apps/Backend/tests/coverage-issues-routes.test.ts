@@ -156,6 +156,23 @@ describe('issue routes: context and permissions', () => {
     expect((await request(app).get('/inbox').expect(401)).body.code).toBe('UNAUTHORIZED');
   });
 
+  it('lists one page of issues, searched by what a select types', async () => {
+    context = admin;
+    for (const title of ['Fix login', 'Billing', 'Login page'])
+      await store.create('ws', 'user-a', { title });
+    const app = build();
+    const page = await request(app)
+      .get('/issues')
+      .query({ q: ' login ', pageSize: '1' })
+      .expect(200);
+    expect(page.body).toMatchObject({ total: 2, page: 1, pageSize: 1 });
+    expect(page.body.issues).toHaveLength(1);
+    expect((await request(app).get('/issues').query({ page: '1' }).expect(200)).body.total).toBe(3);
+    expect(
+      (await request(app).get('/issues').query({ pageSize: '1000' }).expect(400)).body.code,
+    ).toBe('VALIDATION_ERROR');
+  });
+
   it('works without a context resolver when context is already set', async () => {
     await store.create('ws', 'user-a', { title: 'Existing' });
     const response = await request(build(false)).get('/issues').expect(200);

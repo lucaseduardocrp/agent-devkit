@@ -133,7 +133,9 @@ export function AgentTopology({
     const live = liveStatus === 'live';
     view.current = { ids: new Set(activeRuns.map((run) => run.id)), loading: isLoading, live };
     if (!previous || previous.loading || isLoading || !previous.live || !live) return;
-    const arrived = activeRuns.filter((run) => run.status === 'queued' && !previous.ids.has(run.id));
+    const arrived = activeRuns.filter(
+      (run) => run.status === 'queued' && !previous.ids.has(run.id),
+    );
     if (arrived.length === 0) return;
     setArrivedRunIds(arrived.map((run) => run.id));
     setAnnouncement(
@@ -173,7 +175,10 @@ export function AgentTopology({
             {waitingCount} {t('agents.waitingForUser')}
           </Badge>
           {liveStatus && (
-            <Badge variant={liveStatus === 'live' ? 'success' : 'outline'} data-testid="topology-live">
+            <Badge
+              variant={liveStatus === 'live' ? 'success' : 'outline'}
+              data-testid="topology-live"
+            >
               <span
                 aria-hidden="true"
                 className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${

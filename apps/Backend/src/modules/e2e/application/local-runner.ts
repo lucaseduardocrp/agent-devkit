@@ -95,6 +95,9 @@ export class LocalE2eRunner {
             url: input.url,
             // Through a tunnel `url` is already the localhost origin; the token is the tunnel's.
             accessToken: input.transportUrl ? null : (input.accessToken ?? null),
+            ...(input.credentials ? { credentials: input.credentials } : {}),
+            ...(input.focus ? { focus: input.focus } : {}),
+            ...(input.thorough ? { thorough: true } : {}),
           },
           input.signal,
         );
@@ -209,6 +212,7 @@ function runInput(input: E2eRunInput): E2eRunnerTaskInput {
     locale: input.locale,
     credentials: input.credentials,
     accessToken: input.localOrigin ? null : (input.accessToken ?? null),
+    ...(input.variables ? { variables: input.variables } : {}),
   };
 }
 

@@ -150,9 +150,9 @@ describe('PublishTestSuiteModal field values', () => {
     const flow = within(region).getByRole('combobox', { name: /Fluxo do usuário/ });
     expect(flow).toHaveProperty('value', 'Principal');
     const area = within(region).getByRole('textbox', { name: /Área/ });
-    expect(area).toHaveAttribute('placeholder', 'Usar origem: Description');
+    expect(area).toHaveAttribute('placeholder', 'Usar origem: Descrição');
     const kind = within(region).getByRole('combobox', { name: /Tipo/ });
-    expect(within(kind).getAllByRole('option')[0]).toHaveTextContent('Usar origem: Title');
+    expect(within(kind).getAllByRole('option')[0]).toHaveTextContent('Usar origem: Título');
     // A field missing from the catalog falls back to its id and free text.
     expect(within(region).getByRole('textbox', { name: /Custom\.Gone/ })).toHaveProperty(
       'value',

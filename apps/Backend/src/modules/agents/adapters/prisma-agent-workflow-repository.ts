@@ -43,6 +43,7 @@ const workflowToolsets = new Set<AgentWorkflowToolset>([
   'design',
   'e2e',
   'releasenotes',
+  'development',
   'integrationtests',
   'loadtests',
   'audit',

@@ -15,6 +15,7 @@ import { createPortal } from 'react-dom';
 import { cn } from '../../lib/utils.js';
 import { Input, inputVariants } from './input.js';
 import { useInfiniteList, type InfiniteListProps } from './use-infinite-list.js';
+import { useI18n } from '../../lib/i18n/index.js';
 
 export interface SearchableSelectOption {
   readonly value: string;
@@ -81,7 +82,7 @@ export function SearchableSelect({
   hasMore,
   loadingMore = false,
   onLoadMore,
-  loadingMessage = 'Loading…',
+  loadingMessage,
   onQueryChange,
   localFilter = true,
   'data-testid': testId,
@@ -116,6 +117,7 @@ export function SearchableSelect({
   readonly localFilter?: boolean;
   readonly 'data-testid'?: string;
 } & InfiniteListProps) {
+  const { t } = useI18n();
   const id = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -128,6 +130,7 @@ export function SearchableSelect({
   // parent (a modal body, a card) can neither cut it off nor grow a horizontal scrollbar.
   const place = useCallback(() => {
     const field = anchor.current;
+    /* v8 ignore next -- the anchor is always mounted while the list is open */
     if (!field) return;
     const box = field.getBoundingClientRect();
     const below = window.innerHeight - box.bottom - 8;
@@ -218,7 +221,7 @@ export function SearchableSelect({
       className="flex items-center gap-2 px-3 py-2 text-xs text-[var(--text-muted)]"
     >
       <i className="ti ti-loader-2 animate-spin" aria-hidden="true" />
-      {loadingMessage}
+      {loadingMessage ?? t('common.loading')}
     </li>
   ) : null;
 

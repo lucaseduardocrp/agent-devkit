@@ -420,10 +420,10 @@ function CapturesEditor({
             disabled={readOnly}
             onChange={(event) => update(index, { source: event.target.value as Capture['source'] })}
           >
-            <option value="json">JSON</option>
-            <option value="header">Header</option>
-            <option value="status">Status</option>
-            <option value="body">Body</option>
+            <option value="json">{t('apiTests.assertionSources.json')}</option>
+            <option value="header">{t('apiTests.assertionSources.header')}</option>
+            <option value="status">{t('apiTests.assertionSources.status')}</option>
+            <option value="body">{t('apiTests.assertionSources.body')}</option>
           </Select>
           <Input
             className="font-mono"

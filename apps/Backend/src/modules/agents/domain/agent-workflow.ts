@@ -22,6 +22,7 @@ export type AgentWorkflowToolset =
   | 'design'
   | 'e2e'
   | 'releasenotes'
+  | 'development'
   | 'integrationtests'
   | 'loadtests'
   | 'audit'

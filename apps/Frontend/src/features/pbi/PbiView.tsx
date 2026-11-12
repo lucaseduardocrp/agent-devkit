@@ -21,7 +21,7 @@ import { Modal } from '../../components/ui/modal.js';
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog.js';
 import { UnsavedChangesDialog } from '../../components/ui/unsaved-changes-dialog.js';
 import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/skeleton.js';
-import { useI18n } from '../../lib/i18n/index.js';
+import { getMessages, useI18n } from '../../lib/i18n/index.js';
 import { parseMarkdownBlocks, renderInlineContent } from '../brain/markdown-parser.js';
 import { useActivityRunner } from '../activities/ActivityCenter.js';
 import type { PbiComment, PbiFields, PbiItem, PbiProvider, PbiProviderId } from './pbi-types.js';
@@ -110,7 +110,7 @@ function readColumns(workspaceId: string | null): ColumnId[] {
       const valid = columnIds.filter(
         (id) => id === 'title' || id === 'actions' || selected.has(id),
       );
-      return valid.length ? valid : defaultColumns;
+      return valid;
     }
   } catch {
     // Storage can be unavailable in private browsing.
@@ -206,7 +206,7 @@ function displayType(item: PbiItem): string {
   return (
     sourceText(item.sourceData.adkCardType) ||
     sourceText(item.sourceData.type) ||
-    (item.kind === 'pbi' ? 'PBI' : 'Card')
+    (item.kind === 'pbi' ? 'PBI' : getMessages().pbi.cardFallback)
   );
 }
 const fallbackTypeIcon = (item: PbiItem) => (item.kind === 'card' ? 'file-description' : 'folder');
@@ -355,7 +355,7 @@ function formatDescription(value: string): string {
   const decoded =
     typeof DOMParser === 'undefined'
       ? value
-      : (new DOMParser().parseFromString(value, 'text/html').body.textContent ?? value);
+      : new DOMParser().parseFromString(value, 'text/html').body.textContent;
   const html = renderToStaticMarkup(
     <>
       {parseMarkdownBlocks(decoded).map((block, index) => {
@@ -430,204 +430,6 @@ const emptyForm: ItemForm = {
   parentId: null,
   attachments: [],
 };
-const copy = {
-  'pt-BR': {
-    subtitle: 'Backlog do workspace, cards e integrações',
-    refresh: 'Atualizar',
-    pullAll: 'Pull de todos',
-    pullFrom: 'Pull apenas de',
-    loadingItem: 'Carregando item...',
-    newPbi: 'Novo PBI',
-    loadError: 'Não foi possível carregar os PBIs.',
-    actionError: 'Não foi possível concluir a ação.',
-    syncedItems: 'itens sincronizados',
-    failedIntegrations: 'integração(ões) falharam',
-    publishedTo: 'Publicado em',
-    configureForPush: 'Configure uma integração para fazer push.',
-    issueCreated: 'Issue criada a partir do PBI.',
-    testsCreated: 'Casos de teste criados.',
-    filter: 'Filtrar PBIs',
-    filterPlaceholder: 'Filtrar por palavra-chave',
-    allSources: 'Todas as origens',
-    localSource: 'ADK (local)',
-    allStates: 'Todos os estados',
-    allIterations: 'Todas as iterações',
-    area: 'Área',
-    iteration: 'Iteração',
-    tags: 'Tags',
-    cards: 'cards',
-    comments: 'Comentários',
-    noComments: 'Nenhum comentário neste item.',
-    loadingComments: 'Carregando comentários...',
-    commentsError: 'Não foi possível carregar os comentários.',
-    noCards: 'Nenhum card vinculado a este PBI.',
-    syncingCards: 'Sincronizando cards...',
-    cardsError: 'Não foi possível sincronizar os cards.',
-    order: 'Ordem',
-    type: 'Tipo',
-    title: 'Título',
-    state: 'Estado',
-    source: 'Origem',
-    actions: 'Ações',
-    columns: 'Colunas',
-    itemDetails: 'Detalhes do item',
-    assignedAgent: 'Agente atribuído',
-    unassigned: 'Não atribuído',
-    priority: 'Prioridade',
-    cardType: 'Tipo do card',
-    noType: 'Sem tipo',
-    description: 'Descrição',
-    saveItem: 'Salvar item',
-    agentError: 'Não foi possível carregar os agentes.',
-    perPage: 'PBIs por página',
-    expand: 'Expandir',
-    collapse: 'Recolher',
-    addCard: 'Adicionar card',
-    push: 'Publicar',
-    createIssue: 'Criar issue de',
-    createTests: 'Criar testes de',
-    noMatch: 'Nenhum item corresponde à busca.',
-    empty: 'Nenhum PBI ainda. Crie um ou faça Pull das integrações.',
-    integrations: 'Integrações',
-    pullHint: 'Pull sincroniza todas as conexões ativas.',
-    configureHint: 'Configure um provedor em Integrations para sincronizar.',
-    editItem: 'Editar item',
-    newCard: 'Novo card',
-    parent: 'Item pai',
-    selectParent: 'Selecione um item',
-    publish: 'Publicar',
-    deleteTitle: 'Excluir item?',
-    deleteDescription: 'Excluir {title} e seus cards locais?',
-    assignee: 'Responsável',
-    allAssignees: 'Todos os responsáveis',
-    noAssignee: 'Sem responsável',
-    membersError: 'Não foi possível carregar os membros do workspace.',
-    savedFilters: 'Filtros salvos',
-    saveFilter: 'Salvar filtro',
-    showFilters: 'Filtros',
-    hideFilters: 'Ocultar filtros',
-    saveFilterTitle: 'Salvar filtros atuais',
-    filterName: 'Nome do filtro',
-    deleteSavedFilter: 'Excluir filtro salvo',
-    viewMode: 'Modo de visualização',
-    listView: 'Lista',
-    kanbanView: 'Kanban',
-    showMore: 'Mostrar mais',
-    emptyColumn: 'Sem itens',
-    dropHere: 'Mover para',
-    savingMove: 'Salvando movimento',
-    draftPendingCard: 'Alteração pendente',
-    draftLabels: {
-      pending: 'movimento(s) pendente(s): salvos automaticamente quando você parar de mexer',
-      saving: 'Salvando alterações',
-      offline:
-        'Sem conexão: as alterações ficam guardadas neste navegador e serão enviadas ao reconectar.',
-      error: 'Não foi possível salvar',
-      saveNow: 'Salvar agora',
-      retry: 'Tentar novamente',
-      discard: 'Descartar',
-    },
-    moveError: 'Não foi possível mover o item.',
-  },
-  'en-US': {
-    subtitle: 'Workspace backlog, cards and integrations',
-    refresh: 'Refresh',
-    pullAll: 'Pull all',
-    pullFrom: 'Pull only from',
-    loadingItem: 'Loading item...',
-    newPbi: 'New PBI',
-    loadError: 'Could not load PBIs.',
-    actionError: 'Could not complete the action.',
-    syncedItems: 'items synchronized',
-    failedIntegrations: 'integration(s) failed',
-    publishedTo: 'Published to',
-    configureForPush: 'Configure an integration before pushing.',
-    issueCreated: 'Issue created from PBI.',
-    testsCreated: 'Test cases created.',
-    filter: 'Filter PBIs',
-    filterPlaceholder: 'Filter by keyword',
-    allSources: 'All sources',
-    localSource: 'ADK (local)',
-    allStates: 'All states',
-    allIterations: 'All iterations',
-    area: 'Area',
-    iteration: 'Iteration',
-    tags: 'Tags',
-    cards: 'cards',
-    comments: 'Comments',
-    noComments: 'No comments on this item.',
-    loadingComments: 'Loading comments...',
-    commentsError: 'Could not load comments.',
-    noCards: 'No cards linked to this PBI.',
-    syncingCards: 'Syncing cards...',
-    cardsError: 'Could not sync cards.',
-    order: 'Order',
-    type: 'Type',
-    title: 'Title',
-    state: 'State',
-    source: 'Source',
-    actions: 'Actions',
-    columns: 'Columns',
-    itemDetails: 'Item details',
-    assignedAgent: 'Assigned agent',
-    unassigned: 'Unassigned',
-    priority: 'Priority',
-    cardType: 'Card type',
-    noType: 'No type',
-    description: 'Description',
-    saveItem: 'Save item',
-    agentError: 'Could not load agents.',
-    perPage: 'PBIs per page',
-    expand: 'Expand',
-    collapse: 'Collapse',
-    addCard: 'Add card',
-    push: 'Publish',
-    createIssue: 'Create issue from',
-    createTests: 'Create tests from',
-    noMatch: 'No items match the search.',
-    empty: 'No PBIs yet. Create one or pull your integrations.',
-    integrations: 'Integrations',
-    pullHint: 'Pull synchronizes all active connections.',
-    configureHint: 'Configure a provider in Integrations to synchronize.',
-    editItem: 'Edit item',
-    newCard: 'New card',
-    parent: 'Parent item',
-    selectParent: 'Select an item',
-    publish: 'Publish',
-    deleteTitle: 'Delete item?',
-    deleteDescription: 'Delete {title} and its local cards?',
-    assignee: 'Assignee',
-    allAssignees: 'All assignees',
-    noAssignee: 'No assignee',
-    membersError: 'Could not load workspace members.',
-    savedFilters: 'Saved filters',
-    saveFilter: 'Save filter',
-    showFilters: 'Filters',
-    hideFilters: 'Hide filters',
-    saveFilterTitle: 'Save current filters',
-    filterName: 'Filter name',
-    deleteSavedFilter: 'Delete saved filter',
-    viewMode: 'View mode',
-    listView: 'List',
-    kanbanView: 'Kanban',
-    showMore: 'Show more',
-    emptyColumn: 'No items',
-    dropHere: 'Move to',
-    savingMove: 'Saving move',
-    draftPendingCard: 'Pending change',
-    draftLabels: {
-      pending: 'pending move(s): saved automatically once you stop',
-      saving: 'Saving changes',
-      offline: 'Offline: changes are kept in this browser and sent when you reconnect.',
-      error: 'Could not save',
-      saveNow: 'Save now',
-      retry: 'Try again',
-      discard: 'Discard',
-    },
-    moveError: 'Could not move the item.',
-  },
-} as const;
-
 export function PbiView({
   apiClient,
   workspaceId,
@@ -639,7 +441,7 @@ export function PbiView({
   focus,
   onFocusHandled,
 }: Props) {
-  const { locale, t } = useI18n();
+  const { locale, t, messages } = useI18n();
   const permissions = usePermissions();
   // Controls the member cannot use are not rendered at all.
   const isReadOnly = readOnlyProp || !permissions.can('pbis', 'edit');
@@ -648,7 +450,7 @@ export function PbiView({
   const canCreateTests = permissions.can('testplans', 'edit');
   const canViewAgents = permissions.can('agents');
   const { runActivity } = useActivityRunner();
-  const c = copy[locale];
+  const c = messages.pbi;
   const workItemTypes = useWorkItemTypes(apiClient, workspaceId, refreshToken);
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>(() => {
     try {
@@ -751,7 +553,7 @@ export function PbiView({
   const [confirmClose, setConfirmClose] = useState(false);
   useInlineImages(descriptionEditorRef, form?.description);
   const descriptionImages = useRichTextImageInput('pbi', descriptionEditorRef, (html) =>
-    setForm((current) => (current ? { ...current, description: sanitizeHtml(html) } : current)),
+    setForm((current) => ({ ...current!, description: sanitizeHtml(html) })),
   );
 
   // Snapshot of the card once it is open and fully loaded; cleared when it closes.
@@ -1009,7 +811,7 @@ export function PbiView({
           normalizeSearch(
             [
               item.title,
-              descriptionText.get(item.id) ?? '',
+              descriptionText.get(item.id)!,
               ...item.links.map((link) => link.externalId),
             ].join(' '),
           ),
@@ -1065,7 +867,7 @@ export function PbiView({
       return null;
     const selfMatches = (item: PbiItem): boolean => {
       const assignee = sourceText(item.sourceData.adkAssigneeUserId);
-      const text = searchIndex.get(item.id) ?? '';
+      const text = searchIndex.get(item.id)!;
       return (
         terms.every((term) => text.includes(term)) &&
         (!sourceFilter ||
@@ -1177,6 +979,7 @@ export function PbiView({
     }
   };
   const pull = (providerId?: string) => {
+    /* v8 ignore next -- the pull buttons are disabled while a pull runs */
     if (pulling) return;
     setPulling(true);
     const title = providerId
@@ -1213,9 +1016,7 @@ export function PbiView({
   /** Closing the form without saving drops what was typed, pasted and attached. */
   const closeForm = () => {
     if (form) {
-      const editorValue = descriptionEditorRef.current
-        ? editorHtml(descriptionEditorRef.current)
-        : form.description;
+      const editorValue = editorHtml(descriptionEditorRef.current!);
       discardDrafts({ ...form, description: editorValue });
     }
     setConfirmClose(false);
@@ -1234,11 +1035,10 @@ export function PbiView({
   };
   const save = (event: FormEvent) => {
     event.preventDefault();
+    /* v8 ignore next -- the form is always open when it is submitted; this narrows the type */
     if (!form) return;
     void runAction(async () => {
-      const editorValue = descriptionEditorRef.current
-        ? editorHtml(descriptionEditorRef.current)
-        : (form.description ?? '');
+      const editorValue = editorHtml(descriptionEditorRef.current!);
       const { id, kind, sourceData, ...fields } = form;
       const values = {
         ...fields,
@@ -1533,7 +1333,7 @@ export function PbiView({
   );
 
   return (
-    <main className="flex w-full flex-col gap-5 p-6 text-[var(--text-primary)]">
+    <main className="flex w-full flex-col gap-5 text-[var(--text-primary)]">
       {error && (
         <div
           role="alert"
@@ -2492,7 +2292,7 @@ export function PbiView({
                   }
                   onPaste={isReadOnly ? undefined : descriptionImages.onPaste}
                   onDrop={isReadOnly ? undefined : descriptionImages.onDrop}
-                  dangerouslySetInnerHTML={{ __html: formatDescription(form.description ?? '') }}
+                  dangerouslySetInnerHTML={{ __html: formatDescription(form.description!) }}
                   className="min-h-[220px] max-w-none overflow-x-auto overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm leading-6 text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-accent)] lg:min-h-[360px] [&_a]:text-[var(--text-accent)] [&_a]:underline [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-[var(--border-strong)] [&_blockquote]:pl-4 [&_code]:rounded [&_code]:bg-[var(--surface-1)] [&_code]:px-1 [&_code]:font-mono [&_h1]:my-4 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:my-4 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:my-3 [&_h3]:font-semibold [&_h4]:my-3 [&_h4]:font-semibold [&_h5]:my-2 [&_h5]:font-semibold [&_h6]:my-2 [&_h6]:font-semibold [&_hr]:my-4 [&_hr]:border-[var(--border)] [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-3 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-[var(--surface-1)] [&_pre]:p-3 [&_table]:my-4 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--border)] [&_td]:p-2 [&_th]:border [&_th]:border-[var(--border)] [&_th]:p-2 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6"
                 />
                 <div className="mt-6 border-t border-[var(--border)] pt-4">
@@ -2560,20 +2360,11 @@ export function PbiView({
                   {c.state}
                   <Select
                     disabled={isReadOnly}
-                    value={form.status ?? 'backlog'}
+                    value={form.status}
                     onChange={(event) => setForm({ ...form, status: event.target.value })}
                     containerClassName="mt-2"
                   >
-                    {[
-                      ...new Set([
-                        'backlog',
-                        'New',
-                        'Active',
-                        'Done',
-                        'Removed',
-                        form.status ?? '',
-                      ]),
-                    ]
+                    {[...new Set(['backlog', 'New', 'Active', 'Done', 'Removed', form.status!])]
                       .filter(Boolean)
                       .map((status) => (
                         <option key={status} value={status}>
@@ -2854,9 +2645,8 @@ export function PbiView({
         isLoading={busy}
         onCancel={() => setDeleteItem(null)}
         onConfirm={() => {
-          if (!deleteItem) return;
           void runAction(async () => {
-            await apiClient.deletePbiItem(deleteItem.id);
+            await apiClient.deletePbiItem(deleteItem!.id);
             setDeleteItem(null);
             await load();
           });

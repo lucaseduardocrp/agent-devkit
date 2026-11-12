@@ -45,11 +45,11 @@ describe('AzureExportFields', () => {
     );
     const assigned = view.getByRole('combobox', { name: 'Assigned To' });
     expect(
-      within(assigned).getByRole<HTMLOptionElement>('option', { name: 'Ana (ana@example.com)' })
+      (within(assigned).getByRole('option', { name: 'Ana (ana@example.com)' }) as HTMLOptionElement)
         .value,
     ).toBe('Ana <ana@example.com>');
     expect(
-      within(assigned).getByRole<HTMLOptionElement>('option', { name: 'Build Service' }).value,
+      (within(assigned).getByRole('option', { name: 'Build Service' }) as HTMLOptionElement).value,
     ).toBe('Build Service');
     fireEvent.change(assigned, { target: { value: 'Build Service' } });
     expect(onAssignee).toHaveBeenCalledWith('Build Service');

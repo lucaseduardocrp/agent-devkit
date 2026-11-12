@@ -286,4 +286,64 @@ describe('hub output', () => {
       "  codex mcp add broken -- ''",
     );
   });
+  it('describes tiers it does not know, singular totals and empty server lists', () => {
+    const odd = pluginEntry({
+      tier: 'mystery' as never,
+      capabilities: { skills: [], agents: [], mcpServers: [], requiresEnv: [] },
+    });
+    expect(formatInfo(index, 'plugin', odd)).toContain('Tier         mystery');
+    expect(formatInfo(index, 'plugin', odd)).toContain('MCP servers  -');
+    expect(formatInfo(index, 'skill', skillEntry({ tier: 'mystery' as never }))).toContain(
+      'mystery',
+    );
+    expect(formatList(index, 'skill', [skillEntry({ tier: 'mystery' as never })])).toMatch(
+      /mystery/,
+    );
+    expect(formatList(index, 'skill', [skillEntry(), skillEntry({ name: 'two' })])).toContain(
+      '2 skills.',
+    );
+    expect(mcpInstructions('codex', 'user', { none: {} })[1]).toBe("  codex mcp add none -- ''");
+    expect(
+      formatInstalled([
+        {
+          kind: 'skill',
+          name: 'a',
+          version: '',
+          revision: 'r'.repeat(20),
+          skillsDir: '/s',
+          paths: [],
+          mcpServers: [],
+          installedAt: '',
+        },
+      ]),
+    ).toContain('rrrrrrrrrrrr');
+  });
+});
+
+describe('hub command defaults', () => {
+  it('asks GitHub for the newest index without a hub URL, and resolves default base folders', async () => {
+    const home = await tempHome();
+    const index = hubIndex();
+    const sha = 'f'.repeat(40);
+    const fetcher = vi.fn((url: string | URL | Request) => {
+      const href = String(url);
+      if (href.startsWith('https://api.github.com/')) return Promise.resolve(new Response(sha));
+      if (href.endsWith('/index.json')) return Promise.resolve(Response.json(index));
+      return Promise.resolve(new Response('missing', { status: 404 }));
+    });
+    const said: string[] = [];
+    const installer = new HubInstaller({ lockFile: home.lockFile, fetch: hubFetch(index) });
+    const context = {
+      say: (message: string) => said.push(message),
+      print: () => undefined,
+      installer,
+      fetch: fetcher as unknown as typeof fetch,
+    };
+    await runHubCommand('skill', [], {}, context);
+    expect(said[0]).toMatch(/edge-hunter/);
+    const dir = join(home.root, 'skills');
+    await runHubCommand('skill', ['install', 'edge-hunter'], { dir, scope: 'project' }, context);
+    await runHubCommand('skill', ['install', 'edge-hunter'], { dir, force: true }, context);
+    expect(said.some((line) => line.includes(`into ${dir}`))).toBe(true);
+  });
 });
