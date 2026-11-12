@@ -86,6 +86,14 @@ describe('local browser setup', () => {
     expect(stat.isFile()).toBe(true);
   });
 
+  it('links with a junction on Windows', async () => {
+    const home = await tempDir();
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    const symlink = vi.spyOn(fs, 'symlink').mockResolvedValue(undefined);
+    await prepareWorkspaceRoot(home, playwrightPackageRoot());
+    expect(symlink).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'junction');
+  });
+
   it('links with a directory symlink on platforms other than Windows', async () => {
     const home = await tempDir();
     vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');

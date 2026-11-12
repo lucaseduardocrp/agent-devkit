@@ -358,6 +358,14 @@ describe('exportBruno', () => {
 });
 
 describe('parseBru', () => {
+  it('writes and reads back keys with quotes and backslashes', () => {
+    const key = 'back\\slash "quoted" key';
+    const text = environmentFile([{ key, value: 'v', enabled: true }] as never);
+    expect(text).toContain('"back\\\\slash \\"quoted\\" key": v');
+    const pairs = parseBru(text).find((item) => item.name === 'vars')?.pairs ?? [];
+    expect(pairs.map((pair) => pair.key)).toEqual([key]);
+  });
+
   it('handles lists, text blocks, quoted keys, annotations and multiline values', () => {
     const blocks = parseBru(
       [

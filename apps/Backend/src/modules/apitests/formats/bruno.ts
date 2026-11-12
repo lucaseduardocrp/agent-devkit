@@ -54,7 +54,7 @@ const textBlock = (title: string, text: string | undefined) =>
 
 /** Keys with `:`, quotes, braces or spaces are quoted, as Bruno does. */
 const keyString = (key: string) =>
-  (/[:"{} ]/.test(key) ? `"${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : key);
+  /[:"{} ]/.test(key) ? `"${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : key;
 /** Multi-line values go between `'''`. */
 const valueString = (value: string) =>
   /[\r\n]/.test(value) ? `'''\n${indent(value)}\n'''` : value;
@@ -626,7 +626,7 @@ function parsePairs(lines: readonly string[]): BruPair[] {
     if (rest.startsWith('"')) {
       const end = /^"((?:[^"\\]|\\.)*)"\s*:/.exec(rest);
       if (!end) continue;
-      key = end[1]!.replace(/\\"/g, '"');
+      key = end[1]!.replace(/\\(["\\])/g, '$1');
       rest = rest.slice(end[0].length);
     } else {
       const colon = rest.indexOf(':');
