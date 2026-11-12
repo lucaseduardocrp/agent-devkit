@@ -396,6 +396,29 @@ function environmentsClient() {
 }
 
 describe('EnvironmentsPane', () => {
+  it('keeps the active environment when it deletes another one', async () => {
+    const api = environmentsClient();
+    const onActivate = vi.fn();
+    const onChanged = vi.fn();
+    const view = render(
+      <EnvironmentsPane
+        apiClient={api as unknown as ApiClient}
+        environments={environments}
+        activeId="e2"
+        readOnly={false}
+        onChanged={onChanged}
+        onActivate={onActivate}
+      />,
+    );
+    // Staging is not the active one.
+    fireEvent.click(view.getByText('Staging'));
+    fireEvent.click(view.getByRole('button', { name: /Excluir/ }));
+    const dialog = await view.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(onActivate).not.toHaveBeenCalledWith('');
+  });
+
   it('deactivates the active environment it deletes and shows errors', async () => {
     const api = environmentsClient();
     api.deleteApiEnvironment.mockRejectedValueOnce(new Error('in use'));

@@ -83,6 +83,15 @@ describe('Telegram integration', () => {
     });
   });
 
+  it('still shows the form when the agents cannot be loaded', async () => {
+    const api = client();
+    vi.spyOn(api, 'getAgents').mockRejectedValue(new Error('offline'));
+    const { getByLabelText } = renderModal(api);
+    await waitFor(() => expect(api.getAgents).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(getByLabelText('Recebimento de mensagens')).toBeInTheDocument();
+  });
+
   it('saves typed settings instead of strings', async () => {
     const api = client();
     vi.spyOn(api, 'saveIntegration').mockResolvedValue(saved);

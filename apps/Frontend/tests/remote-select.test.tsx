@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { RemoteSelect, type RemotePage } from '../src/components/ui/remote-select.js';
 import { I18nProvider } from '../src/lib/i18n/index.js';
@@ -204,6 +204,10 @@ describe('RemoteSelect', () => {
     fetchPage.mockRejectedValueOnce(new Error('down'));
     fireEvent.scroll(screen.getByRole('listbox'));
     await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(2));
+    // Let the failed request settle before looking at the list again.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     expect(screen.getByRole('option', { name: 'Alpha' })).toBeInTheDocument();
   });
 

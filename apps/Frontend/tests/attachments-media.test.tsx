@@ -166,6 +166,25 @@ describe('drafts', () => {
     expect(remove).toHaveBeenCalledWith('0f8fad5b-d9cb-469f-a165-70867728950e');
   });
 
+  it('still reports the save failure when an upload cannot be removed afterwards', async () => {
+    const { apiClient } = client();
+    vi.spyOn(apiClient, 'uploadAttachment').mockResolvedValue({
+      id: '0f8fad5b-d9cb-469f-a165-70867728950e',
+      name: 'shot.png',
+      kind: 'image',
+      scope: 'pbi',
+      source: 'adk',
+      url: FILE,
+    });
+    const remove = vi.spyOn(apiClient, 'deleteAttachment').mockRejectedValue(new Error('gone'));
+    await expect(
+      saveWithDrafts(apiClient, 'pbi', { attachments: [createDraft('pbi', png())] }, () =>
+        Promise.reject(new Error('offline')),
+      ),
+    ).rejects.toThrow('offline');
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
   it('rejects files over the limit before keeping them', () => {
     const big = new File([new Uint8Array(11 * 1024 * 1024)], 'big.png', { type: 'image/png' });
     expect(() => createDraft('brain', big)).toThrow('10 MB');

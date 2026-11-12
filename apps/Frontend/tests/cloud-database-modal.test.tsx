@@ -213,6 +213,21 @@ describe('Integrations > Storage', () => {
     expect(readOnly.queryByTestId('cloud-database-modal')).toBeNull();
   });
 
+  it('ignores a storage status that arrives after the view was closed', async () => {
+    let answer: (status: DesktopStorageStatus) => void = () => undefined;
+    desktop(
+      { mode: 'local', busy: false },
+      {
+        status: vi.fn().mockReturnValue(new Promise<DesktopStorageStatus>((r) => (answer = r))),
+      },
+    );
+    const view = render(<ConnectView />);
+    await waitFor(() => expect(window.adkDesktop?.storage?.status).toHaveBeenCalled());
+    view.unmount();
+    answer({ mode: 'local', busy: false });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+
   it('closes with Cancel, and ignores a status call that fails', async () => {
     desktop({ mode: 'local', busy: false });
     const view = render(<ConnectView />);

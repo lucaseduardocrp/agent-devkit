@@ -403,6 +403,26 @@ describe('Development code', () => {
     expect(screen.getByText('Nenhuma sessão corresponde aos filtros.')).toBeInTheDocument();
   });
 
+  it('keeps working when the agents cannot be loaded and caps absurd numbers', async () => {
+    const api = mockClient({ changes: [change({ status: 'approved' })] });
+    api.getAgents.mockRejectedValue(new Error('offline'));
+    const { to } = await show(api, 'artifacts');
+    click(/Add login/);
+    click(/Iniciar sessão/);
+    to('code');
+    await waitFor(() => expect(api.getAgents).toHaveBeenCalled());
+    const compact = screen.getByLabelText('Compactar contexto em (%)');
+    // Other keys go through; a number too large to be finite falls back to the minimum.
+    expect(fireEvent.keyDown(compact, { key: '5' })).toBe(true);
+    fireEvent.change(compact, { target: { value: '9'.repeat(400) } });
+    click('Enfileirar sessão');
+    await waitFor(() =>
+      expect(api.createDevelopmentSession).toHaveBeenCalledWith(
+        expect.objectContaining({ compactAtPercent: 10 }),
+      ),
+    );
+  });
+
   it('never takes negative numbers and sends the picked workspace agents', async () => {
     const api = mockClient({ changes: [change({ status: 'approved' })] });
     api.getAgents.mockResolvedValue([

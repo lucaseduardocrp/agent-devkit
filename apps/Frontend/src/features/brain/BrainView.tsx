@@ -482,25 +482,18 @@ export function BrainView({
       void executeSearch(searchQuery);
     }, 150);
 
-    return () => {
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current);
-      }
-    };
+    // The timer is always set when this cleanup exists: the effect returns early without one.
+    return () => clearTimeout(searchTimeoutRef.current!);
   }, [searchQuery, executeSearch]);
 
-  const handleSearch = async (event?: React.FormEvent) => {
-    if (event) event.preventDefault();
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
+  const handleSearch = async (event: React.FormEvent) => {
+    event.preventDefault();
+    clearTimeout(searchTimeoutRef.current!);
     await executeSearch(searchQuery);
   };
 
   const handleClearSearch = () => {
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
+    clearTimeout(searchTimeoutRef.current!);
     setSearchQuery('');
     setSearchResults(null);
     setSearchError(null);
