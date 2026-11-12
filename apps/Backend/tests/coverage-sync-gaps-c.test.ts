@@ -167,3 +167,24 @@ describe('E2eService without an actor and Source runs', () => {
     expect(brief.documents.brainTools).toContain('brain_search');
   });
 });
+
+describe('WorkspaceService member contacts', () => {
+  it('leaves out members whose account no longer exists', async () => {
+    const { WorkspaceService } =
+      await import('../src/modules/workspaces/application/workspace-service.js');
+    const repository = {
+      searchMembers: vi.fn(async () => ({
+        members: [
+          { userId: 'gone' },
+          { userId: 'here', user: { id: 'here', name: 'Ana', email: 'a@x' } },
+        ],
+        total: 2,
+      })),
+    };
+    const authRepository = { findById: vi.fn(async () => null) };
+    const service = new WorkspaceService(repository as never, authRepository as never);
+    const result = await service.searchMemberContacts('ws', { search: '', offset: 0, limit: 5 });
+    expect(result).toEqual({ people: [{ id: 'here', name: 'Ana', email: 'a@x' }], total: 2 });
+    expect(authRepository.findById).toHaveBeenCalledWith('gone');
+  });
+});

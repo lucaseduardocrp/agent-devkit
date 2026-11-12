@@ -328,7 +328,7 @@ export class PlaywrightE2eRunner implements E2eRunner {
       };
       const visit = async (target: string, settleRedirect = false): Promise<E2ePageSnapshot> => {
         await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 20_000 });
-        await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
+        await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(noop);
         if (settleRedirect && transportUrl && page.waitForURL) {
           await page
             .waitForURL((current) => current.href !== target, { timeout: 6_000 })
@@ -569,7 +569,7 @@ export class PlaywrightE2eRunner implements E2eRunner {
         trail: input.mode === 'frontend' ? await readTrail(evidence, secrets) : null,
       };
     } finally {
-      await fs.rm(workspace, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(workspace, { recursive: true, force: true }).catch(noop);
     }
   }
 }
