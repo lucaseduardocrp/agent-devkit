@@ -592,6 +592,7 @@ describe('WorkView issue composer', () => {
         description: 'Details',
         status: 'in_review',
         priority: 'urgent',
+        type: '',
         assigneeAgentId: 'agent-a',
         assigneeUserId: 'user-b',
         attachments: [],
