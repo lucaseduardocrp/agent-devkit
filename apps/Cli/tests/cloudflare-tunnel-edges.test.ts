@@ -43,13 +43,14 @@ function rawStatus(base: string, path: string, headers: Record<string, string> =
 const encoded = (origin: string) => Buffer.from(origin).toString('base64url');
 
 function fakeProcess() {
+  const kill = vi.fn(() => true);
   const child = Object.assign(new EventEmitter(), {
     stdout: new PassThrough(),
     stderr: new PassThrough(),
-    kill: vi.fn(() => true),
+    kill,
   }) as unknown as ChildProcessWithoutNullStreams;
   const factory = vi.fn(() => child) as unknown as typeof spawn;
-  return { child, factory };
+  return { child, factory, kill };
 }
 
 describe('local gateway edges', () => {
@@ -84,7 +85,31 @@ describe('local gateway edges', () => {
   });
 });
 
+describe('local gateway timeouts', () => {
+  it('answers 502 when the local service stays silent', async () => {
+    const silent = await listen(createServer(() => undefined));
+    const gateway = await listen(createLocalGateway(silent, TOKEN, 50));
+    expect(await rawStatus(gateway, '/')).toBe(502);
+  });
+});
+
 describe('tunnel manager edges', () => {
+  it('gives up when the tunnel provides no URL in time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { factory, kill } = fakeProcess();
+      const tunnel = new CloudflareTunnelManager('cloudflared', factory);
+      const started = tunnel.start('http://localhost:5173');
+      const failure = expect(started).rejects.toThrow('within 45 seconds');
+      while (!vi.mocked(factory).mock.calls.length) await new Promise((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(45_000);
+      await failure;
+      expect(kill).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shares a pending start, reuses a running tunnel and refuses another target', async () => {
     const { child, factory } = fakeProcess();
     const tunnel = new CloudflareTunnelManager('cloudflared', factory);

@@ -77,10 +77,14 @@ function validToken(actual: string | undefined, expected: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+/** How long a local service may stay silent before the gateway answers 502. */
+const LOCAL_REQUEST_TIMEOUT_MS = 30_000;
+
 /** A private, per-session gateway. Only loopback services can be addressed through it. */
 export function createLocalGateway(
   frontend: string,
   token: { clientId: string; clientSecret: string },
+  requestTimeoutMs = LOCAL_REQUEST_TIMEOUT_MS,
 ): Server {
   const base = loopbackUrl(frontend);
   if (!base) throw new Error('Gateway frontend must be a loopback HTTP service.');
@@ -129,11 +133,16 @@ export function createLocalGateway(
       outgoing.writeHead(400).end();
       return;
     }
-    forwardLocalRequest(incoming, outgoing, destination);
+    forwardLocalRequest(incoming, outgoing, destination, requestTimeoutMs);
   });
 }
 
-function forwardLocalRequest(incoming: IncomingMessage, outgoing: ServerResponse, url: URL): void {
+function forwardLocalRequest(
+  incoming: IncomingMessage,
+  outgoing: ServerResponse,
+  url: URL,
+  timeoutMs: number,
+): void {
   const headers = Object.fromEntries(
     Object.entries(incoming.headers).filter(([name]) => !HOP_HEADERS.has(name.toLowerCase())),
   );
@@ -142,7 +151,7 @@ function forwardLocalRequest(incoming: IncomingMessage, outgoing: ServerResponse
     {
       method: incoming.method,
       headers: { ...headers, host: url.host },
-      timeout: 30_000,
+      timeout: timeoutMs,
       // Loopback development APIs commonly use locally trusted certificates.
       ...(url.protocol === 'https:' ? { rejectUnauthorized: false } : {}),
     },

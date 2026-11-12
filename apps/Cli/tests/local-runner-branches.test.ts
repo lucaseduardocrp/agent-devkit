@@ -245,6 +245,24 @@ describe('LocalRunnerAgent branches', () => {
     ]);
   });
 
+  it('keeps running while ADK answers the heartbeat with running', async () => {
+    const { api, calls } = fakeApi({
+      'POST /e2e/runner/claim': { task: runTask() },
+      'POST /e2e/runner/tasks/task-1/heartbeat': { status: 'running' },
+      'POST /e2e/runner/tasks/task-1/complete': undefined,
+    });
+    const slow = browser({
+      run: vi.fn<LocalBrowser['run']>(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return outcome({ status: 'passed', error: null });
+      }),
+    });
+    const { agent, events } = agentWith(api, slow);
+    await agent.poll();
+    expect(calls.some((call) => call.path.endsWith('/heartbeat'))).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: 'finished', status: 'passed' });
+  });
+
   it('ignores a heartbeat that fails and keeps running', async () => {
     const { api } = fakeApi({
       'POST /e2e/runner/claim': { task: runTask() },
@@ -288,6 +306,17 @@ describe('LocalRunnerAgent test account and environment variables', () => {
     await agentWith(routes(exploreTask), old).agent.poll();
     expect(old.explore.mock.calls[0]![0]).not.toHaveProperty('credentials');
     expect(old.explore.mock.calls[0]![0]).not.toHaveProperty('thorough');
+
+    // The focus of a request narrows what the exploration looks at.
+    const narrow = browser();
+    const focused = {
+      ...exploreTask,
+      input: { ...exploreTask.input, focus: 'the billing screens' },
+    };
+    await agentWith(routes(focused), narrow).agent.poll();
+    expect(narrow.explore).toHaveBeenCalledWith(
+      expect.objectContaining({ focus: 'the billing screens' }),
+    );
 
     // A Source exploration maps the whole application.
     const whole = browser();

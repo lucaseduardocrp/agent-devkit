@@ -418,6 +418,33 @@ describe('DevelopmentRunner.serve', () => {
     expect(events.at(-1)).toMatchObject({ type: 'finished' });
   });
 
+  it('polls again right away after a session when not asked to stop', async () => {
+    const controller = new AbortController();
+    let polls = 0;
+    const sleeps: number[] = [];
+    const { runner, events } = await setup(
+      routesFor(session(), {
+        'GET /development/sessions': () => {
+          polls += 1;
+          if (polls === 2) controller.abort();
+          return { sessions: polls === 1 ? [session()] : [] };
+        },
+      }),
+      undefined,
+      {
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return Promise.resolve();
+        },
+      },
+    );
+    await runner.serve({ signal: controller.signal });
+    expect(polls).toBe(2);
+    expect(events.map((event) => event.type)).toContain('finished');
+    // The session was followed by a poll, not by a pause.
+    expect(sleeps).toHaveLength(1);
+  });
+
   it('idles between polls and retries with backoff while ADK is unreachable', async () => {
     const controller = new AbortController();
     const sleeps: number[] = [];

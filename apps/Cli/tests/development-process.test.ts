@@ -22,6 +22,19 @@ async function script(source: string): Promise<{ file: string; cwd: string }> {
 const direct = { platform: 'linux' as const, kill: (pid: number) => process.kill(pid) };
 
 describe('runStreaming', () => {
+  it('reports the exit code of a CLI that closes its stdin before reading it', async () => {
+    const { file, cwd } = await script('process.exit(4);');
+    const result = await runStreaming(process.execPath, [file], {
+      ...direct,
+      cwd,
+      // Far more than a pipe holds: the write fails once the process is gone.
+      stdin: 'x'.repeat(16 * 1024 * 1024),
+      signal: new AbortController().signal,
+      onLine: () => undefined,
+    });
+    expect(result.exitCode).toBe(4);
+  });
+
   it('hands over the output line by line with the exit code and the end of stderr', async () => {
     const { file, cwd } = await script(`
       let input = '';
