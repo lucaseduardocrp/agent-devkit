@@ -138,6 +138,105 @@ describe('App', () => {
     expect(view.getByTestId('screen-brain')).toBeInTheDocument();
   });
 
+  it('takes the user from a run of the Agent map to its issue', async () => {
+    const client = clientFor([membership('ws-1', 'Primary Corp', 'usr-1')]);
+    withSession(client, user('usr-1', 'Ana', 'ana@example.com'));
+    vi.spyOn(client, 'getReadiness').mockResolvedValue({ status: 'ready', checks: [] });
+    const now = '2026-01-01T00:00:00Z';
+    const agent = {
+      id: 'agent-1',
+      workspaceId: 'ws-1',
+      parentAgentId: null,
+      name: 'PO',
+      slug: 'po',
+      description: '',
+      instructions: '',
+      role: 'CUSTOM' as const,
+      temperature: 0.2,
+      isSystem: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const issue = {
+      id: 'issue-1',
+      workspaceId: 'ws-1',
+      number: 7,
+      title: 'Approve exchanges',
+      description: '',
+      status: 'in_progress' as const,
+      priority: 'medium' as const,
+      assigneeAgentId: 'agent-1',
+      assigneeUserId: null,
+      createdBy: 'usr-1',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const run = {
+      id: 'run-1',
+      issueId: 'issue-1',
+      agentId: 'agent-1',
+      status: 'running' as const,
+      mode: 'host' as const,
+      attempt: 1,
+      output: null,
+      error: null,
+      provider: null,
+      model: null,
+      inputTokens: null,
+      outputTokens: null,
+      costMicros: null,
+      createdAt: now,
+      startedAt: now,
+      finishedAt: null,
+    };
+    vi.spyOn(client, 'getAgents').mockResolvedValue([agent]);
+    vi.spyOn(client, 'getIssues').mockResolvedValue([issue]);
+    vi.spyOn(client, 'getAgentRuns').mockResolvedValue([run]);
+    vi.spyOn(client, 'getAgentWorkflow').mockResolvedValue({
+      enabled: true,
+      autonomy: 'balanced',
+      finalReview: false,
+      uncertaintyBehavior: 'ask',
+      issueCreationBehavior: 'ask',
+      defaultAction: 'allow',
+      steps: [],
+      rules: [],
+    });
+    vi.spyOn(client, 'streamRunEvents').mockImplementation(() => new Promise(() => undefined));
+    // What the Issues module loads when it opens.
+    vi.spyOn(client, 'getInbox').mockResolvedValue([]);
+    vi.spyOn(client, 'getWorkspaceMembers').mockResolvedValue([]);
+    vi.spyOn(client, 'getPbiItems').mockResolvedValue([]);
+    vi.spyOn(client, 'getDashboard').mockResolvedValue({
+      agents: [],
+      recentIssues: [],
+      recentActivity: [],
+      totalIssues: 1,
+      inProgress: 1,
+      open: 1,
+      byStatus: {
+        backlog: 0,
+        todo: 0,
+        in_progress: 1,
+        in_review: 0,
+        blocked: 0,
+        done: 0,
+        cancelled: 0,
+      },
+      byPriority: { urgent: 0, high: 0, medium: 1, low: 0 },
+    });
+    const getIssue = vi.spyOn(client, 'getIssue').mockResolvedValue({ issue, comments: [] });
+    vi.spyOn(client, 'updateInboxItem').mockResolvedValue(undefined);
+
+    const view = render(<App apiClient={client} initialTab="agentsMap" />);
+    fireEvent.click(await view.findByTestId('topology-run-run-1'));
+    fireEvent.click(await view.findByTestId('run-flow-open-issue'));
+
+    // The Issues module opens with that issue selected.
+    await waitFor(() => expect(view.queryByTestId('agents-view')).not.toBeInTheDocument());
+    await waitFor(() => expect(getIssue).toHaveBeenCalledWith('issue-1'));
+  });
+
   it('opens a new E2E run for saved test cases chosen in Test Plans', async () => {
     const client = clientFor([membership('ws-1', 'Primary Corp', 'usr-1')]);
     withSession(client, user('usr-1', 'Ana', 'ana@example.com'));
@@ -174,16 +273,16 @@ describe('App', () => {
     const view = render(<App apiClient={client} initialTab="testplans" />);
     fireEvent.click(await view.findByRole('button', { name: 'Ações: Sprint 10' }));
     fireEvent.click(view.getByRole('button', { name: 'Automatizar com E2E' }));
-    expect(await view.findByRole('radio', { name: 'Test cases salvos no ADK' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
+    const source = (await view.findByRole('combobox', {
+      name: 'Origem dos testes',
+    })) as HTMLSelectElement;
+    expect(source.value).toBe('saved');
 
     // Coming back to E2E later shows the list instead of the form.
     fireEvent.click(view.getByRole('button', { name: 'Planos de Teste' }));
     fireEvent.click(view.getByRole('button', { name: 'Automação E2E' }));
     await waitFor(() => expect(client.getE2eCreations).toHaveBeenCalled());
-    expect(view.queryByRole('radio', { name: 'Test cases salvos no ADK' })).toBeNull();
+    expect(view.queryByRole('combobox', { name: 'Origem dos testes' })).toBeNull();
 
     // The import window links to the integrations.
     fireEvent.click(view.getByRole('button', { name: 'Planos de Teste' }));

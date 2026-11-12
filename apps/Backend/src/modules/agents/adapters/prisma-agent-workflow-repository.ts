@@ -2,6 +2,7 @@ import {
   EMPTY_AGENT_WORKFLOW,
   type AgentWorkflow,
   type AgentWorkflowActionConfig,
+  type AgentWorkflowNotificationConfig,
   type AgentWorkflowCanvas,
   type AgentWorkflowCanvasEdge,
   type AgentWorkflowCanvasNode,
@@ -42,10 +43,12 @@ const workflowToolsets = new Set<AgentWorkflowToolset>([
   'design',
   'e2e',
   'releasenotes',
+  'development',
   'integrationtests',
   'loadtests',
   'audit',
   'workspaces',
+  'notifications',
 ]);
 
 function parseRules(raw: unknown): AgentWorkflowRule[] {
@@ -133,14 +136,33 @@ function parseTrigger(raw: unknown): AgentWorkflowTriggerConfig | undefined {
   };
 }
 
+const strings = (raw: unknown): string[] =>
+  Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : [];
+
+function parseNotification(raw: unknown): AgentWorkflowNotificationConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  return {
+    channels: strings(value['channels']),
+    userIds: strings(value['userIds']),
+    roles: strings(value['roles']).filter(
+      (role): role is 'assignee' | 'proofreader' => role === 'assignee' || role === 'proofreader',
+    ),
+    subject: typeof value['subject'] === 'string' ? value['subject'] : '',
+    message: typeof value['message'] === 'string' ? value['message'] : '',
+  };
+}
+
 function parseAction(raw: unknown): AgentWorkflowActionConfig | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const value = raw as Record<string, unknown>;
   if (!workflowToolsets.has(value['toolset'] as AgentWorkflowToolset)) return undefined;
+  const notification = parseNotification(value['notification']);
   return {
     toolset: value['toolset'] as AgentWorkflowToolset,
     ...(typeof value['toolName'] === 'string' ? { toolName: value['toolName'] } : {}),
     ...(typeof value['provider'] === 'string' ? { provider: value['provider'] } : {}),
+    ...(notification ? { notification } : {}),
   };
 }
 

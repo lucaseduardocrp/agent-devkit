@@ -113,6 +113,32 @@ beforeEach(() => {
   workspaces = { listMembers: vi.fn().mockResolvedValue([{ userId: memberId }]) };
 });
 
+describe('issue routes: proofreader', () => {
+  it('requires a workspace member and shows the issue in both inboxes', async () => {
+    const app = build();
+    await request(app)
+      .post('/issues')
+      .send({ title: 'Review me', proofreaderUserId: strangerId })
+      .expect(400);
+    const created = await request(app)
+      .post('/issues')
+      .send({ title: 'Review me', assigneeUserId: memberId })
+      .expect(201);
+    const id = created.body.issue.id as string;
+    // No proofreader yet: an issue that never ran stays out of the inbox.
+    context = { ...admin, actorId: memberId };
+    expect((await request(app).get('/inbox').expect(200)).body.items).toEqual([]);
+    context = admin;
+    await request(app).patch(`/issues/${id}`).send({ proofreaderUserId: memberId }).expect(200);
+    context = { ...admin, actorId: memberId };
+    const items = (await request(app).get('/inbox').expect(200)).body.items;
+    expect(items).toMatchObject([{ issue: { id, proofreaderUserId: memberId }, runs: [] }]);
+    // An unrelated user does not see it.
+    context = { ...admin, actorId: strangerId };
+    expect((await request(app).get('/inbox').expect(200)).body.items).toEqual([]);
+  });
+});
+
 describe('issue routes: context and permissions', () => {
   it('forwards resolver failures and missing workspace or actor context', async () => {
     context = new ApplicationError('UNAUTHORIZED', 'No session.', 401);
@@ -128,6 +154,23 @@ describe('issue routes: context and permissions', () => {
     expect(runs.recordUsage).not.toHaveBeenCalled();
     context = { requestId: 'r', ownerId: 'ws', workspaceId: 'ws' };
     expect((await request(app).get('/inbox').expect(401)).body.code).toBe('UNAUTHORIZED');
+  });
+
+  it('lists one page of issues, searched by what a select types', async () => {
+    context = admin;
+    for (const title of ['Fix login', 'Billing', 'Login page'])
+      await store.create('ws', 'user-a', { title });
+    const app = build();
+    const page = await request(app)
+      .get('/issues')
+      .query({ q: ' login ', pageSize: '1' })
+      .expect(200);
+    expect(page.body).toMatchObject({ total: 2, page: 1, pageSize: 1 });
+    expect(page.body.issues).toHaveLength(1);
+    expect((await request(app).get('/issues').query({ page: '1' }).expect(200)).body.total).toBe(3);
+    expect(
+      (await request(app).get('/issues').query({ pageSize: '1000' }).expect(400)).body.code,
+    ).toBe('VALIDATION_ERROR');
   });
 
   it('works without a context resolver when context is already set', async () => {

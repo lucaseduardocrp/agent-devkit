@@ -7,6 +7,13 @@ import {
   type E2eStepResult,
   type E2eTestCase,
 } from '../domain/e2e.js';
+import type {
+  E2eExplorationLogEntry,
+  E2eExplorationPage,
+  E2eExplorationScript,
+  NewE2eExplorationScript,
+} from '../domain/e2e-insight.js';
+import type { E2eSource, E2eSourceDocumentation, NewE2eSource } from '../domain/e2e-source.js';
 import type { ExternalTestCase } from '../../test-management/domain/test-run.js';
 import {
   buildTestCases,
@@ -140,8 +147,97 @@ function toTestChangesRow(changes: E2eTestChanges) {
   };
 }
 
+interface ExplorationScriptRow extends Omit<E2eExplorationScript, 'status' | 'script' | 'pages'> {
+  status: string;
+  script: unknown;
+  pages: unknown;
+}
+
+function toExplorationScript(row: ExplorationScriptRow): E2eExplorationScript {
+  return {
+    ...row,
+    status: row.status === 'failed' ? 'failed' : 'ready',
+    script: Array.isArray(row.script) ? (row.script as E2eExplorationLogEntry[]) : [],
+    pages: Array.isArray(row.pages) ? (row.pages as E2eExplorationPage[]) : [],
+  };
+}
+
+interface SourceRow extends Omit<E2eSource, 'script' | 'pages' | 'documentation'> {
+  script: unknown;
+  pages: unknown;
+  documentation: string | null;
+}
+
+function toSource(row: SourceRow): E2eSource {
+  return {
+    ...row,
+    script: Array.isArray(row.script) ? (row.script as E2eExplorationLogEntry[]) : [],
+    pages: Array.isArray(row.pages) ? (row.pages as E2eExplorationPage[]) : [],
+    documentation: parseJson<E2eSourceDocumentation>(row.documentation),
+  };
+}
+
 export class PrismaE2eStore implements E2eStore {
   constructor(private readonly db: PrismaClient) {}
+
+  async saveSource(input: NewE2eSource): Promise<E2eSource> {
+    const { workspaceId, ...rest } = input;
+    const data = {
+      ...rest,
+      script: input.script as unknown as object[],
+      pages: input.pages as unknown as object[],
+      documentation: input.documentation ? JSON.stringify(input.documentation) : null,
+    };
+    return toSource(
+      await this.db.e2eSourceRecord.upsert({
+        where: { workspaceId },
+        create: { workspaceId, ...data },
+        update: data,
+      }),
+    );
+  }
+
+  async getSource(workspaceId: string): Promise<E2eSource | null> {
+    const row = await this.db.e2eSourceRecord.findUnique({ where: { workspaceId } });
+    return row ? toSource(row) : null;
+  }
+
+  async saveExplorationScript(input: NewE2eExplorationScript): Promise<E2eExplorationScript> {
+    const row = await this.db.e2eExplorationScriptRecord.create({
+      data: {
+        ...input,
+        script: input.script as unknown as object[],
+        pages: input.pages as unknown as object[],
+      },
+    });
+    return toExplorationScript(row);
+  }
+
+  async listExplorationScripts(
+    workspaceId: string,
+    creationId?: string,
+  ): Promise<E2eExplorationScript[]> {
+    const rows = await this.db.e2eExplorationScriptRecord.findMany({
+      where: { workspaceId, ...(creationId ? { creationId } : {}) },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map(toExplorationScript);
+  }
+
+  async getExplorationScript(
+    workspaceId: string,
+    id: string,
+  ): Promise<E2eExplorationScript | null> {
+    const row = await this.db.e2eExplorationScriptRecord.findFirst({ where: { id, workspaceId } });
+    return row ? toExplorationScript(row) : null;
+  }
+
+  async deleteExplorationScript(workspaceId: string, id: string): Promise<boolean> {
+    return (
+      (await this.db.e2eExplorationScriptRecord.deleteMany({ where: { id, workspaceId } })).count >
+      0
+    );
+  }
 
   async createCreation(input: NewE2eCreation): Promise<E2eCreation> {
     return toCreation(await this.db.e2eCreationRecord.create({ data: toCreationRow(input) }));
@@ -154,10 +250,17 @@ export class PrismaE2eStore implements E2eStore {
 
   async listCreations(workspaceId: string): Promise<E2eCreation[]> {
     const rows = await this.db.e2eCreationRecord.findMany({
-      where: { workspaceId },
+      where: { workspaceId, internal: false },
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map(toCreation);
+  }
+
+  async getSourceAnchor(workspaceId: string): Promise<E2eCreation | null> {
+    const row = await this.db.e2eCreationRecord.findFirst({
+      where: { workspaceId, internal: true },
+    });
+    return row ? toCreation(row) : null;
   }
 
   async updateCreation(

@@ -360,8 +360,8 @@ describe('PbiPushDialog field templates', () => {
         .map((option) => option.textContent),
     ).toEqual([
       'Não preencher',
-      'Title',
-      'Description',
+      'Título',
+      'Descrição',
       'Status',
       'azure_devops · Custom.Risk',
       'azure_devops · Custom.Team',

@@ -94,7 +94,10 @@ export function TreeRowSkeleton({
 function IntegrationSidebarSkeleton({ title }: { readonly title: string }): React.JSX.Element {
   return (
     <aside
-      className={cn('flex w-[280px] shrink-0 flex-col border-r bg-[var(--surface-1)]', BORDER)}
+      className={cn(
+        'flex w-[280px] shrink-0 flex-col overflow-hidden rounded-lg border bg-[var(--surface-1)]',
+        BORDER,
+      )}
     >
       <SidebarHeader title={title} height="h-11" actions={3} />
       <SearchBox />
@@ -214,11 +217,16 @@ export function IntegrationTestsSkeleton(): React.JSX.Element {
       role="status"
       aria-busy="true"
       aria-label={t('common.loading')}
-      className="-m-5 flex h-[calc(100%+2.5rem)] min-h-[560px] overflow-hidden bg-[var(--surface-0)]"
+      className="flex h-full min-h-[560px] gap-4 overflow-hidden"
       data-testid="integration-tests-skeleton"
     >
       <IntegrationSidebarSkeleton title={t('apiTests.collections')} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div
+        className={cn(
+          'flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-[var(--surface-1)]',
+          BORDER,
+        )}
+      >
         <header
           className={cn(
             'flex h-14 shrink-0 items-center gap-2 border-b bg-[var(--surface-1)] px-3',
@@ -376,11 +384,14 @@ export function LoadTestsSkeleton(): React.JSX.Element {
       role="status"
       aria-busy="true"
       aria-label={t('common.loading')}
-      className="-m-5 flex h-[calc(100%+2.5rem)] min-h-[560px] overflow-hidden bg-[var(--surface-0)]"
+      className="flex h-full min-h-[560px] gap-4"
       data-testid="load-tests-skeleton"
     >
       <aside
-        className={cn('flex w-[280px] shrink-0 flex-col border-r bg-[var(--surface-1)]', BORDER)}
+        className={cn(
+          'flex w-[280px] shrink-0 flex-col overflow-hidden rounded-lg border bg-[var(--surface-1)]',
+          BORDER,
+        )}
       >
         <SidebarHeader title={t('apiTests.scenarios')} height="h-14" actions={2} />
         <SearchBox />
@@ -392,7 +403,12 @@ export function LoadTestsSkeleton(): React.JSX.Element {
           <ScenarioRowSkeleton name="w-24" type="w-14" />
         </ul>
       </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div
+        className={cn(
+          'flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-[var(--surface-1)]',
+          BORDER,
+        )}
+      >
         <div className="flex min-h-0 flex-1 flex-col">
           <header
             className={cn(

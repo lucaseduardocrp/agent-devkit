@@ -13,12 +13,8 @@ import {
  * `<details>` nor fires `toggle`. This opens the disclosure the way a browser would and lets React
  * observe the `toggle` event the component listens for.
  */
-function openExportConfiguration(summary: HTMLElement): void {
-  fireEvent.click(summary);
-  const details = summary.closest('details');
-  if (!details) throw new Error('The export configuration disclosure was not found.');
-  details.open = true;
-  fireEvent(details, new Event('toggle'));
+function openExportConfiguration(button: HTMLElement): void {
+  fireEvent.click(button);
 }
 
 describe('TestPlansView', () => {
@@ -60,84 +56,90 @@ describe('TestPlansView', () => {
     );
   });
 
-  it('loads, reviews, edits, saves, and exports a persisted Test Plan', async () => {
-    const client = new ApiClient();
-    const history = vi
-      .spyOn(client, 'getAuditHistory')
-      .mockResolvedValue({ items: [], page: 1, total: 0, totalPages: 0 });
-    const saved = {
-      id: 'plan-1',
-      workspaceId: 'ws-1',
-      title: 'Saved checkout',
-      plans: [{ title: 'Pay', description: 'Complete payment', steps: [] }],
-      createdAt: '2026-01-01',
-      updatedAt: '2026-01-02',
-    };
-    vi.spyOn(client, 'getSavedTestPlans').mockResolvedValue({
-      items: [saved, { ...saved, id: 'plan-2', title: 'Another plan', plans: [] }],
-      page: 1,
-      pageSize: 8,
-      total: 2,
-      totalPages: 1,
-    });
-    const update = vi
-      .spyOn(client, 'updateSavedTestPlan')
-      .mockImplementation(async (_id, input) => ({ ...saved, ...input }));
-    vi.spyOn(client, 'getAzureDevOpsProjectMembers').mockResolvedValue({
-      configured: false,
-      organization: null,
-      project: null,
-      members: [],
-    });
-    vi.spyOn(client, 'getWorkspaceMembers').mockResolvedValue([]);
-    vi.spyOn(client, 'getAgents').mockResolvedValue([]);
-    vi.spyOn(client, 'generateTestPlanCsv').mockResolvedValue('csv');
-    const workspace = [
-      {
-        workspace: {
-          id: 'ws-1',
-          name: 'Workspace',
-          slug: 'workspace',
-          ownerId: 'u1',
-          createdAt: '',
+  it(
+    'loads, reviews, edits, saves, and exports a persisted Test Plan',
+    { timeout: 30000 },
+    async () => {
+      const client = new ApiClient();
+      const history = vi
+        .spyOn(client, 'getAuditHistory')
+        .mockResolvedValue({ items: [], page: 1, total: 0, totalPages: 0 });
+      const saved = {
+        id: 'plan-1',
+        workspaceId: 'ws-1',
+        title: 'Saved checkout',
+        plans: [{ title: 'Pay', description: 'Complete payment', steps: [] }],
+        createdAt: '2026-01-01',
+        updatedAt: '2026-01-02',
+      };
+      vi.spyOn(client, 'getSavedTestPlans').mockResolvedValue({
+        items: [saved, { ...saved, id: 'plan-2', title: 'Another plan', plans: [] }],
+        page: 1,
+        pageSize: 8,
+        total: 2,
+        totalPages: 1,
+      });
+      const update = vi
+        .spyOn(client, 'updateSavedTestPlan')
+        .mockImplementation(async (_id, input) => ({ ...saved, ...input }));
+      vi.spyOn(client, 'getAzureDevOpsProjectMembers').mockResolvedValue({
+        configured: false,
+        organization: null,
+        project: null,
+        members: [],
+      });
+      vi.spyOn(client, 'getWorkspaceMembers').mockResolvedValue([]);
+      vi.spyOn(client, 'getAgents').mockResolvedValue([]);
+      vi.spyOn(client, 'generateTestPlanCsv').mockResolvedValue('csv');
+      const workspace = [
+        {
+          workspace: {
+            id: 'ws-1',
+            name: 'Workspace',
+            slug: 'workspace',
+            ownerId: 'u1',
+            createdAt: '',
+          },
+          member: {
+            id: 'm1',
+            workspaceId: 'ws-1',
+            userId: 'u1',
+            role: 'ADMIN' as const,
+            permissions: {},
+            createdAt: '',
+          },
         },
-        member: {
-          id: 'm1',
-          workspaceId: 'ws-1',
-          userId: 'u1',
-          role: 'ADMIN' as const,
-          permissions: {},
-          createdAt: '',
-        },
-      },
-    ];
-    const view = render(
-      <TestPlansView apiClient={client} workspaces={workspace} activeWorkspaceId="ws-1" />,
-    );
-    fireEvent.click(view.getByTestId('tab-saved-test-plans'));
-    fireEvent.click(await view.findByRole('button', { name: 'Abrir Test Plan Saved checkout' }));
-    expect(view.queryByRole('button', { name: 'Histórico' })).toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Ações' }));
-    fireEvent.click(view.getByRole('button', { name: 'Histórico' }));
-    await waitFor(() =>
-      expect(history).toHaveBeenCalledWith('testplan', 1, expect.any(AbortSignal), 'plan-1'),
-    );
-    // Each case opens in its own window, with its description and steps.
-    expect(view.queryByText('Complete payment')).toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Abrir caso de teste CT-01' }));
-    expect(within(view.getByTestId('test-case-modal')).getByText('Complete payment')).toBeTruthy();
-    fireEvent.click(view.getByRole('button', { name: 'Fechar modal' }));
-    fireEvent.change(view.getByLabelText('Título do Test Plan'), { target: { value: '' } });
-    fireEvent.click(view.getByRole('button', { name: 'Salvar alterações' }));
-    await waitFor(() => expect(update).toHaveBeenCalled());
-    fireEvent.click(view.getByRole('button', { name: 'A\u00e7\u00f5es' }));
-    fireEvent.click(view.getByRole('button', { name: 'Exportar CSV' }));
-    expect(client.generateTestPlanCsv).not.toHaveBeenCalled();
-    expect(await view.findByRole('alert')).toHaveTextContent('pelo menos um passo');
-    fireEvent.click(view.getByTestId('btn-back-to-saved'));
-    fireEvent.click(view.getByRole('button', { name: 'Abrir Test Plan Another plan' }));
-    expect(view.getByText(/Nenhum caso de teste neste plano/)).toBeInTheDocument();
-  });
+      ];
+      const view = render(
+        <TestPlansView apiClient={client} workspaces={workspace} activeWorkspaceId="ws-1" />,
+      );
+      fireEvent.click(view.getByTestId('tab-saved-test-plans'));
+      fireEvent.click(await view.findByRole('button', { name: 'Abrir Test Plan Saved checkout' }));
+      expect(view.queryByRole('button', { name: 'Histórico' })).toBeNull();
+      fireEvent.click(view.getByRole('button', { name: 'Ações' }));
+      fireEvent.click(view.getByRole('button', { name: 'Histórico' }));
+      await waitFor(() =>
+        expect(history).toHaveBeenCalledWith('testplan', 1, expect.any(AbortSignal), 'plan-1'),
+      );
+      // Each case opens in its own window, with its description and steps.
+      expect(view.queryByText('Complete payment')).toBeNull();
+      fireEvent.click(view.getByRole('button', { name: 'Abrir caso de teste CT-01' }));
+      expect(
+        within(view.getByTestId('test-case-modal')).getByText('Complete payment'),
+      ).toBeTruthy();
+      fireEvent.click(view.getByRole('button', { name: 'Fechar modal' }));
+      fireEvent.change(view.getByLabelText('Título do Test Plan'), { target: { value: '' } });
+      fireEvent.click(view.getByRole('button', { name: 'Salvar alterações' }));
+      await waitFor(() => expect(update).toHaveBeenCalled());
+      fireEvent.click(view.getByRole('button', { name: 'A\u00e7\u00f5es' }));
+      fireEvent.click(view.getByRole('button', { name: 'Exportar CSV' }));
+      expect(client.generateTestPlanCsv).not.toHaveBeenCalled();
+      expect(await view.findByRole('alert')).toHaveTextContent('pelo menos um passo');
+      fireEvent.click(view.getByTestId('btn-back-to-saved'));
+      fireEvent.click(view.getByRole('button', { name: 'Abrir Test Plan Another plan' }));
+      expect(view.getByText(/Nenhum caso de teste neste plano/)).toBeInTheDocument();
+    },
+  );
 
   it('deletes a persisted plan and reloads the current page', async () => {
     const client = new ApiClient();

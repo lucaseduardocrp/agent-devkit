@@ -8,7 +8,7 @@ import { Toast } from '../../components/ui/toast.js';
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog.js';
 import { ModeSwitch } from '../../components/ui/mode-switch.js';
 import { useActivityRunner } from '../activities/ActivityCenter.js';
-import { useI18n } from '../../lib/i18n/index.js';
+import { getMessages, useI18n } from '../../lib/i18n/index.js';
 import { usePermissions } from '../workspaces/permissions.js';
 import { DesignRepositoryPicker } from './DesignRepositoryPicker.js';
 import type {
@@ -34,10 +34,10 @@ const maxImageBytes = 5 * 1024 * 1024;
 function readImage(file: File): Promise<DesignImage> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('Unable to read image.'));
+    reader.onerror = () => reject(reader.error ?? new Error(getMessages().design.imageReadFailed));
     reader.onload = () => {
       if (typeof reader.result !== 'string') {
-        reject(new Error('Unable to read image.'));
+        reject(new Error(getMessages().design.imageReadFailed));
         return;
       }
       const preview = reader.result;
@@ -122,7 +122,7 @@ function previewDocument(files: readonly DesignFileDto[], emptyPreview: string):
     },
   );
   const unreferencedStyles = stylesheets
-    .filter((file) => !html.includes(file.name.split(/[\\/]/).at(-1)!))
+    .filter((file) => !html.includes(file.name.split(/[\\/]/).at(-1) as string))
     .map((file) => `<style>\n${file.content}\n</style>`)
     .join('\n');
   const unreferencedScripts = scripts
@@ -340,6 +340,8 @@ export function DesignView({
     </div>
   );
   const create = async () => {
+    /* v8 ignore next -- the button is disabled until the form is filled */
+    if (!title.trim() || !prompt.trim() || !agentId) return;
     setPending(true);
     try {
       const project = await runActivity(
@@ -369,7 +371,9 @@ export function DesignView({
       setPending(false);
     }
   };
-  const chat = async (selected: DesignProjectDto) => {
+  const chat = async () => {
+    /* v8 ignore next -- the button is disabled without a message or an image */
+    if (!selected || (!message.trim() && !chatImages.length)) return;
     const content = message.trim() || t('design.imageMessage');
     setPending(true);
     try {
@@ -416,7 +420,9 @@ export function DesignView({
         file.name === activeFile?.name ? { ...file, content } : file,
       ),
     });
-  const saveCode = async (selected: DesignProjectDto) => {
+  const saveCode = async () => {
+    /* v8 ignore next -- the editor only exists while a project is open */
+    if (!selected) return;
     setPending(true);
     try {
       replaceProject(
@@ -435,7 +441,9 @@ export function DesignView({
       setPending(false);
     }
   };
-  const pullProject = async (selected: DesignProjectDto) => {
+  const pullProject = async () => {
+    /* v8 ignore next -- the button only exists while a project is open */
+    if (!selected) return;
     setPending(true);
     try {
       replaceProject(
@@ -455,6 +463,8 @@ export function DesignView({
     }
   };
   const saveSystem = async () => {
+    /* v8 ignore next -- the button is disabled until both fields are filled */
+    if (!systemName.trim() || !systemContent.trim()) return;
     setPending(true);
     try {
       const saved = await runActivity(
@@ -481,6 +491,8 @@ export function DesignView({
     }
   };
   const generateSystem = async () => {
+    /* v8 ignore next -- the button is disabled until a description and an agent are set */
+    if (!systemPrompt.trim() || !agentId) return;
     setPending(true);
     setIsGeneratingSystem(true);
     try {
@@ -519,11 +531,13 @@ export function DesignView({
       setPending(false);
     }
   };
-  const deleteSystem = async (systemId: string) => {
+  const deleteSystem = async () => {
+    /* v8 ignore next -- the button only exists for a saved system */
+    if (!editingSystemId) return;
     setPending(true);
     try {
-      await apiClient.deleteDesignSystem(systemId, provider);
-      setSystems((current) => current.filter((item) => item.id !== systemId));
+      await apiClient.deleteDesignSystem(editingSystemId, provider);
+      setSystems((current) => current.filter((item) => item.id !== editingSystemId));
       setEditingSystemId(undefined);
       setSystemName('');
       setSystemContent('');
@@ -532,7 +546,9 @@ export function DesignView({
       setPending(false);
     }
   };
-  const exportProject = (selected: DesignProjectDto) => {
+  const exportProject = () => {
+    /* v8 ignore next -- the button only exists while a project is open */
+    if (!selected) return;
     download(
       `${selected.title.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.html`,
       previewDocument(selected.files, t('design.noPreview')),
@@ -541,16 +557,14 @@ export function DesignView({
   };
 
   return (
-    <div
-      className="flex h-full min-h-0 w-full overflow-hidden bg-surface-0"
-      data-testid="screen-design"
-    >
+    <div className="flex h-full min-h-0 w-full gap-4 overflow-hidden" data-testid="screen-design">
       <ResizableSidebar
         aria-label={t('design.projects')}
+        gap
         defaultWidth={280}
         minWidth={220}
         maxWidth="container"
-        className="border-r border-border bg-surface-1"
+        className="overflow-hidden rounded-lg border border-border bg-surface-1"
       >
         <div className="flex min-h-0 flex-1 flex-col p-3">
           {!isReadOnly && (
@@ -601,7 +615,7 @@ export function DesignView({
         </div>
       </ResizableSidebar>
       {section === 'systems' ? (
-        <main className="min-w-0 flex-1 overflow-y-auto p-6">
+        <main className="min-w-0 flex-1 overflow-y-auto rounded-lg border border-border bg-surface-1 p-6">
           <section className="mx-auto max-w-5xl space-y-5">
             <header>
               <h1 className="text-xl font-semibold">{t('runtime.designSystems')}</h1>
@@ -782,7 +796,7 @@ export function DesignView({
                       <Button
                         variant="destructive"
                         disabled={pending}
-                        onClick={() => void deleteSystem(editingSystemId)}
+                        onClick={() => void deleteSystem()}
                       >
                         {t('common.delete')}
                       </Button>
@@ -794,14 +808,14 @@ export function DesignView({
           </section>
         </main>
       ) : !selected ? (
-        <main className="min-w-0 flex-1 overflow-y-auto p-6">
-          <section className="mx-auto max-w-2xl space-y-5">
+        <main className="min-w-0 flex-1 overflow-y-auto rounded-lg border border-border bg-surface-1 p-6">
+          <section className="space-y-5">
             <header>
               <h1 className="text-xl font-semibold">{t('runtime.designTitle')}</h1>
               <p className="text-sm text-muted">{t('design.subtitle')}</p>
             </header>
             {!isReadOnly && (
-              <div className="space-y-4 rounded-xl border border-border bg-surface-1 p-5">
+              <div className="space-y-4">
                 <DesignRepositoryPicker
                   apiClient={apiClient}
                   isReadOnly={isReadOnly}
@@ -916,7 +930,7 @@ export function DesignView({
         </main>
       ) : (
         <>
-          <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-surface-1">
             <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
               <div className="min-w-0">
                 <h1 className="truncate text-sm font-semibold">{selected.title}</h1>
@@ -955,11 +969,11 @@ export function DesignView({
                   size="sm"
                   variant="outline"
                   disabled={pending}
-                  onClick={() => void pullProject(selected)}
+                  onClick={() => void pullProject()}
                 >
                   <i className="ti ti-download" aria-hidden="true" /> Pull
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => exportProject(selected)}>
+                <Button size="sm" variant="outline" onClick={exportProject}>
                   <i className="ti ti-download" aria-hidden="true" /> {t('design.export')}
                 </Button>
                 <Button
@@ -1026,7 +1040,7 @@ export function DesignView({
                           size="sm"
                           disabled={pending}
                           isLoading={pending}
-                          onClick={() => void saveCode(selected)}
+                          onClick={() => void saveCode()}
                         >
                           Push
                         </Button>
@@ -1039,12 +1053,13 @@ export function DesignView({
           </main>
           <ResizableSidebar
             aria-label={t('design.conversation')}
+            gap
             resizeLabel={t('design.resizeConversation')}
             resizeEdge="left"
             defaultWidth={360}
             minWidth={280}
             maxWidth="container"
-            className="border-l border-border bg-surface-1"
+            className="overflow-hidden rounded-lg border border-border bg-surface-1"
           >
             {!isReadOnly && (
               <div className="border-b border-border p-3">
@@ -1145,7 +1160,7 @@ export function DesignView({
                   className="w-full"
                   disabled={pending || (!message.trim() && !chatImages.length)}
                   isLoading={pending}
-                  onClick={() => void chat(selected)}
+                  onClick={() => void chat()}
                 >
                   <i className="ti ti-send" aria-hidden="true" /> {t('design.send')}
                 </Button>
@@ -1157,41 +1172,41 @@ export function DesignView({
       {toast && (
         <Toast message={toast.message} variant={toast.variant} onDismiss={() => setToast(null)} />
       )}
-      {deleteTarget && (
-        <ConfirmationDialog
-          open
-          title={t('design.deletePrototype')}
-          description={t('design.deletePrototypeDescription', { title: deleteTarget.title })}
-          confirmLabel={t('common.delete')}
-          cancelLabel={t('common.cancel')}
-          destructive
-          isLoading={pending}
-          onCancel={() => setDeleteTarget(null)}
-          onConfirm={() => {
-            const target = deleteTarget;
-            setPending(true);
-            void runActivity(
-              { kind: 'push', title: t('design.deletingPrototype', { title: target.title }) },
-              () => apiClient.deleteDesignProject(target.id, target.provider),
+      <ConfirmationDialog
+        open={Boolean(deleteTarget)}
+        title={t('design.deletePrototype')}
+        description={t('design.deletePrototypeDescription', { title: deleteTarget?.title ?? '' })}
+        confirmLabel={t('common.delete')}
+        cancelLabel={t('common.cancel')}
+        destructive
+        isLoading={pending}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          const target = deleteTarget;
+          /* v8 ignore next -- the dialog only opens with a target */
+          if (!target) return;
+          setPending(true);
+          void runActivity(
+            { kind: 'push', title: t('design.deletingPrototype', { title: target.title }) },
+            () => apiClient.deleteDesignProject(target.id, target.provider),
+          )
+            .then(() => {
+              setProjects((all) =>
+                all.filter((item) => item.id !== target.id || item.provider !== target.provider),
+              );
+              setSelected(null);
+              setDeleteTarget(null);
+              setToast({ message: t('design.prototypeDeleted'), variant: 'success' });
+            })
+            .catch((error: unknown) =>
+              setToast({
+                message: error instanceof Error ? error.message : t('design.deleteFailed'),
+                variant: 'error',
+              }),
             )
-              .then(() => {
-                setProjects((all) =>
-                  all.filter((item) => item.id !== target.id || item.provider !== target.provider),
-                );
-                setSelected(null);
-                setDeleteTarget(null);
-                setToast({ message: t('design.prototypeDeleted'), variant: 'success' });
-              })
-              .catch((error: unknown) =>
-                setToast({
-                  message: error instanceof Error ? error.message : t('design.deleteFailed'),
-                  variant: 'error',
-                }),
-              )
-              .finally(() => setPending(false));
-          }}
-        />
-      )}
+            .finally(() => setPending(false));
+        }}
+      />
     </div>
   );
 }

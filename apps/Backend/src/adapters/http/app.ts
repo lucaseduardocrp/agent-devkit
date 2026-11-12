@@ -14,7 +14,7 @@ import { createRequestContext } from '../../shared/context.js';
 import { ApplicationError, toErrorResponse } from '../../shared/errors.js';
 import { chromiumHostArgs, hostAccessFetch } from '../../shared/host-access.js';
 import { consoleLogger, createRequestLogger, type Logger } from '../../shared/observability.js';
-import { noCache, type Cache } from '../../shared/cache.js';
+import { MemoryCacheStore, noCache, type Cache } from '../../shared/cache.js';
 import { cachedKnowledgeRepository } from '../../modules/knowledge/application/knowledge-cache.js';
 import compression from 'compression';
 import { createCompatibilityRouter, type RequestContextResolver } from './compatibility-routes.js';
@@ -30,6 +30,17 @@ import { createWorkspacesRouter } from './workspaces-routes.js';
 import { IntegrationsService } from '../../modules/integrations/application/integrations-service.js';
 import { InMemoryUserIntegrationStore } from '../../modules/integrations/adapters/in-memory-integrations-store.js';
 import { createIntegrationsRouter } from './integrations-routes.js';
+import { createMessagingRouter } from './messaging-routes.js';
+import {
+  InMemoryMessagingChatStore,
+  type MessagingChatStore,
+} from '../../modules/messaging/application/messaging-chat-store.js';
+import {
+  TelegramRunNotifier,
+  type RunNotifier,
+} from '../../modules/messaging/application/run-notifier.js';
+import { TelegramGateway } from '../../modules/messaging/telegram/telegram-gateway.js';
+import { TelegramPairingCodes } from '../../modules/messaging/telegram/telegram-pairing.js';
 
 import {
   InMemoryKnowledgeChunkRepository,
@@ -71,7 +82,37 @@ import {
   InMemoryReleaseNoteStore,
   type ReleaseNoteStore,
 } from '../../modules/release-notes/release-note-store.js';
+import { createDevelopmentRouter } from './development-routes.js';
+import { EventingDevelopmentStore } from '../../modules/development/development-events.js';
+import { DevelopmentService } from '../../modules/development/development-service.js';
+import {
+  InMemoryDevelopmentStore,
+  type DevelopmentStore,
+} from '../../modules/development/development-store.js';
 import { InMemoryRunStore, type RunStore } from '../../modules/issues/run-store.js';
+import { EmailNotificationChannel } from '../../modules/notifications/adapters/email-channel.js';
+import {
+  NotificationChannelRegistry,
+  type NotificationChannel,
+} from '../../modules/notifications/application/channel.js';
+import {
+  InMemoryNotificationOutbox,
+  type NotificationOutbox,
+} from '../../modules/notifications/application/outbox.js';
+import { NotificationOutboxWorker } from '../../modules/notifications/application/outbox-worker.js';
+import { NotificationService } from '../../modules/notifications/application/notification-service.js';
+import {
+  InMemoryNotificationRuleStore,
+  type NotificationRuleStore,
+} from '../../modules/notifications/application/rule-store.js';
+import type { EmailSender } from '../../modules/identity/application/email-sender.js';
+import {
+  InMemoryNotificationContactStore,
+  type NotificationContactStore,
+} from '../../modules/notifications/application/contact-store.js';
+import { createNotificationsRouter } from './notifications-routes.js';
+import { EventingRunStore } from '../../modules/issues/eventing-run-store.js';
+import { InMemoryEventBus, type EventBus } from '../../modules/realtime/event-bus.js';
 import { RunService } from '../../modules/issues/run-service.js';
 import { InMemoryUsageStore, type UsageStore } from '../../modules/issues/usage-store.js';
 import { InMemoryIssueStore, type IssueStore } from '../../modules/issues/issue-store.js';
@@ -118,6 +159,11 @@ import {
   type TestSuiteStore,
 } from '../../modules/testplans/application/test-suites.js';
 import { InMemoryE2eStore, type E2eStore } from '../../modules/e2e/application/e2e-store.js';
+import {
+  E2eEnvironmentService,
+  InMemoryE2eEnvironmentStore,
+  type E2eEnvironmentStore,
+} from '../../modules/e2e/application/e2e-environments.js';
 import { E2eService, type E2eDispatcher } from '../../modules/e2e/application/e2e-service.js';
 import { E2eExecutor } from '../../modules/e2e/application/e2e-executor.js';
 import { E2eWorker } from '../../modules/e2e/application/e2e-worker.js';
@@ -186,12 +232,24 @@ export interface AppOptions {
   /** Where workspace agents are installed from (the ADK Hub on GitHub by default). */
   readonly hubCatalog?: HubCatalog;
   readonly issueStore?: IssueStore;
+  /** Sends e-mails (the "email" notification channel); without it that channel is not available. */
+  readonly emailSender?: EmailSender;
+  /** Where notification rules are kept. */
+  readonly notificationRules?: NotificationRuleStore;
+  readonly notificationContacts?: NotificationContactStore;
+  /** Where notifications wait to be delivered; in memory when omitted. */
+  readonly notificationOutbox?: NotificationOutbox;
+  /** More ways to notify people (Teams, Discord...), next to e-mail. */
+  readonly notificationChannels?: readonly NotificationChannel[];
   readonly issueBriefStore?: IssueBriefStore;
   readonly pbiStore?: PbiStore;
   readonly pbiRelationStore?: PbiRelationStore;
   readonly fieldMappingStore?: FieldMappingStore;
   readonly releaseNoteStore?: ReleaseNoteStore;
+  readonly developmentStore?: DevelopmentStore;
   readonly runStore?: RunStore;
+  /** Where live updates are published; replace it when several API replicas share a workspace. */
+  readonly eventBus?: EventBus;
   /** Token usage reported by MCP clients; defaults to an in-memory ledger. */
   readonly usageStore?: UsageStore;
   readonly savedTestPlans?: SavedTestPlanStore;
@@ -201,8 +259,16 @@ export interface AppOptions {
   readonly designSettings?: DesignSettingsStore;
   readonly workItemTypes?: WorkItemTypeStore;
   readonly e2eStore?: E2eStore;
+  /** Saved E2E environments (URL, test account, custom variables); in memory when omitted. */
+  readonly e2eEnvironments?: E2eEnvironmentStore;
   readonly e2eRunner?: E2eRunner;
   readonly e2eArtifacts?: E2eArtifactStore;
+  /** Where attachments and images are kept; defaults to the E2E artifact storage. */
+  readonly attachmentStore?: E2eArtifactStore;
+  /** Where E2E runs execute unless a run says otherwise: the user's computer or the ADK worker. */
+  readonly e2eDefaultExecution?: 'remote' | 'local';
+  /** The API runs on the user's own computer (desktop app): E2E runs never wait for a runner. */
+  readonly e2eRunsLocally?: boolean;
   readonly e2eAuthor?: E2eAuthor;
   readonly e2eScripts?: E2eScriptRepository;
   readonly e2eQueue?: E2eJobQueue;
@@ -229,6 +295,17 @@ export interface AppOptions {
   readonly e2eTranscoder?: E2eVideoTranscoder | null;
   /** Test management platforms for imported cases and published runs; defaults to integrations. */
   readonly testManagement?: TestManagementResolver;
+  /** Chats paired with the workspaces' Telegram bots; in memory by default. */
+  readonly messagingChats?: MessagingChatStore;
+  /** Started by the server; createApp only serves its routes. */
+  readonly telegramGateway?: TelegramGateway;
+  /** BRIDGE_SHARED_TOKEN, when the CLI Bridge (apps/Bridge) runs next to the API. */
+  readonly bridgeToken?: string;
+  readonly telegramPairing?: TelegramPairingCodes;
+  /** Run notifications to paired chats; null turns them off. */
+  readonly runNotifier?: RunNotifier | null;
+  /** Linked from notifications. */
+  readonly frontendUrl?: string;
 }
 
 const requestIdMiddleware: RequestHandler = (request, response, next) => {
@@ -342,6 +419,8 @@ export function createApp(options: AppOptions = {}) {
   app.use(express.json({ limit: '1mb' }));
   app.use(modulePolicy);
   const e2eArtifacts = options.e2eArtifacts ?? new InMemoryE2eArtifactStore();
+  // Attachments and images have their own storage, apart from the E2E artifacts (videos, screenshots).
+  const attachmentStore = options.attachmentStore ?? e2eArtifacts;
   const agentRepository = options.agentRepository ?? new InMemoryAgentRepository();
   const agentService =
     options.agentService ??
@@ -363,7 +442,7 @@ export function createApp(options: AppOptions = {}) {
     });
 
   app.use(createAuditRouter(audit, contextResolver));
-  app.use(createAttachmentsRouter(e2eArtifacts, contextResolver, dynamicProviderFactory));
+  app.use(createAttachmentsRouter(attachmentStore, contextResolver, dynamicProviderFactory));
   app.use(createAuthRouter(authService, { accessTokens, ...options.authRouterOptions }));
   app.use(
     createWorkspacesRouter(workspaceService, contextResolver, (id, remove) =>
@@ -371,12 +450,44 @@ export function createApp(options: AppOptions = {}) {
     ),
   );
   app.use(createIntegrationsRouter(integrationsService, contextResolver, dynamicProviderFactory));
+  const messagingChats = options.messagingChats ?? new InMemoryMessagingChatStore();
+  const telegramPairing =
+    options.telegramPairing ??
+    new TelegramPairingCodes(options.cache?.store ?? new MemoryCacheStore());
+  const runNotifier =
+    options.runNotifier === undefined
+      ? new TelegramRunNotifier({
+          integrations: integrationsService,
+          chats: messagingChats,
+          frontendUrl: options.frontendUrl,
+        })
+      : (options.runNotifier ?? undefined);
+  app.use(
+    createMessagingRouter(
+      {
+        gateway:
+          options.telegramGateway ??
+          new TelegramGateway({
+            integrations: integrationsService,
+            chats: messagingChats,
+            agents: agentService,
+            pairing: telegramPairing,
+          }),
+        chats: messagingChats,
+        pairing: telegramPairing,
+        bridgeToken: options.bridgeToken,
+        workspaceName: async (workspaceId, actorId) =>
+          (await workspaceService.getWorkspace(workspaceId, actorId)).workspace.name,
+      },
+      contextResolver,
+    ),
+  );
   app.use(
     createKnowledgeRouter(
       knowledgeRepository,
       dynamicProviderFactory,
       contextResolver,
-      e2eArtifacts,
+      attachmentStore,
     ),
   );
   const hubAgents = new HubAgentService(options.hubCatalog ?? new HttpHubCatalog(), agentService);
@@ -388,7 +499,9 @@ export function createApp(options: AppOptions = {}) {
   );
   const fieldMappings = options.fieldMappingStore ?? new InMemoryFieldMappingStore();
   app.use(createFieldMappingRouter(fieldMappings, contextResolver));
-  const runStore = options.runStore ?? new InMemoryRunStore();
+  // Runs tell the workspace's open streams whenever they change (Agent map, run flow).
+  const eventBus = options.eventBus ?? new InMemoryEventBus();
+  const runStore = new EventingRunStore(options.runStore ?? new InMemoryRunStore(), eventBus);
   const usageStore = options.usageStore ?? new InMemoryUsageStore();
   const briefService = new IssueBriefService({
     store: options.issueBriefStore ?? new InMemoryIssueBriefStore(),
@@ -399,14 +512,67 @@ export function createApp(options: AppOptions = {}) {
     usage: usageStore,
     knowledge: options.knowledgeSearch,
   });
+  // Notifications: events and rules say who to tell, channels say how (e-mail, Teams...).
+  const notificationChannels = new NotificationChannelRegistry([
+    new EmailNotificationChannel(options.emailSender ?? null),
+    ...(options.notificationChannels ?? []),
+  ]);
+  const notificationRules = options.notificationRules ?? new InMemoryNotificationRuleStore();
+  const notificationContacts =
+    options.notificationContacts ?? new InMemoryNotificationContactStore();
+  // Notifications are written down before they are sent, and a worker delivers (and retries) them,
+  // so a restart cannot lose one. The server starts its periodic look: app.locals.notificationWorker.
+  const notificationOutbox = options.notificationOutbox ?? new InMemoryNotificationOutbox();
+  const notificationWorker = new NotificationOutboxWorker({
+    outbox: notificationOutbox,
+    channels: notificationChannels,
+  });
+  app.locals['notificationWorker'] = notificationWorker;
+  const notifications = new NotificationService({
+    outbox: notificationOutbox,
+    onQueued: () => notificationWorker.kick(),
+    channels: notificationChannels,
+    rules: notificationRules,
+    directory: {
+      find: async (workspaceId, userId) => {
+        const member = await workspaceService.memberContact(workspaceId, userId);
+        if (!member) return null;
+        const addresses = await notificationContacts.forUser(workspaceId, userId);
+        return {
+          userId: member.id,
+          name: member.name,
+          email: member.email,
+          ...(Object.keys(addresses).length ? { addresses } : {}),
+        };
+      },
+    },
+    workspaceName: (workspaceId) => workspaceService.workspaceName(workspaceId),
+    ...(options.frontendUrl ? { appUrl: options.frontendUrl } : {}),
+  });
+  app.use(
+    createNotificationsRouter(
+      {
+        service: notifications,
+        rules: notificationRules,
+        contacts: notificationContacts,
+        people: (workspaceId, query) => workspaceService.searchMemberContacts(workspaceId, query),
+        channels: notificationChannels,
+        issues: issueStore,
+        isMember: async (workspaceId, userId) =>
+          (await workspaceService.memberContact(workspaceId, userId)) !== null,
+      },
+      contextResolver,
+    ),
+  );
   const runService = new RunService(
     runStore,
     issueStore,
     agentService,
     pbiStore,
     usageStore,
-    e2eArtifacts,
+    attachmentStore,
     briefService,
+    notifications,
   );
   void runService
     .recover()
@@ -418,8 +584,10 @@ export function createApp(options: AppOptions = {}) {
       workspaceService,
       runService,
       contextResolver,
-      e2eArtifacts,
+      attachmentStore,
       briefService,
+      eventBus,
+      notifications,
     ),
   );
   app.use(
@@ -438,13 +606,13 @@ export function createApp(options: AppOptions = {}) {
         options.pbiRelationStore ?? new InMemoryPbiRelationStore(),
         fieldMappings,
         cache,
-        e2eArtifacts,
+        attachmentStore,
       ),
       issueStore,
       runService,
       contextResolver,
       workspaceService,
-      e2eArtifacts,
+      attachmentStore,
     ),
   );
   app.use(
@@ -459,9 +627,25 @@ export function createApp(options: AppOptions = {}) {
     ),
   );
   const e2eStore = options.e2eStore ?? new InMemoryE2eStore();
+  const e2eEnvironments = new E2eEnvironmentService(
+    options.e2eEnvironments ?? new InMemoryE2eEnvironmentStore(),
+  );
   const e2eQueue = options.e2eQueue ?? new InMemoryE2eJobQueue();
   const e2eScripts = options.e2eScripts ?? new GitScriptRepository(integrationsService);
-  // Design browses repositories through the same Git access the E2E specs use.
+  // Development and Design browse repositories through the same Git access the E2E specs use.
+  app.use(
+    createDevelopmentRouter(
+      new DevelopmentService(
+        new EventingDevelopmentStore(
+          options.developmentStore ?? new InMemoryDevelopmentStore(),
+          eventBus,
+        ),
+        e2eScripts,
+      ),
+      contextResolver,
+      eventBus,
+    ),
+  );
   const designSettings = options.designSettings ?? new InMemoryDesignSettingsStore();
   app.use(
     createDesignRouter(
@@ -486,6 +670,7 @@ export function createApp(options: AppOptions = {}) {
       concurrency: options.e2eWorkerConcurrency,
       executor: new E2eExecutor({
         store: e2eStore,
+        runsLocally: options.e2eRunsLocally,
         runner:
           options.e2eRunner ??
           new PlaywrightE2eRunner({
@@ -501,18 +686,23 @@ export function createApp(options: AppOptions = {}) {
           artifacts: e2eArtifacts,
           testManagement,
         }),
+        notifier: runNotifier,
+        environments: e2eEnvironments,
         author:
           options.e2eAuthor ??
           new AgentE2eAuthor({
             agents: agentService,
             providers: dynamicProviderFactory,
             defaultLlm: options.defaultLlm,
+            ...(options.knowledgeSearch ? { knowledge: options.knowledgeSearch } : {}),
           }),
       }),
     });
     e2eDispatcher = new LocalE2eDispatcher(worker);
   }
   const e2eService = new E2eService({
+    defaultExecutionTarget: options.e2eDefaultExecution ?? 'remote',
+    runsLocally: options.e2eRunsLocally,
     store: e2eStore,
     queue: e2eQueue,
     dispatcher: e2eDispatcher,
@@ -522,21 +712,20 @@ export function createApp(options: AppOptions = {}) {
     agents: agentService,
     testManagement,
     savedCases: new SavedTestCaseReader(audited.tests, testSuites),
+    environments: e2eEnvironments,
+    ...(options.knowledgeSearch ? { knowledge: options.knowledgeSearch } : {}),
   });
   // Picks up work left in the queue and closes runs that lost their job.
   void e2eService
     .recover()
     .catch((error: unknown) => console.error('[E2eService] Recovery failed:', error));
-  app.use(createE2eRouter(e2eService, contextResolver));
-  app.use(
-    createE2eRunnerRouter(
-      new E2eLocalRunnerService({
-        tasks: e2eRunnerTasks,
-        artifacts: e2eArtifacts,
-        store: e2eStore,
-      }),
-    ),
-  );
+  const localRunners = new E2eLocalRunnerService({
+    tasks: e2eRunnerTasks,
+    artifacts: e2eArtifacts,
+    store: e2eStore,
+  });
+  app.use(createE2eRouter(e2eService, contextResolver, localRunners, e2eEnvironments));
+  app.use(createE2eRunnerRouter(localRunners));
   const specRepository = audited.specs;
   let apiTestDispatcher = options.apiTestDispatcher;
   const apiTestService = new ApiTestService({
@@ -549,10 +738,10 @@ export function createApp(options: AppOptions = {}) {
       specs: specRepository,
       pbis: pbiStore,
     }),
-    // Set just below before any request can start a run.
-    dispatcher: { wake: () => apiTestDispatcher!.wake() },
+    dispatcher: { wake: () => apiTestDispatcher?.wake() ?? Promise.resolve() },
     dynamicProviderFactory,
     defaultLlm: options.defaultLlm,
+    notifier: runNotifier,
     // Pipelines are committed through the same Git access the E2E specs use.
     repositories: e2eScripts,
   });
@@ -574,14 +763,14 @@ export function createApp(options: AppOptions = {}) {
   const specCollaborator = new AgentSpecCollaborator(agentService);
   app.use(
     createSpecRouter(
-      new SpecService(specRepository, specCollaborator, e2eArtifacts),
+      new SpecService(specRepository, specCollaborator, attachmentStore),
       contextResolver,
-      e2eArtifacts,
+      attachmentStore,
     ),
   );
   app.use(
     createSpecWorkflowRouter(
-      new SpecWorkflows(specRepository, knowledgeRepository, specCollaborator, e2eArtifacts),
+      new SpecWorkflows(specRepository, knowledgeRepository, specCollaborator, attachmentStore),
     ),
   );
   app.use(
@@ -594,7 +783,7 @@ export function createApp(options: AppOptions = {}) {
       dynamicProviderFactory,
       fieldMappings,
       testManagement,
-      e2eArtifacts,
+      attachmentStore,
     ),
   );
 
@@ -608,7 +797,10 @@ export function createApp(options: AppOptions = {}) {
   // What this server can do that the web app adapts to. Public: it describes the install only.
   app.get('/capabilities', (_request, response) => {
     // A local install with host access: runs on the ADK workers reach the user's localhost.
-    response.status(200).json({ workersReachLocalhost: Boolean(options.hostAlias) });
+    response.status(200).json({
+      workersReachLocalhost: Boolean(options.hostAlias),
+      defaultExecutionTarget: options.e2eDefaultExecution ?? 'remote',
+    });
   });
 
   app.get('/health/live', (_request, response) => {

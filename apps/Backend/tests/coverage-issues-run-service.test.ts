@@ -2,11 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InMemoryIssueStore } from '../src/modules/issues/issue-store.js';
 import { InMemoryRunStore, type AgentRun, type RunStore } from '../src/modules/issues/run-store.js';
 import { RunService } from '../src/modules/issues/run-service.js';
-import {
-  EMPTY_AGENT_WORKFLOW,
-  type AgentWorkflow,
-} from '../src/modules/agents/domain/agent-workflow.js';
-import type { AgentService } from '../src/modules/agents/application/agent-service.js';
+import { fakeRunAgents } from './helpers/fake-run-agents.js';
 import type { PbiStore } from '../src/modules/pbi/pbi-store.js';
 import { ApplicationError } from '../src/shared/errors.js';
 
@@ -21,47 +17,14 @@ function managed(store: InMemoryRunStore): RunStore {
   return view;
 }
 
-function setup(
-  options: {
-    executeAgent?: ReturnType<typeof vi.fn>;
-    managed?: boolean;
-    workflow?: Partial<AgentWorkflow>;
-  } = {},
-) {
+function setup(options: { executeAgent?: ReturnType<typeof vi.fn>; managed?: boolean } = {}) {
   const issues = new InMemoryIssueStore();
   const memory = new InMemoryRunStore();
   const store = options.managed ? managed(memory) : memory;
   const executeAgent =
     options.executeAgent ??
     vi.fn().mockResolvedValue({ result: 'Done', provider: 'OpenAI', model: 'm' });
-  const agents = {
-    getAgent: vi.fn().mockResolvedValue({ id: agentId, name: 'Agent' }),
-    getWorkflow: vi.fn().mockResolvedValue({ ...EMPTY_AGENT_WORKFLOW, ...options.workflow }),
-    executeAgent,
-    // Without a configured workflow, runs execute as a single step with the assigned agent.
-    executeWorkflowStep: vi.fn(
-      async (
-        ws: string,
-        id: string,
-        _step: unknown,
-        _n: number,
-        _total: number,
-        input: unknown,
-        _uncertainty: unknown,
-        ctx: unknown,
-        signal: AbortSignal,
-      ) => ({
-        agent: { id },
-        ...(await (executeAgent as (...args: unknown[]) => Promise<object>)(
-          ws,
-          id,
-          input,
-          ctx,
-          signal,
-        )),
-      }),
-    ),
-  } as unknown as AgentService & { getAgent: ReturnType<typeof vi.fn> };
+  const agents = fakeRunAgents(executeAgent);
   const runs = new RunService(store, issues, agents);
   const createIssue = (title = 'Task') =>
     issues.create(workspaceId, 'user-a', { title, assigneeAgentId: agentId });
@@ -147,10 +110,7 @@ describe('RunService validation', () => {
   it('builds the prompt from the linked PBI tree and falls back to issue defaults', async () => {
     const issues = new InMemoryIssueStore();
     const store = new InMemoryRunStore();
-    const agents = {
-      getAgent: vi.fn().mockResolvedValue({ id: agentId, name: 'Agent' }),
-      getWorkflow: vi.fn().mockResolvedValue(EMPTY_AGENT_WORKFLOW),
-    } as unknown as AgentService;
+    const agents = fakeRunAgents(vi.fn());
     const pbiItems = {
       get: vi.fn(async (_ws: string, id: string) =>
         id === 'root' ? { id: 'root', title: 'Epic', description: 'Root' } : null,
@@ -208,11 +168,7 @@ describe('RunService server execution', () => {
 
   it('records successful runs without usage and leaves status to managing stores', async () => {
     const executeAgent = vi.fn().mockResolvedValue({ result: 'Ok', provider: 'OpenAI' });
-    const { runs, issues, createIssue } = setup({
-      executeAgent,
-      managed: true,
-      workflow: { finalReview: false },
-    });
+    const { runs, issues, createIssue } = setup({ executeAgent, managed: true });
     const issue = await createIssue();
     const run = await runs.create(issue.id, context);
     await vi.waitFor(async () =>
@@ -225,6 +181,43 @@ describe('RunService server execution', () => {
       }),
     );
     expect((await issues.get(workspaceId, issue.id))?.status).toBe('todo');
+  });
+
+  it('finishes a run saved before workflows existed and leaves the issue to a managing store', async () => {
+    const { runs, store, issues, createIssue } = setup({ managed: true });
+    const issue = await createIssue();
+    // A run with no workflow state is carried out by the plain agent path.
+    const queued = (await store.claim({
+      workspaceId,
+      issueId: issue.id,
+      agentId,
+      actorId: 'u',
+      ownerId: 'o',
+      prompt: 'p',
+      attempt: 1,
+      mode: 'server',
+    }))!;
+    await runs.recover();
+    await vi.waitFor(async () =>
+      expect((await store.get(workspaceId, queued.id))?.status).toBe('succeeded'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await issues.get(workspaceId, issue.id))?.status).toBe('todo');
+  });
+
+  it('ignores the failure of an execution that was cancelled meanwhile', async () => {
+    let fail!: (error: unknown) => void;
+    const executeAgent = vi
+      .fn()
+      .mockReturnValue(new Promise((_resolve, reject) => (fail = reject)));
+    const { runs, createIssue } = setup({ executeAgent });
+    const issue = await createIssue();
+    const run = await runs.create(issue.id, context);
+    await vi.waitFor(() => expect(executeAgent).toHaveBeenCalled());
+    await runs.cancel(workspaceId, run.id);
+    fail(new Error('late failure'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await runs.get(workspaceId, run.id)).status).toBe('cancelled');
   });
 
   it('does not touch the issue when the run was finished elsewhere', async () => {

@@ -25,7 +25,7 @@ describe('WorkspaceLayout', () => {
 
     const main = getByRole('main');
     expect(main).toHaveClass('overflow-y-auto');
-    expect(main).toHaveClass('p-5');
+    expect(main).toHaveClass('p-11');
     expect(main).not.toHaveClass('overflow-hidden');
     expect(main).not.toHaveClass('p-0');
   });

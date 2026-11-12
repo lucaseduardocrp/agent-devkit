@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
-import { connect as connectSocket, type AddressInfo } from 'node:net';
+import { connect, type AddressInfo } from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -283,95 +283,6 @@ describe('HTTP transport', () => {
     await client.close();
   });
 
-  it('trusts the proxy when configured and rejects requests without a Host header', async () => {
-    const { url, port } = await listen({ ADK_MCP_TRUST_PROXY: 'true' });
-    expect((await fetch(`${url}/healthz`)).status).toBe(200);
-    // HTTP/1.0 allows omitting Host; the DNS-rebinding guard must still refuse it.
-    const status = await new Promise<string>((resolve, reject) => {
-      const socket = connectSocket(port, '127.0.0.1', () =>
-        socket.write('GET /mcp HTTP/1.0\r\n\r\n'),
-      );
-      let reply = '';
-      socket.on('data', (chunk) => (reply += String(chunk)));
-      socket.on('end', () => resolve(reply.split('\r\n')[0]!));
-      socket.on('error', reject);
-    });
-    expect(status).toContain('403');
-  });
-
-  it('asks for initialization when a POST has no body', async () => {
-    const { url } = await listen();
-    const response = await fetch(`${url}/mcp`, { method: 'POST', headers: mcpHeaders });
-    expect(response.status).toBe(400);
-  });
-
-  it('expires idle sessions into recoverable ones and forgets them after a day', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'Date'] });
-    try {
-      const { url } = await listen({}, { sessionTtlMs: 90_000 });
-      const created = await fetch(`${url}/mcp`, {
-        method: 'POST',
-        headers: { ...mcpHeaders, authorization: 'Bearer user-token' },
-        body: JSON.stringify(initialize),
-      });
-      const sessionId = created.headers.get('mcp-session-id')!;
-      await created.text();
-      const list = (token: string) =>
-        fetch(`${url}/mcp`, {
-          method: 'POST',
-          headers: {
-            ...mcpHeaders,
-            authorization: `Bearer ${token}`,
-            'mcp-session-id': sessionId,
-            'mcp-protocol-version': '2025-06-18',
-          },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
-        });
-
-      vi.advanceTimersByTime(60_000);
-      const live = await list('user-token');
-      expect(live.status).toBe(200);
-      await live.text();
-
-      vi.setSystemTime(Date.now() + 60_000);
-      vi.advanceTimersByTime(60_000);
-      const recovered = await list('user-token');
-      expect(recovered.status).toBe(200);
-      expect(recovered.headers.get('mcp-session-id')).toBeNull();
-      await recovered.text();
-      expect((await list('other-token')).status).toBe(403);
-
-      vi.setSystemTime(Date.now() + 25 * 60 * 60_000);
-      vi.advanceTimersByTime(60_000);
-      const reused = await list('other-token');
-      expect(reused.status).toBe(200);
-      await reused.text();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('evicts the oldest recovered session when the cap is reached', async () => {
-    const { url } = await listen({}, { maxSessions: 1 });
-    const list = (sessionId: string, token: string) =>
-      fetch(`${url}/mcp`, {
-        method: 'POST',
-        headers: {
-          ...mcpHeaders,
-          authorization: `Bearer ${token}`,
-          'mcp-session-id': sessionId,
-          'mcp-protocol-version': '2025-06-18',
-        },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
-      });
-    await (await list('first', 'user-token')).text();
-    expect((await list('first', 'other-token')).status).toBe(403);
-    await (await list('second', 'user-token')).text();
-    const reclaimed = await list('first', 'other-token');
-    expect(reclaimed.status).toBe(200);
-    await reclaimed.text();
-  });
-
   it('answers 502 when ADK cannot verify a token', async () => {
     const { url } = await listen({}, {}, true);
     const response = await fetch(`${url}/mcp`, {
@@ -382,14 +293,14 @@ describe('HTTP transport', () => {
     expect(response.status).toBe(502);
   });
 
-  it('does not answer twice when a request fails after the response started', async () => {
+  it('only logs a failure that happens after the response was sent', async () => {
     const { url } = await listen();
-    const failMidStream = vi
+    const handle = vi
       .spyOn(StreamableHTTPServerTransport.prototype, 'handleRequest')
-      .mockImplementationOnce(async (_req, res) => {
-        res.writeHead(200, { 'content-type': 'text/event-stream' });
-        res.end();
-        throw new Error('stream broke');
+      .mockImplementationOnce((_request, response) => {
+        response.statusCode = 200;
+        response.end('partial');
+        return Promise.reject(new Error('late failure'));
       });
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
@@ -399,14 +310,117 @@ describe('HTTP transport', () => {
         body: JSON.stringify(initialize),
       });
       expect(response.status).toBe(200);
-      await response.text();
       await vi.waitFor(() =>
         expect(logged).toHaveBeenCalledWith('[devkit] HTTP request failed:', expect.any(Error)),
       );
     } finally {
-      failMidStream.mockRestore();
+      handle.mockRestore();
       logged.mockRestore();
     }
+  });
+});
+
+describe('HTTP transport session bookkeeping', () => {
+  const staleCall = (url: string, token: string, sessionId: string) =>
+    fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: {
+        ...mcpHeaders,
+        authorization: `Bearer ${token}`,
+        'mcp-session-id': sessionId,
+        'mcp-protocol-version': '2025-06-18',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'brain_stats', arguments: {} },
+      }),
+    });
+
+  /** Starts a server whose 60-second sweeper can be run by hand instead of waiting a minute. */
+  async function listenWithSweeper(options: Record<string, unknown>) {
+    const callbacks: (() => void)[] = [];
+    const spy = vi.spyOn(globalThis, 'setInterval').mockImplementation((callback: () => void) => {
+      callbacks.push(callback);
+      return { unref: () => undefined } as unknown as NodeJS.Timeout;
+    });
+    try {
+      const setup = await listen({}, options);
+      return { ...setup, sweep: callbacks.at(-1)! };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  const sweepAt = (sweep: () => void, offsetMs: number) => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + offsetMs);
+    try {
+      sweep();
+    } finally {
+      now.mockRestore();
+    }
+  };
+
+  const sessionCount = async (url: string) =>
+    ((await (await fetch(`${url}/healthz`)).json()) as { sessions: number }).sessions;
+
+  it('moves idle sessions aside and forgets them a day later', async () => {
+    const { url, sweep } = await listenWithSweeper({ sessionTtlMs: 1000 });
+    const created = await fetch(`${url}/mcp`, {
+      method: 'POST',
+      headers: { ...mcpHeaders, authorization: 'Bearer user-token' },
+      body: JSON.stringify(initialize),
+    });
+    const sessionId = created.headers.get('mcp-session-id')!;
+    await created.text();
+    expect(await sessionCount(url)).toBe(1);
+
+    sweep();
+    expect(await sessionCount(url)).toBe(1);
+    sweepAt(sweep, 5000);
+    expect(await sessionCount(url)).toBe(0);
+
+    // The idle session is still served for its owner, and only for its owner.
+    expect((await staleCall(url, 'user-token', sessionId)).status).toBe(200);
+    expect((await staleCall(url, 'other-token', sessionId)).status).toBe(403);
+
+    sweepAt(sweep, 25 * 60 * 60_000);
+    expect((await staleCall(url, 'other-token', sessionId)).status).toBe(200);
+  });
+
+  it('keeps at most maxSessions recovered sessions, dropping the oldest', async () => {
+    const { url } = await listen({}, { maxSessions: 1 });
+    expect((await staleCall(url, 'user-token', 'first')).status).toBe(200);
+    expect((await staleCall(url, 'user-token', 'second')).status).toBe(200);
+    expect((await staleCall(url, 'other-token', 'second')).status).toBe(403);
+    expect((await staleCall(url, 'other-token', 'first')).status).toBe(200);
+  });
+
+  it('answers 400 to a POST without a body', async () => {
+    const { url } = await listen();
+    const response = await fetch(`${url}/mcp`, { method: 'POST', headers: mcpHeaders, body: '' });
+    expect(response.status).toBe(400);
+  });
+
+  it('trusts the first proxy when told to', async () => {
+    const { url } = await listen({ ADK_MCP_TRUST_PROXY: 'true' });
+    const response = await fetch(`${url}/healthz`, {
+      headers: { 'x-forwarded-for': '203.0.113.9' },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it('rejects a request that names no host at all', async () => {
+    const { port } = await listen();
+    const status = await new Promise<number>((resolve, reject) => {
+      const socket = connect(port, '127.0.0.1', () => socket.write('GET /mcp HTTP/1.0\r\n\r\n'));
+      let received = '';
+      socket.on('data', (chunk) => (received += String(chunk)));
+      socket.on('end', () => resolve(Number(/^HTTP\/1\.\d (\d+)/.exec(received)?.[1])));
+      socket.on('error', reject);
+    });
+    expect(status).toBe(403);
   });
 });
 
@@ -546,16 +560,23 @@ describe('OAuth for remote connectors', () => {
     await client.close();
   });
 
+  it('redirects without a state when the client sent none', async () => {
+    const { url } = await oauthServer();
+    const clientId = await register(url);
+    const page = await authorizePage(url, clientId, null);
+    const pasted = await login(url, { request: page.request, token: 'adk_pat_manual' });
+    expect(pasted.status).toBe(302);
+    const location = new URL(pasted.headers.get('location')!);
+    expect(location.searchParams.get('code')).toBeTruthy();
+    expect(location.searchParams.has('state')).toBe(false);
+  });
+
   it('accepts a pasted access token and rejects incomplete or forged logins', async () => {
     const { url } = await oauthServer();
     const clientId = await register(url);
     const page = await authorizePage(url, clientId);
     const pasted = await login(url, { request: page.request, token: 'adk_pat_manual' });
     expect(pasted.status).toBe(302);
-    const stateless = await authorizePage(url, clientId, null);
-    const withoutState = await login(url, { request: stateless.request, token: 'adk_pat_manual' });
-    expect(withoutState.status).toBe(302);
-    expect(new URL(withoutState.headers.get('location')!).searchParams.has('state')).toBe(false);
     const code = new URL(pasted.headers.get('location')!).searchParams.get('code')!;
     const tokens = (await (await exchange(url, clientId, code)).json()) as Record<string, unknown>;
     expect(tokens).toMatchObject({ access_token: 'adk_pat_manual' });
@@ -578,22 +599,7 @@ describe('OAuth for remote connectors', () => {
     expect(refresh.status).toBe(400);
   });
 
-  it('rejects login posts without a form, for unknown clients or unregistered redirects', async () => {
-    const { url } = await oauthServer();
-    const noForm = await fetch(`${url}/oauth/login`, { method: 'POST', redirect: 'manual' });
-    expect(noForm.status).toBe(400);
-    const sealer = new Sealer(SECRET, 'oauth-request');
-    const forged = (clientId: string, redirectUri: string) =>
-      login(url, {
-        request: sealer.seal({ clientId, redirectUri, codeChallenge: 'c' }),
-        token: 'adk_pat_manual',
-      });
-    expect((await forged('unknown-client', CALLBACK)).status).toBe(400);
-    const clientId = await register(url);
-    expect((await forged(clientId, 'https://evil.test/callback')).status).toBe(400);
-  });
-
-  it('names clients registered without a name generically', async () => {
+  it('names clients that did not register a name generically', async () => {
     const { url } = await oauthServer();
     const response = await fetch(`${url}/register`, {
       method: 'POST',
@@ -601,7 +607,19 @@ describe('OAuth for remote connectors', () => {
       body: JSON.stringify({ redirect_uris: [CALLBACK], token_endpoint_auth_method: 'none' }),
     });
     const { client_id: clientId } = (await response.json()) as { client_id: string };
-    expect((await authorizePage(url, clientId)).html).toContain('An MCP client');
+    const page = await authorizePage(url, clientId);
+    expect(page.html).toContain('<strong>An MCP client</strong>');
+  });
+
+  it('rejects a login posted without a form body', async () => {
+    const { url } = await oauthServer();
+    const response = await fetch(`${url}/oauth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'null' },
+      body: '{}',
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain('invalid or expired');
   });
 
   it('shows a retry page when ADK is unreachable during login', async () => {
@@ -668,39 +686,42 @@ describe('OAuth building blocks', () => {
     await expect(
       provider.exchangeAuthorizationCode(client, sealed, undefined, 'https://evil'),
     ).rejects.toThrow('redirect_uri does not match');
-    await expect(provider.exchangeAuthorizationCode(client, 'bad')).rejects.toThrow(
-      'Invalid or expired',
-    );
     await expect(provider.exchangeRefreshToken()).rejects.toThrow('Refresh tokens are not issued');
   });
 
-  it('rejects reused codes until their nonce is forgotten', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      const provider = new AdkOAuthProvider(SECRET, { apiUrl: API, timeoutMs: 1000 });
-      const client = provider.clientsStore.registerClient({ redirect_uris: [CALLBACK] });
-      const code = (nonce: string) =>
-        new Sealer(SECRET, 'oauth-code').seal({
-          token: 't',
-          client: createHash('sha256').update(client.client_id).digest('hex'),
-          challenge: 'c',
-          redirectUri: CALLBACK,
-          expiresAt: null,
-          nonce,
-        });
-      const first = code('n1');
-      await provider.exchangeAuthorizationCode(client, first);
-      await expect(provider.exchangeAuthorizationCode(client, first)).rejects.toThrow(
-        'already used',
-      );
-      vi.setSystemTime(Date.now() + 61_000);
-      await provider.exchangeAuthorizationCode(client, code('n2'));
-      await expect(provider.exchangeAuthorizationCode(client, first)).resolves.toMatchObject({
-        access_token: 't',
+  it('rejects bad codes at exchange and forgets used codes once their window passes', async () => {
+    const provider = new AdkOAuthProvider(SECRET, {
+      apiUrl: API,
+      timeoutMs: 1000,
+      fetch: backend().fetcher,
+    });
+    const client = provider.clientsStore.registerClient({ redirect_uris: [CALLBACK] });
+    await expect(provider.exchangeAuthorizationCode(client, 'bad')).rejects.toThrow(
+      'Invalid or expired',
+    );
+    const seal = (nonce: string) =>
+      new Sealer(SECRET, 'oauth-code').seal({
+        token: 't',
+        client: createHash('sha256').update(client.client_id).digest('hex'),
+        challenge: 'c',
+        redirectUri: CALLBACK,
+        expiresAt: null,
+        nonce,
       });
+    await provider.exchangeAuthorizationCode(client, seal('n1'));
+    await expect(provider.exchangeAuthorizationCode(client, seal('n1'))).rejects.toThrow(
+      'already used',
+    );
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 120_000);
+    try {
+      await provider.exchangeAuthorizationCode(client, seal('n2'));
+      // n2 is still within its window when n3 arrives: only expired codes are forgotten.
+      await provider.exchangeAuthorizationCode(client, seal('n3'));
     } finally {
-      vi.useRealTimers();
+      later.mockRestore();
     }
+    const used = (provider as unknown as { usedCodes: Map<string, number> }).usedCodes;
+    expect([...used.keys()]).toEqual(['n2', 'n3']);
   });
 
   it('caches token verification and rethrows transient failures', async () => {

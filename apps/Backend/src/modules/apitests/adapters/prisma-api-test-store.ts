@@ -1,4 +1,3 @@
-/* v8 ignore file -- persistence adapter contract is covered by the database integration suite (tests/integration/apitests-personal-values.integration.test.ts). */
 import type { Prisma, PrismaClient } from '../../../generated/prisma/client.js';
 import type {
   ApiCollection,

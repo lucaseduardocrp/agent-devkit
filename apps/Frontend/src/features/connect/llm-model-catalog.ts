@@ -13,7 +13,7 @@ export interface LlmProviderModelCatalog {
 // models and providers such as Ollama, whose installed models vary by instance.
 export const llmModelCatalog = {
   gemini: {
-    label: 'Modelo Gemini',
+    label: 'Gemini',
     defaultModel: 'gemini-3.8-flash',
     models: [
       { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
@@ -25,7 +25,7 @@ export const llmModelCatalog = {
     ],
   },
   openai: {
-    label: 'Modelo OpenAI',
+    label: 'OpenAI',
     defaultModel: 'gpt-5.1',
     models: [
       { id: 'gpt-5.1', label: 'GPT-5.1' },
@@ -38,9 +38,13 @@ export const llmModelCatalog = {
     ],
   },
   claude: {
-    label: 'Modelo Claude',
+    label: 'Claude',
     defaultModel: 'claude-sonnet-4-6',
     models: [
+      { id: 'claude-fable-5-1', label: 'Claude Fable 5.1' },
+      { id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
+      { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
+      { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
       { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
       { id: 'claude-opus-5', label: 'Claude Opus 5' },
       { id: 'claude-fable-5', label: 'Claude Fable 5' },
@@ -50,7 +54,7 @@ export const llmModelCatalog = {
     ],
   },
   groq: {
-    label: 'Modelo Groq',
+    label: 'Groq',
     defaultModel: 'llama-3.3-70b-versatile',
     models: [
       { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile' },
@@ -62,7 +66,7 @@ export const llmModelCatalog = {
     ],
   },
   ollama: {
-    label: 'Modelo Ollama',
+    label: 'Ollama',
     defaultModel: 'llama3.2',
     models: [
       { id: 'llama3.2', label: 'Llama 3.2' },

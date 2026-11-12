@@ -5,20 +5,21 @@ import {
   type AgentWorkflow,
 } from '../../src/modules/agents/domain/agent-workflow.js';
 
-type Execute = (...args: unknown[]) => Promise<object>;
-
 /**
- * Agent service double for RunService. Without an enabled workflow, a run executes as a single
- * workflow step with the assigned agent, so `executeWorkflowStep` delegates to `executeAgent`
- * (called with `workspaceId, agentId, input, context, signal`).
+ * A fake AgentService for RunService tests. Every workflow step is carried out by `executeAgent`, so
+ * a test describes the model once; `getWorkflow` serves the given workflow (no final review by
+ * default, so a run goes straight to done).
  */
 export function fakeRunAgents(
   executeAgent: ReturnType<typeof vi.fn>,
-  options: { agent?: object; workflow?: Partial<AgentWorkflow> } = {},
+  workflow: Partial<AgentWorkflow> = {},
+  agent: { id: string; name?: string } = { id: 'agent-a', name: 'Agent A' },
 ) {
-  return {
-    getAgent: vi.fn().mockResolvedValue(options.agent ?? { id: 'agent-a', name: 'Agent' }),
-    getWorkflow: vi.fn().mockResolvedValue({ ...EMPTY_AGENT_WORKFLOW, ...options.workflow }),
+  const agents = {
+    getAgent: vi.fn().mockResolvedValue(agent),
+    getWorkflow: vi
+      .fn()
+      .mockResolvedValue({ ...EMPTY_AGENT_WORKFLOW, finalReview: false, ...workflow }),
     executeAgent,
     executeWorkflowStep: vi.fn(
       async (
@@ -30,15 +31,23 @@ export function fakeRunAgents(
         input: unknown,
         _uncertainty: unknown,
         context: unknown,
-        signal: AbortSignal,
-      ) => ({
-        agent: { id: agentId },
-        ...(await (executeAgent as Execute)(workspaceId, agentId, input, context, signal)),
-      }),
+        signal: unknown,
+      ) => {
+        const result = (await (executeAgent as (...args: unknown[]) => Promise<object>)(
+          workspaceId,
+          agentId,
+          input,
+          context,
+          signal,
+        )) as object;
+        return { agent: { id: agentId }, ...result };
+      },
     ),
-  } as unknown as AgentService & {
+  };
+  return agents as unknown as AgentService & {
     getAgent: ReturnType<typeof vi.fn>;
     getWorkflow: ReturnType<typeof vi.fn>;
+    executeAgent: ReturnType<typeof vi.fn>;
     executeWorkflowStep: ReturnType<typeof vi.fn>;
   };
 }

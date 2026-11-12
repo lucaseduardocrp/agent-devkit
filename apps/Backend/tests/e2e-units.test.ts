@@ -408,6 +408,17 @@ describe('PrismaE2eStore', () => {
     ).toBe(1);
     expect(await store.getCreation('ws', 'c1')).toMatchObject({ id: 'c1' });
     expect(await store.listCreations('ws')).toHaveLength(1);
+    // The hidden run of the Source is not one of the runs listed, and is found on its own.
+    expect(db.e2eCreationRecord.findMany).toHaveBeenLastCalledWith({
+      where: { workspaceId: 'ws', internal: false },
+      orderBy: { updatedAt: 'desc' },
+    });
+    expect((await store.getSourceAnchor('ws'))?.id).toBe('c1');
+    expect(db.e2eCreationRecord.findFirst).toHaveBeenLastCalledWith({
+      where: { workspaceId: 'ws', internal: true },
+    });
+    db.e2eCreationRecord.findFirst.mockResolvedValueOnce(null);
+    expect(await store.getSourceAnchor('ws')).toBeNull();
     expect(await store.updateCreation('ws', 'c1', { status: 'running' })).toMatchObject({
       id: 'c1',
     });

@@ -8,6 +8,8 @@ import type { PbiItem } from '../src/modules/pbi/pbi-store.js';
 import type { IssueStore } from '../src/modules/issues/issue-store.js';
 import type { RunService } from '../src/modules/issues/run-service.js';
 import type { WorkspaceService } from '../src/modules/workspaces/application/workspace-service.js';
+import type { E2eArtifactStore } from '../src/modules/e2e/application/artifact-store.js';
+import { InMemoryE2eArtifactStore } from '../src/modules/e2e/application/artifact-store.js';
 import { ApplicationError } from '../src/shared/errors.js';
 import type { RequestContext } from '../src/shared/context.js';
 
@@ -53,7 +55,7 @@ function fakeService(overrides: Partial<Record<keyof PbiService, unknown>> = {})
               },
             ],
           }),
-          item({ id: 'other' }),
+          item({ id: 'other', sourceData: { type: 'Bug' } }),
         ],
         total: 2,
         page: 1,
@@ -87,6 +89,7 @@ function build(options: {
   issues?: object;
   runs?: object;
   workspaces?: WorkspaceService;
+  imageStore?: E2eArtifactStore;
 }) {
   const app = express();
   app.use(express.json());
@@ -107,6 +110,7 @@ function build(options: {
       (options.runs ?? {}) as RunService,
       resolver,
       options.workspaces,
+      options.imageStore,
     ),
   );
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -168,13 +172,18 @@ describe('PBI routes (coverage)', () => {
         kind: 'pbi',
         title: 'Root',
         status: 'backlog',
+        type: null,
         iterationPath: 'Sprint 1',
         links: [
           { providerId: 'azure_devops', externalId: '42', externalUrl: 'https://example.test/42' },
         ],
       },
-      expect.objectContaining({ id: 'other', iterationPath: null, links: [] }),
+      expect.objectContaining({ id: 'other', type: 'Bug', iterationPath: null, links: [] }),
     ]);
+
+    // What a select types is passed on to the search, trimmed.
+    await request(app).get('/pbi').query({ q: '  login  ', compact: 'true' }).expect(200);
+    expect(service.search).toHaveBeenLastCalledWith('ws', { q: 'login', page: 1, pageSize: 25 });
 
     expect((await request(app).get('/pbi').query({ pageSize: '1000' }).expect(400)).body.code).toBe(
       'VALIDATION_ERROR',
@@ -262,6 +271,70 @@ describe('PBI routes (coverage)', () => {
       .send({ type: 'related', targetIds: ['b'] })
       .expect(201);
     expect(service.addRelations).toHaveBeenLastCalledWith('ws', ROOT_ID, 'related', ['b'], null);
+  });
+
+  describe('item attachments', () => {
+    const link = {
+      id: 'https://files.example.test/a.pdf',
+      name: 'a.pdf',
+      scope: 'pbi',
+      source: 'url',
+      url: 'https://files.example.test/a.pdf',
+    };
+
+    it('creates items with no attachments, or with the validated ones', async () => {
+      const service = fakeService();
+      const app = build({ service, imageStore: new InMemoryE2eArtifactStore() });
+      await request(app).post('/pbi/items').send({ kind: 'pbi', title: 'Plain' }).expect(201);
+      expect(service.create).toHaveBeenLastCalledWith('ws', {
+        kind: 'pbi',
+        title: 'Plain',
+        attachments: [],
+      });
+      await request(app)
+        .post('/pbi/items')
+        .send({ kind: 'pbi', title: 'With file', attachments: [link] })
+        .expect(201);
+      expect(service.create).toHaveBeenLastCalledWith('ws', {
+        kind: 'pbi',
+        title: 'With file',
+        attachments: [link],
+      });
+      const invalid = await request(app)
+        .post('/pbi/items')
+        .send({ kind: 'pbi', title: 'Bad', attachments: [{ ...link, scope: 'issue' }] })
+        .expect(400);
+      expect(invalid.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('validates a new assignee when creating an item', async () => {
+      const workspaces = {
+        listMembers: vi.fn(() => Promise.resolve([{ userId: 'user-b' }])),
+      } as unknown as WorkspaceService;
+      const service = fakeService();
+      const app = build({ service, workspaces });
+      await request(app)
+        .post('/pbi/items')
+        .send({ kind: 'pbi', title: 'Owned', sourceData: { adkAssigneeUserId: 'user-b' } })
+        .expect(201);
+      const stranger = await request(app)
+        .post('/pbi/items')
+        .send({ kind: 'pbi', title: 'Owned', sourceData: { adkAssigneeUserId: 'user-c' } })
+        .expect(400);
+      expect(stranger.body.message).toBe('Assignee must be a workspace member.');
+    });
+
+    it('updates the attachments of an item only when they are sent', async () => {
+      const service = fakeService();
+      const app = build({ service, imageStore: new InMemoryE2eArtifactStore() });
+      await request(app).patch(`/pbi/items/${ROOT_ID}`).send({ title: 'Edited' }).expect(200);
+      expect(service.update).toHaveBeenLastCalledWith('ws', ROOT_ID, { title: 'Edited' });
+      await request(app)
+        .patch(`/pbi/items/${ROOT_ID}`)
+        .send({ attachments: [link] })
+        .expect(200);
+      expect(service.update).toHaveBeenLastCalledWith('ws', ROOT_ID, { attachments: [link] });
+    });
   });
 
   it('requires an authenticated actor to assign a member', async () => {

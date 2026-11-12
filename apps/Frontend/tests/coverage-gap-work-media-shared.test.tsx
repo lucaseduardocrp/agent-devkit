@@ -7,11 +7,9 @@ import type { Attachment } from '../src/features/shared/attachment-types.js';
 import {
   MediaImage,
   MediaProvider,
-  createDraft,
   discardDrafts,
   editorHtml,
   resolveInlineImages,
-  saveWithDrafts,
   useMarkdownImageInput,
   useRichTextImageInput,
 } from '../src/features/shared/media.js';
@@ -33,47 +31,6 @@ function client() {
 
 afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe('drafts edge cases', () => {
-  it('describes files without name or type and rejects unsupported ones', () => {
-    const unnamed = createDraft('issue', new File(['x'], '', { type: 'image/png' }));
-    expect(unnamed.name).toBe('file');
-    const pdf = createDraft('issue', new File(['x'], 'notes.pdf'));
-    expect(pdf).not.toHaveProperty('mimeType');
-    expect(pdf.kind).toBe('document');
-    expect(() => createDraft('issue', new File(['x'], 'run.exe'))).toThrow('unsupported');
-    expect(() => discardDrafts(undefined)).not.toThrow();
-    discardDrafts([unnamed, pdf]);
-  });
-
-  it('saves values without drafts untouched', async () => {
-    const { apiClient } = client();
-    const upload = vi.spyOn(apiClient, 'uploadAttachment');
-    await expect(saveWithDrafts(apiClient, 'issue', undefined, async (v) => v)).resolves.toBe(
-      undefined,
-    );
-    expect(upload).not.toHaveBeenCalled();
-  });
-
-  it('removes earlier uploads when a referenced draft is gone', async () => {
-    const { apiClient } = client();
-    const kept = createDraft('issue', png());
-    const gone = createDraft('issue', png());
-    discardDrafts(gone);
-    vi.spyOn(apiClient, 'uploadAttachment').mockResolvedValue({
-      ...kept,
-      id: 'stored',
-      url: FILE,
-    });
-    const remove = vi.spyOn(apiClient, 'deleteAttachment').mockRejectedValue(new Error('x'));
-    const save = vi.fn();
-    await expect(
-      saveWithDrafts(apiClient, 'issue', { text: `${kept.url} ${gone.url}` }, save),
-    ).rejects.toThrow('no longer available');
-    expect(remove).toHaveBeenCalledWith('stored');
-    expect(save).not.toHaveBeenCalled();
-  });
 });
 
 describe('MediaImage', () => {

@@ -122,7 +122,7 @@ describe('Pipeline tab', () => {
     expect(
       within(pane).getByText('Escolha o repositório, a branch e a pasta primeiro.'),
     ).toBeTruthy();
-    const repository = within(pane).getByLabelText<HTMLSelectElement>('Repositório');
+    const repository = within(pane).getByLabelText('Repositório') as HTMLSelectElement;
     await waitFor(() => expect(repository.disabled).toBe(false));
     fireEvent.change(repository, { target: { value: 'github:42' } });
     await waitFor(() => expect(api.listApiTestBranches).toHaveBeenCalledWith('github', '42'));

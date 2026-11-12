@@ -155,7 +155,7 @@ describe('IntegrationConfigModal', () => {
       updatedAt: '2026-09-11T12:00:00Z',
     };
 
-    const { getByLabelText, getByRole, getByText } = render(
+    const { getByLabelText, getByRole, getByText, queryByLabelText } = render(
       <IntegrationConfigModal
         isOpen={true}
         onClose={vi.fn()}
@@ -168,15 +168,14 @@ describe('IntegrationConfigModal', () => {
     );
 
     const ownerInput = getByLabelText('Proprietário / Organização GitHub');
-    const repoInput = getByLabelText('Repositório / Projeto');
 
     expect((ownerInput as HTMLInputElement).value).toBe('existing-org');
-    expect((repoInput as HTMLInputElement).value).toBe('existing-repo');
 
     fireEvent.change(ownerInput, { target: { value: 'updated-org' } });
-    fireEvent.change(repoInput, { target: { value: 'updated-repo' } });
     expect((ownerInput as HTMLInputElement).value).toBe('updated-org');
-    expect((repoInput as HTMLInputElement).value).toBe('updated-repo');
+
+    expect(queryByLabelText('Repositório / Projeto')).toBeNull();
+    expect(queryByLabelText('Branch')).toBeNull();
 
     expect((getByLabelText('Ativar esta integração no adk') as HTMLInputElement).checked).toBe(
       false,

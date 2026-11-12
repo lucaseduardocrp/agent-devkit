@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getMessages } from './i18n/index.js';
 
 /** A card moved by the user: the status the server knows (`from`) and where it was dropped. */
 export interface KanbanDraftEntry {
@@ -138,7 +139,7 @@ export function useKanbanDraft(options: KanbanDraftOptions): KanbanDraft {
         savingRef.current.delete(id);
         if (result.status === 'rejected') {
           const reason: unknown = result.reason;
-          failure = reason instanceof Error ? reason.message : 'Could not save the move.';
+          failure = reason instanceof Error ? reason.message : getMessages().common.moveSaveFailed;
           return;
         }
         saved += 1;

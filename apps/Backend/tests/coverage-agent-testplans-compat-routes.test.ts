@@ -359,6 +359,17 @@ describe('POST /TestPlan/suites/:id/push suite kind', () => {
       expect.anything(),
       expect.objectContaining({ workItemIds: ['50', '51'] }),
     );
+    // A list alone works, and a plain push sends no work items at all.
+    await push({ workItemIds: ['60'] });
+    expect(publish).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ workItemIds: ['60'] }),
+    );
+    await push({});
+    expect(publish).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ workItemIds: undefined }),
+    );
     for (const body of [
       { suiteKind: 'requirement' },
       { suiteKind: 'requirement', workItemId: '50', remotePlanId: '1', remoteSuiteId: '2' },
@@ -371,7 +382,7 @@ describe('POST /TestPlan/suites/:id/push suite kind', () => {
       expect(rejected.status).toBe(400);
       expect(rejected.body.code).toBe('VALIDATION_ERROR');
     }
-    expect(publish).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -521,6 +532,33 @@ describe('saved test plan routes', () => {
       });
     expect(response.text).toBe(csv('en-US'));
     expect(response.text).not.toBe(csv('pt-BR'));
+  });
+
+  it('renders Portuguese CSV descriptions for Portuguese plans', async () => {
+    const plans = [
+      {
+        title: 'Abrir a tela de relatório',
+        description: '',
+        steps: [
+          {
+            action: 'Abrir a tela de relatório do usuário',
+            expectedResult: 'O relatório é exibido',
+          },
+        ],
+      },
+    ];
+    const response = await request(build()).post('/TestPlan/csv').send({ plans });
+    expect(response.status).toBe(200);
+    expect(response.text).toBe(
+      serializeTestPlanCsv(
+        parseAndNormalizeTestPlans(JSON.stringify(plans), { language: 'pt-BR' }),
+        {
+          platform: undefined,
+          areaPath: undefined,
+          assignedTo: undefined,
+        },
+      ),
+    );
   });
 
   it('normalizes invalid and oversized pagination parameters', async () => {

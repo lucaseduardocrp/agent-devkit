@@ -181,9 +181,10 @@ export function BrainGraph({
 }: BrainGraphProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const welcomeLabel = t('brain.welcome');
   const graphState = useMemo(
-    () => createBrainGraphState(documents, relations),
-    [documents, relations],
+    () => createBrainGraphState(documents, relations, welcomeLabel),
+    [documents, relations, welcomeLabel],
   );
   const stateRef = useRef<BrainGraphState>(graphState);
   const viewportRef = useRef<GraphViewport>({

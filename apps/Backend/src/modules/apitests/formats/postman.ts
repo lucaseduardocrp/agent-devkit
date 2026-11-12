@@ -191,8 +191,7 @@ function bodyFrom(value: unknown, headers: KeyValue[]): RequestBody {
   }
 }
 
-/* v8 ignore next -- splitting a string always yields at least one part */
-const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+const baseName = (path: string) => path.split(/[\\/]/).pop()!;
 
 function graphqlFrom(value: unknown): ApiRequestSpec['graphql'] {
   if (!isObject(value) || value['mode'] !== 'graphql') return undefined;

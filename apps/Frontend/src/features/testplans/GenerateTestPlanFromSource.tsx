@@ -1,4 +1,3 @@
-/* v8 ignore file -- covered by Brain and Spec integration journeys. */
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '../../components/ui/button.js';

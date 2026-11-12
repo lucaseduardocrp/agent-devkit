@@ -171,20 +171,19 @@ describe('IntegrationConfigModal provider forms', () => {
     );
   });
 
-  it('saves the GitHub project number and branch', async () => {
+  it('saves the GitHub project number', async () => {
     const { view, save } = renderModal(item('github_projects', 'GitHub', 'PROJECT_MANAGEMENT'));
 
     fill(view, {
       'Proprietário / Organização GitHub': 'contoso',
       'Número do projeto': '7',
-      Branch: 'release',
     });
     fireEvent.click(view.getByRole('button', { name: 'Salvar' }));
 
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith('PROJECT_MANAGEMENT', 'github_projects', {
         isEnabled: true,
-        settings: { owner: 'contoso', projectNumber: '7', branch: 'release' },
+        settings: { owner: 'contoso', projectNumber: '7' },
         secret: undefined,
       }),
     );

@@ -49,7 +49,7 @@ export async function executeRun(payload: RunPayload, hooks: RunHooks): Promise<
     ...(hooks.guard ? { guard: hooks.guard } : {}),
     ...(hooks.connectHost ? { connectHost: hooks.connectHost } : {}),
   };
-  const run = async (): Promise<RunOutcome> => {
+  const execute = async (): Promise<RunOutcome> => {
     if (payload.kind === 'integration' && payload.mode === 'grpc-reflect') {
       return await reflect(payload, common);
     }
@@ -92,14 +92,14 @@ export async function executeRun(payload: RunPayload, hooks: RunHooks): Promise<
     });
     return { status: summary.passed ? 'passed' : 'failed', result: summary, error: null };
   };
-  // No finally: every path of the run returns, so a try/finally leaves a branch V8 never takes.
-  const outcome = await run().catch((error: unknown): RunOutcome => ({
-    status: 'error',
-    result: partial,
-    error: error instanceof Error ? error.message : String(error),
-  }));
-  clearInterval(beat);
-  return outcome;
+  // The timer is cleared whether the run ends, fails or is stopped.
+  return execute()
+    .catch((error: unknown): RunOutcome => ({
+      status: 'error',
+      result: partial,
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    .finally(() => clearInterval(beat));
 }
 
 /** Lists a gRPC request's services; the list is the result's body, as JSON. */
@@ -142,9 +142,6 @@ async function reflect(
       status: null,
       durationMs: Math.round(performance.now() - started),
       passed: false,
-      // describeGrpc only ever rejects with a real Error: application throws use `new Error`,
-      // and the network layer normalizes everything through `toError`.
-      /* v8 ignore next */
       error: error instanceof Error ? error.message : String(error),
     };
   }

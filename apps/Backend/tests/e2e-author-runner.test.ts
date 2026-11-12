@@ -38,6 +38,7 @@ const creation: E2eCreation = {
   scope: 'codebase',
   baseUrl: 'http://localhost:3000',
   executionTarget: 'remote',
+  useBrain: false,
   path: '/e/123',
   username: 'qa@example.com',
   passwordSecret: 'cipher',
@@ -116,6 +117,92 @@ describe('AgentE2eAuthor', () => {
     expect(request.instruction).toContain('Scope: CODEBASE');
     expect(request.prompt).toContain('<untrusted_input');
     expect(request.prompt).toContain('"testAccountAvailable": true');
+  });
+
+  describe('Brain runs', () => {
+    const chunk = (
+      pageId: string,
+      chunkIndex: number,
+      content: string,
+      source = `app://local?title=${pageId}`,
+    ) => ({
+      source,
+      pageId,
+      chunkIndex,
+      content,
+      createdAt: '2026-01-01',
+    });
+    const brainAuthor = (search: ReturnType<typeof vi.fn> | undefined, text: string) => {
+      const base = author(text);
+      return {
+        complete: base.complete,
+        subject: new AgentE2eAuthor({
+          agents: {
+            getAgent: vi.fn().mockResolvedValue({ instructions: 'QA', model: 'm1' }),
+            getWorkflow: vi.fn().mockResolvedValue({ enabled: false, steps: [] }),
+          } as unknown as AgentService,
+          providers: base.providers,
+          ...(search ? { knowledge: { search } as never } : {}),
+        }),
+      };
+    };
+    const brainRun = { ...creation, useBrain: true, prd: '', instructions: 'voting' };
+
+    it('plans from Brain documents merged by page, with its rules', async () => {
+      const search = vi
+        .fn()
+        .mockResolvedValueOnce([chunk('Votes', 1, ' two.'), chunk('Votes', 0, 'One.')])
+        .mockResolvedValue([chunk('Votes', 0, 'One.'), chunk('Rules', 0, '# Rules\nA')]);
+      const { subject, complete } = brainAuthor(search, '{"summary":"s","tests":[{"title":"A"}]}');
+      await subject.plan({ creation: brainRun, snapshot: null });
+      expect(search.mock.calls[0]![1]).toMatchObject({ ownerId: 'owner', workspaceId: 'ws' });
+      const request = complete.mock.calls[0]![0] as { prompt: string; instruction: string };
+      expect(request.instruction).toContain('Brain');
+      expect(request.prompt).toContain('One. two.');
+      expect(request.prompt).toContain('"title": "Rules"');
+    });
+
+    it('fails when the Brain knows nothing and there is no PRD', async () => {
+      const { subject } = brainAuthor(vi.fn().mockResolvedValue([]), '{}');
+      await expect(subject.plan({ creation: brainRun, snapshot: null })).rejects.toMatchObject({
+        code: 'E2E_BRAIN_EMPTY',
+      });
+    });
+
+    it('survives a failed lookup and needs the Brain port', async () => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const search = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('down'))
+        .mockResolvedValue([
+          chunk('Wiki', 0, 'Body', 'https://x/_wiki?pagePath=%2FA%2FPage-One'),
+          chunk('Plain', 0, '# Heading\ntext', 'plain-source'),
+        ]);
+      const { subject, complete } = brainAuthor(search, 'export default 1');
+      await subject.writeScript({ creation: brainRun, test: testCase, snapshot: null });
+      const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+      expect(prompt).toContain('"title": "Page-One"');
+      expect(prompt).toContain('"title": "Heading"');
+      expect(log).toHaveBeenCalled();
+      log.mockRestore();
+      await subject.writeHook({
+        creation: brainRun,
+        test: testCase,
+        kind: 'beforeRun',
+        snapshot: null,
+      });
+      await expect(
+        brainAuthor(undefined, 'x').subject.plan({ creation: brainRun, snapshot: null }),
+      ).rejects.toMatchObject({ code: 'E2E_BRAIN_UNAVAILABLE' });
+    });
+
+    it('caps the Brain text handed to the AI', async () => {
+      const search = vi.fn().mockResolvedValue([chunk('Big', 0, 'x'.repeat(70_000))]);
+      const { subject, complete } = brainAuthor(search, '{"summary":"s","tests":[{"title":"A"}]}');
+      await subject.plan({ creation: { ...brainRun, prd: 'prd' }, snapshot: null });
+      const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+      expect(prompt.length).toBeLessThan(70_000);
+    });
   });
 
   it('rejects invalid plans', async () => {
@@ -677,4 +764,81 @@ describe('PlaywrightE2eRunner (simulated)', () => {
       }),
     ).rejects.toThrow();
   }, 20_000);
+});
+
+describe('AgentE2eAuthor (hooks and workflow)', () => {
+  const hook = 'export default async function afterRun({ page }) {}';
+  const withInstructions = {
+    ...testCase,
+    beforeRunInstructions: 'Create the order first.',
+    afterRunInstructions: 'Delete the order.',
+  } as E2eTestCase;
+
+  it('gives the hook the instructions of the test case and its earlier attempt', async () => {
+    const { author: subject, complete } = author(hook);
+    await subject.writeHook({
+      creation,
+      test: withInstructions,
+      kind: 'afterRun',
+      snapshot: null,
+      previous: { script: 'old hook', problem: 'rejected' },
+    });
+    const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+    expect(prompt).toContain('"userInstructions": "Delete the order."');
+    expect(prompt).toContain('"previousAttempt": "old hook"');
+    expect(prompt).toContain('"problemToFix": "rejected"');
+  });
+
+  it('tells the script what both hooks already do', async () => {
+    const { author: subject, complete } = author("import { test } from '@playwright/test';");
+    await subject.writeScript({
+      creation,
+      test: testCase,
+      snapshot: null,
+      hooks: { beforeRun: 'prepare()', afterRun: 'cleanup()' },
+    });
+    const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+    expect(prompt).toContain('"beforeRunPreparesPreconditions": "prepare()"');
+    expect(prompt).toContain('"afterRunCleansUp": "cleanup()"');
+  });
+
+  it('shows the analysis what both hooks did', async () => {
+    const { author: subject, complete } = author('{"verdict":"test_issue","summary":"s"}');
+    await subject.analyze({
+      creation,
+      test: testCase,
+      script: 's',
+      error: 'e',
+      logs: 'l',
+      hooks: { beforeRun: 'prepare()', afterRun: 'cleanup()' },
+    });
+    const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+    expect(prompt).toContain('"beforeRun": "prepare()"');
+    expect(prompt).toContain('"afterRun": "cleanup()"');
+  });
+
+  it('runs the task through the agent when the workspace has a workflow', async () => {
+    const executeAgent = vi
+      .fn()
+      .mockResolvedValue({ result: '{"summary":"s","tests":[{"title":"t"}]}' });
+    const agents = {
+      getAgent: vi.fn().mockResolvedValue({ id: 'agent', instructions: 'x', model: null }),
+      getWorkflow: vi.fn().mockResolvedValue({ enabled: true, steps: [{ id: 's1' }] }),
+      executeAgent,
+    } as unknown as AgentService;
+    const subject = new AgentE2eAuthor({ agents });
+    const controller = new AbortController();
+    const plan = await subject.plan({ creation, snapshot: null, signal: controller.signal });
+    expect(plan.summary).toBe('s');
+    expect(executeAgent).toHaveBeenCalledWith(
+      'ws',
+      'agent',
+      expect.objectContaining({
+        prompt: expect.stringContaining('E2E task context:'),
+        includeKnowledge: false,
+      }),
+      { requestId: 'e2e-agent-c', workspaceId: 'ws', ownerId: 'owner' },
+      controller.signal,
+    );
+  });
 });

@@ -80,6 +80,7 @@ API and the worker.
 | `E2E_WORKER_TOKEN`           | `${{secret(48)}}`                            | Token the API presents when it wakes the worker.                    |
 | `E2E_WORKER_CONCURRENCY`     | `2`                                          | Parallel test runs. Each Chromium needs about 0.5 vCPU and 500 MB.  |
 | `API_TESTS_WORKER_CONCURRENCY` | `2`                                        | Integration and load test runs executed at once by the worker.      |
+| `FRONTEND_URL`               | `${{API.FRONTEND_URL}}`                      | Linked from the Telegram notifications of finished runs.            |
 | `RAILWAY_DOCKERFILE_PATH`    | `Dockerfile.e2e-worker`                      | Builds the Playwright image instead of the API image.               |
 
 No public domain. The worker sleeps when idle (`sleepApplication`), so it costs nothing between

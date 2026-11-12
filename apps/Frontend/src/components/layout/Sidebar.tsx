@@ -20,11 +20,17 @@ export type NavTab =
   | 'spec'
   | 'releaseNotes'
   | 'design'
+  | 'developmentArtifacts'
+  | 'developmentReview'
+  | 'developmentCode'
+  | 'developmentPipeline'
   | 'testplans'
+  | 'e2eSources'
   | 'e2e'
   | 'integrationTests'
   | 'loadTests'
   | 'connect'
+  | 'notifications'
   | 'settings'
   | 'workspaces';
 
@@ -120,6 +126,7 @@ export function Sidebar({
   const [folded, setFolded] = useState(readCollapsed);
   const isTestChild =
     activeTab === 'testplans' ||
+    activeTab === 'e2eSources' ||
     activeTab === 'e2e' ||
     activeTab === 'integrationTests' ||
     activeTab === 'loadTests';
@@ -127,6 +134,8 @@ export function Sidebar({
   const isProductChild =
     activeTab === 'design' || activeTab === 'spec' || activeTab === 'releaseNotes';
   const [productExpanded, setProductExpanded] = useState<boolean>(isProductChild);
+  const isDevelopmentChild = activeTab.startsWith('development');
+  const [developmentExpanded, setDevelopmentExpanded] = useState<boolean>(isDevelopmentChild);
   const isAgentsChild =
     activeTab === 'agents' ||
     activeTab === 'agentsPlayground' ||
@@ -382,6 +391,34 @@ export function Sidebar({
                 'sidebar-product-button',
               )}
 
+            {show('developmentArtifacts') &&
+              group(
+                t('nav.development'),
+                'ti-code',
+                developmentExpanded,
+                isDevelopmentChild,
+                () => setDevelopmentExpanded((prev) => !prev),
+                <>
+                  {item('developmentArtifacts', 'ti-file-stack', t('nav.developmentArtifacts'), {
+                    nested: true,
+                    testId: 'sidebar-development-artifacts-button',
+                  })}
+                  {item('developmentReview', 'ti-git-pull-request', t('nav.developmentReview'), {
+                    nested: true,
+                    testId: 'sidebar-development-review-button',
+                  })}
+                  {item('developmentCode', 'ti-terminal', t('nav.developmentCode'), {
+                    nested: true,
+                    testId: 'sidebar-development-code-button',
+                  })}
+                  {item('developmentPipeline', 'ti-timeline', t('nav.developmentPipeline'), {
+                    nested: true,
+                    testId: 'sidebar-development-pipeline-button',
+                  })}
+                </>,
+                'sidebar-development-button',
+              )}
+
             {showTest &&
               group(
                 t('nav.azure'),
@@ -390,6 +427,10 @@ export function Sidebar({
                 isTestChild,
                 () => setTestExpanded((prev) => !prev),
                 <>
+                  {item('e2eSources', 'ti-map-2', t('nav.e2eSources'), {
+                    nested: true,
+                    testId: 'sidebar-e2eSources-button',
+                  })}
                   {item('testplans', 'ti-checklist', t('nav.testPlans'), { nested: true })}
                   {item('e2e', 'ti-player-play', t('nav.e2e'), {
                     nested: true,
@@ -411,6 +452,10 @@ export function Sidebar({
             <div className="mb-1">
               {heading(t('runtime.integrations'))}
               {item('connect', 'ti-plug-connected', t('nav.connect'))}
+              {show('notifications') &&
+                item('notifications', 'ti-bell-ringing', t('nav.notifications'), {
+                  testId: 'sidebar-notifications-button',
+                })}
             </div>
           )}
         </nav>
@@ -469,7 +514,7 @@ export function Sidebar({
         'border-r border-border bg-surface-1 [&_button]:cursor-pointer [&_a]:cursor-pointer',
         className,
       )}
-      defaultWidth={280}
+      defaultWidth={420}
       minWidth={240}
       maxWidth={420}
       aria-label={t('runtime.mainNavigation')}

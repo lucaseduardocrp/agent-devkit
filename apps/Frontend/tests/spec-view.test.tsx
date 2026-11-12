@@ -149,7 +149,7 @@ describe('SpecView', () => {
     expect(await view.findByRole('heading', { name: 'Nova especificação' })).toBeInTheDocument();
     expect(view.getByTestId('spec-navigation-sidebar').style.maxWidth).toBe('100%');
     expect(view.getByTestId('spec-agent-sidebar').querySelector('[role="separator"]')).toHaveClass(
-      'left-0',
+      '-left-4',
     );
 
     fireEvent.click(view.getByRole('button', { name: 'Configurações' }));

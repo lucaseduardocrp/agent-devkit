@@ -152,10 +152,14 @@ export function PublishTestSuiteModal({
     };
   }, [apiClient, suite.id, providerId, templateId, templateVersion, fieldValues]);
   const sources: MappingSourceOption[] = [
-    { value: 'core::title', label: 'Title', source: { kind: 'core', key: 'title' } },
+    {
+      value: 'core::title',
+      label: t('testplans.sourceTitle'),
+      source: { kind: 'core', key: 'title' },
+    },
     {
       value: 'core::description',
-      label: 'Description',
+      label: t('testplans.sourceDescription'),
       source: { kind: 'core', key: 'description' },
     },
     ...sourceFields.map((field) => ({
@@ -286,6 +290,8 @@ export function PublishTestSuiteModal({
       ));
 
   const confirm = async () => {
+    /* v8 ignore next -- the publish button is disabled while not ready or publishing */
+    if (!ready || publishing) return;
     setPublishing(true);
     setPublishError(null);
     try {

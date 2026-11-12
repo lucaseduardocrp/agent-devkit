@@ -24,57 +24,6 @@ interface Props {
   readonly onImported: (result: ImportTestCasesResultDto) => void;
   readonly onOpenIntegrations?: () => void;
 }
-
-const copy = {
-  'pt-BR': {
-    title: 'Importar do provedor de testes',
-    provider: 'Provedor',
-    choose: 'Selecione...',
-    what: 'O que importar',
-    wholePlan: '{plan} inteiro, com todas as suítes',
-    oneSuite: 'Uma {suite}',
-    includeChildren: 'Incluir as suítes filhas',
-    cases: 'Casos',
-    allCases: 'Todos os casos ({count})',
-    selected: '{count} de {total} selecionados',
-    intoSuite: 'Dentro da suíte "{name}"',
-    newSuite: 'Em uma suíte nova com o nome do {plan}',
-    import: 'Importar',
-    cancel: 'Cancelar',
-    done: 'Concluir',
-    loading: 'Carregando...',
-    empty: 'Nenhum caso encontrado.',
-    noProviders: 'Nenhum provedor de testes está configurado.',
-    openIntegrations: 'Configurar integrações',
-    result:
-      '{cases} casos importados em {plans} Test Plans: {created} novos e {updated} atualizados.',
-    suitesCreated: '{count} suítes criadas no ADK.',
-  },
-  'en-US': {
-    title: 'Import from a test provider',
-    provider: 'Provider',
-    choose: 'Select...',
-    what: 'What to import',
-    wholePlan: 'The whole {plan}, with every suite',
-    oneSuite: 'One {suite}',
-    includeChildren: 'Include child suites',
-    cases: 'Cases',
-    allCases: 'All cases ({count})',
-    selected: '{count} of {total} selected',
-    intoSuite: 'Inside the "{name}" suite',
-    newSuite: 'In a new suite named after the {plan}',
-    import: 'Import',
-    cancel: 'Cancel',
-    done: 'Done',
-    loading: 'Loading...',
-    empty: 'No cases found.',
-    noProviders: 'No test provider is configured.',
-    openIntegrations: 'Set up integrations',
-    result: '{cases} cases imported into {plans} Test Plans: {created} new and {updated} updated.',
-    suitesCreated: '{count} suites created in ADK.',
-  },
-} as const;
-
 function fill(template: string, values: Record<string, string | number>): string {
   return template.replace(/\{(\w+)\}/g, (_match, key: string) => String(values[key]));
 }
@@ -114,8 +63,8 @@ export function ImportTestCasesModal({
   onImported,
   onOpenIntegrations,
 }: Props) {
-  const { locale } = useI18n();
-  const c = copy[locale];
+  const { messages } = useI18n();
+  const c = messages.testCaseImport;
   const [providers, setProviders] = useState<readonly TestManagementProvider[] | null>(null);
   const [providerId, setProviderId] = useState<TestManagementProviderId | ''>('');
   const [plans, setPlans] = useState<readonly RemoteContainer[]>([]);
@@ -136,7 +85,7 @@ export function ImportTestCasesModal({
   const capabilities = provider?.capabilities;
   const suiteLabel = capabilities?.suiteLabel ?? '';
   const hasSuites = Boolean(suiteLabel);
-  const planLabel = capabilities?.planLabel ?? 'Test Plan';
+  const planLabel = capabilities?.planLabel ?? c.planFallback;
   const tree = useMemo(() => inTreeOrder(suites), [suites]);
   // Cases are listed (and can be picked) for one suite, or for a plan without suites.
   const casesLocation = useMemo(

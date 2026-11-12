@@ -5,6 +5,8 @@ import { IntegrationConfigModal, type IntegrationCardItem } from './IntegrationC
 import { SkeletonCard } from '../../components/ui/skeleton.js';
 import { Button } from '../../components/ui/button.js';
 import { useI18n, type TranslationKey } from '../../lib/i18n/index.js';
+import { desktopStorage, type DesktopStorageStatus } from '../../lib/desktop.js';
+import { CloudDatabaseModal } from './CloudDatabaseModal.js';
 
 export interface ConnectViewProps {
   readonly apiClient?: ApiClient;
@@ -15,13 +17,17 @@ export interface ConnectViewProps {
   readonly className?: string;
 }
 
-const defaultIntegrations: readonly IntegrationCardItem[] = [
+/** A catalog entry; its description is read from the locale when the card is shown. */
+type CatalogItem = Omit<IntegrationCardItem, 'desc' | 'descriptionKey'> & {
+  readonly descriptionKey: TranslationKey;
+};
+
+const defaultIntegrations: readonly CatalogItem[] = [
   {
     id: 'azure',
     providerId: 'azure_devops_wiki',
     category: 'KNOWLEDGE',
     name: 'Azure DevOps',
-    desc: '',
     descriptionKey: 'connect.azureDescription',
     icon: 'ti-brand-azure',
     iconBg: 'var(--bg-accent)',
@@ -33,7 +39,6 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'github_projects',
     category: 'PROJECT_MANAGEMENT',
     name: 'GitHub',
-    desc: '',
     descriptionKey: 'connect.githubDescription',
     icon: 'ti-brand-github',
     iconBg: 'var(--bg-pro)',
@@ -45,7 +50,7 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'trello',
     category: 'PROJECT_MANAGEMENT',
     name: 'Trello',
-    desc: 'Listas e cards do Trello',
+    descriptionKey: 'connect.trelloDescription',
     icon: 'ti-brand-trello',
     iconBg: 'var(--bg-accent)',
     iconColor: 'var(--text-accent)',
@@ -56,7 +61,7 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'jira',
     category: 'PROJECT_MANAGEMENT',
     name: 'Jira',
-    desc: 'Epics e issues do Jira Cloud',
+    descriptionKey: 'connect.jiraDescription',
     icon: 'ti-ticket',
     iconBg: 'var(--bg-accent)',
     iconColor: 'var(--text-accent)',
@@ -67,7 +72,6 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'testrail',
     category: 'PROJECT_MANAGEMENT',
     name: 'TestRail',
-    desc: '',
     descriptionKey: 'connect.testrailDescription',
     icon: 'ti-checklist',
     iconBg: 'var(--bg-success)',
@@ -79,7 +83,6 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'xray',
     category: 'PROJECT_MANAGEMENT',
     name: 'Xray Cloud',
-    desc: '',
     descriptionKey: 'connect.xrayDescription',
     icon: 'ti-test-pipe',
     iconBg: 'var(--bg-success)',
@@ -91,7 +94,6 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'wiki_js',
     category: 'KNOWLEDGE',
     name: 'Wiki.js',
-    desc: '',
     descriptionKey: 'connect.wikiDescription',
     icon: 'ti-book',
     iconBg: 'var(--bg-accent)',
@@ -103,7 +105,6 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'gemini',
     category: 'LLM',
     name: 'Google Gemini',
-    desc: '',
     descriptionKey: 'connect.geminiDescription',
     icon: 'ti-sparkles',
     iconBg: 'var(--bg-warning)',
@@ -115,7 +116,6 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'openai',
     category: 'LLM',
     name: 'OpenAI',
-    desc: '',
     descriptionKey: 'connect.openaiDescription',
     icon: 'ti-brand-openai',
     iconBg: 'var(--surface-0)',
@@ -127,7 +127,6 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'claude',
     category: 'LLM',
     name: 'Anthropic Claude',
-    desc: '',
     descriptionKey: 'connect.claudeDescription',
     icon: 'ti-message-chatbot',
     iconBg: 'var(--bg-warning)',
@@ -139,7 +138,6 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'groq',
     category: 'LLM',
     name: 'Groq',
-    desc: '',
     descriptionKey: 'connect.groqDescription',
     icon: 'ti-bolt',
     iconBg: 'var(--bg-danger)',
@@ -151,19 +149,30 @@ const defaultIntegrations: readonly IntegrationCardItem[] = [
     providerId: 'ollama',
     category: 'LLM',
     name: 'Ollama',
-    desc: '',
     descriptionKey: 'connect.ollamaDescription',
     icon: 'ti-cpu',
     iconBg: 'var(--surface-0)',
     iconColor: 'var(--text-primary)',
     status: 'not-configured',
   },
+  {
+    id: 'telegram',
+    providerId: 'telegram',
+    category: 'MESSAGING',
+    name: 'Telegram',
+    descriptionKey: 'connect.telegramDescription',
+    icon: 'ti-brand-telegram',
+    iconBg: 'var(--bg-accent)',
+    iconColor: 'var(--text-accent)',
+    status: 'not-configured',
+  },
 ];
 
-type IntegrationFilter = 'ALL' | 'KNOWLEDGE' | 'LLM' | 'PROJECT_MANAGEMENT';
+type IntegrationFilter =
+  'ALL' | 'KNOWLEDGE' | 'LLM' | 'PROJECT_MANAGEMENT' | 'MESSAGING' | 'STORAGE';
 
 const integrationSections: readonly {
-  id: Exclude<IntegrationFilter, 'ALL'>;
+  id: Exclude<IntegrationFilter, 'ALL' | 'STORAGE'>;
   labelKey: TranslationKey;
   descriptionKey: TranslationKey;
   icon: string;
@@ -186,6 +195,12 @@ const integrationSections: readonly {
     descriptionKey: 'connect.projectsDescription',
     icon: 'ti-layout-kanban',
   },
+  {
+    id: 'MESSAGING',
+    labelKey: 'connect.messagingCategory',
+    descriptionKey: 'connect.messagingDescription',
+    icon: 'ti-message-circle',
+  },
 ];
 
 export function ConnectView({
@@ -197,12 +212,32 @@ export function ConnectView({
   className,
 }: ConnectViewProps = {}) {
   const { t } = useI18n();
-  const [integrations, setIntegrations] =
-    useState<readonly IntegrationCardItem[]>(defaultIntegrations);
+  const withDescription = (item: CatalogItem): IntegrationCardItem => ({
+    ...item,
+    desc: t(item.descriptionKey),
+  });
+  const [integrations, setIntegrations] = useState<readonly CatalogItem[]>(defaultIntegrations);
   const [savedConfigs, setSavedConfigs] = useState<Record<string, UserIntegrationDto>>({});
-  const [activeModalItem, setActiveModalItem] = useState<IntegrationCardItem | null>(null);
+  const [activeModalItem, setActiveModalItem] = useState<CatalogItem | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(isLoadingProp ?? false);
   const [activeFilter, setActiveFilter] = useState<IntegrationFilter>('ALL');
+  // Desktop app only: where its data lives (this computer or a hosted PostgreSQL).
+  const storage = desktopStorage();
+  const [storageStatus, setStorageStatus] = useState<DesktopStorageStatus | null>(null);
+  const [isStorageOpen, setIsStorageOpen] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    void storage
+      ?.status()
+      .then((status) => {
+        if (isMounted) setStorageStatus(status);
+      })
+      .catch(() => undefined);
+    return () => {
+      isMounted = false;
+    };
+  }, [storage]);
 
   useEffect(() => {
     let isMounted = true;
@@ -246,7 +281,7 @@ export function ConnectView({
     };
   }, [apiClient]);
 
-  const handleCardClick = (item: IntegrationCardItem) => {
+  const handleCardClick = (item: CatalogItem) => {
     if (!apiClient) {
       // Offline / standalone toggle behavior
       setIntegrations((prev) =>
@@ -315,12 +350,19 @@ export function ConnectView({
         {[
           { id: 'ALL' as const, label: t('connect.allCategories') },
           ...integrationSections.map(({ id, labelKey }) => ({ id, label: t(labelKey) })),
+          ...(storageStatus
+            ? [{ id: 'STORAGE' as const, label: t('connect.storageCategory') }]
+            : []),
         ].map((filter) => {
+          const storageCount = storageStatus ? 1 : 0;
           const count =
             filter.id === 'ALL'
-              ? integrations.length
-              : integrations.filter((item) => (item.displayCategory ?? item.category) === filter.id)
-                  .length;
+              ? integrations.length + storageCount
+              : filter.id === 'STORAGE'
+                ? storageCount
+                : integrations.filter(
+                    (item) => (item.displayCategory ?? item.category) === filter.id,
+                  ).length;
           const isActive = activeFilter === filter.id;
           return (
             <Button
@@ -382,29 +424,62 @@ export function ConnectView({
                     .map((item) => (
                       <IntegrationCard
                         key={item.id}
-                        item={{
-                          ...item,
-                          desc: item.descriptionKey ? t(item.descriptionKey) : item.desc,
-                        }}
-                        onClick={canManageIntegrations ? handleCardClick : undefined}
+                        item={withDescription(item)}
+                        onClick={canManageIntegrations ? () => handleCardClick(item) : undefined}
                       />
                     ))}
                 </div>
               </section>
             ))}
+          {storageStatus && (activeFilter === 'ALL' || activeFilter === 'STORAGE') && (
+            <section aria-labelledby="integration-section-STORAGE">
+              <div className="mb-3 flex items-start gap-2.5">
+                <i
+                  className="ti ti-database mt-0.5 text-base text-[var(--text-accent)]"
+                  aria-hidden="true"
+                />
+                <div>
+                  <h2
+                    id="integration-section-STORAGE"
+                    className="text-sm font-semibold text-[var(--text-primary)]"
+                  >
+                    {t('connect.storageCategory')}
+                  </h2>
+                  <p className="text-xs text-muted">{t('connect.storageDescription')}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3">
+                <IntegrationCard
+                  item={{
+                    id: 'cloud-database',
+                    name: t('connect.cloudDatabase.name'),
+                    desc: t('connect.cloudDatabase.description'),
+                    icon: 'ti-database',
+                    iconBg: 'var(--bg-accent)',
+                    iconColor: 'var(--text-accent)',
+                    status: storageStatus.mode === 'cloud' ? 'connected' : 'not-configured',
+                  }}
+                  onClick={canManageIntegrations ? () => setIsStorageOpen(true) : undefined}
+                />
+              </div>
+            </section>
+          )}
         </div>
+      )}
+
+      {isStorageOpen && storage && storageStatus && canManageIntegrations && (
+        <CloudDatabaseModal
+          storage={storage}
+          status={storageStatus}
+          onClose={() => setIsStorageOpen(false)}
+        />
       )}
 
       {activeModalItem && canManageIntegrations && (
         <IntegrationConfigModal
           isOpen={true}
           onClose={() => setActiveModalItem(null)}
-          integration={{
-            ...activeModalItem,
-            desc: activeModalItem.descriptionKey
-              ? t(activeModalItem.descriptionKey)
-              : activeModalItem.desc,
-          }}
+          integration={withDescription(activeModalItem)}
           currentConfig={savedConfigs[`${activeModalItem.category}:${activeModalItem.providerId}`]}
           apiClient={apiClient}
           onSaveSuccess={handleSaveSuccess}
@@ -420,8 +495,11 @@ function IntegrationCard({
   item,
   onClick,
 }: {
-  readonly item: IntegrationCardItem;
-  readonly onClick?: (item: IntegrationCardItem) => void;
+  readonly item: Pick<
+    IntegrationCardItem,
+    'id' | 'name' | 'desc' | 'icon' | 'iconBg' | 'iconColor' | 'status' | 'hasSecret'
+  >;
+  readonly onClick?: () => void;
 }) {
   const { t } = useI18n();
   const isConnected = item.status === 'connected';
@@ -433,8 +511,8 @@ function IntegrationCard({
         : t('connect.notConfigured');
   const interaction = onClick
     ? {
-        onClick: () => onClick(item),
-        onKeyDown: (event: KeyboardEvent) => event.key === 'Enter' && onClick(item),
+        onClick: () => onClick(),
+        onKeyDown: (event: KeyboardEvent) => event.key === 'Enter' && onClick(),
         tabIndex: 0,
         role: 'button',
         'aria-label': `${item.name}: ${statusLabel}`,

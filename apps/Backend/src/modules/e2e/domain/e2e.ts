@@ -47,10 +47,16 @@ export interface E2eCreation {
   username: string | null;
   /** AES-GCM ciphertext; never returned by the API. */
   passwordSecret: string | null;
+  /** Saved environment the run was configured from; its custom variables reach the specs. */
+  environmentId?: string | null;
+  /** The hidden run that explores the workspace's Source: it is not listed and has no tests. */
+  internal?: boolean;
   /** Encrypted Cloudflare Access service token, scoped to this target origin. */
   accessSecret?: string | null;
   prd: string;
   prdFileNames: string[];
+  /** Plans and writes the tests from the Brain instead of (or besides) an uploaded PRD. */
+  useBrain: boolean;
   diff: string | null;
   instructions: string | null;
   locale: string;
@@ -111,6 +117,8 @@ export interface E2eTestCase {
   description: string;
   steps: string[];
   priority: E2ePriority;
+  /** Feature area the test belongs to; groups the tests of a run. Null when not planned by the AI. */
+  category?: string | null;
   /** File path of the spec inside the creation's repository; the content is never stored here. */
   scriptPath: string | null;
   /** What the user tells the AI about how to write the Before Run (e.g. screens to go through). */

@@ -1,0 +1,43 @@
+appId: br.com.intcom.agentdevkit
+productName: Agent DevKit
+copyright: Copyright (c) 2026 Lucas Eduardo Continentino de Carvalho
+# The bundled PostgreSQL binaries and the API run as separate processes, so they must be plain files.
+asar: false
+directories:
+  output: release
+files:
+  - dist/src/**
+  - build/icon.png
+  - package.json
+  - node_modules/**
+  - '!node_modules/electron/**'
+  - '!node_modules/electron-builder/**'
+  - '!**/*.map'
+extraResources:
+  - from: stage
+    to: .
+    filter:
+      - '**/*'
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: zip
+      arch: [arm64, x64]
+    - target: dmg
+      arch: [arm64, x64]
+linux:
+  category: Development
+  target: [AppImage, deb]
+# Updates come from the desktop-v* releases that .github/workflows/desktop-release.yml publishes.
+publish:
+  provider: github
+  owner: lucaseduardocrp
+  repo: agent-devkit

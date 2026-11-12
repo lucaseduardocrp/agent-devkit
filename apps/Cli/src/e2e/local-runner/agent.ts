@@ -4,10 +4,10 @@ import {
   type E2eRunInput,
   type E2eRunResult,
   type E2eSnapshot,
-} from '../../vendor/backend/modules/e2e/application/e2e-runner.js';
-import type { AccessServiceToken } from '../../vendor/backend/modules/e2e/application/access-routing.js';
-import type { E2eMode } from '../../vendor/backend/modules/e2e/domain/e2e-mode.js';
-import { checkScript } from '../../vendor/backend/modules/e2e/application/script-guard.js';
+} from '../../vendor/e2e/application/e2e-runner.js';
+import type { AccessServiceToken } from '../../vendor/e2e/application/access-routing.js';
+import type { E2eMode } from '../../vendor/e2e/domain/e2e-mode.js';
+import { checkScript } from '../../vendor/e2e/application/script-guard.js';
 import type { RunnerIdentity } from './playwright-setup.js';
 
 interface RunnerApiRequest {
@@ -52,7 +52,15 @@ export interface LocalBrowser {
     url: string;
     signal?: AbortSignal;
     accessToken?: AccessServiceToken | null;
+    credentials?: TaskCredentials | null;
+    focus?: string;
+    thorough?: boolean;
   }): Promise<E2eSnapshot>;
+}
+
+interface TaskCredentials {
+  readonly username: string | null;
+  readonly password: string | null;
 }
 
 export type RunnerTaskInput =
@@ -64,14 +72,22 @@ export type RunnerTaskInput =
       readonly mode: E2eMode;
       readonly baseUrl: string;
       readonly locale: string;
-      readonly credentials: { readonly username: string | null; readonly password: string | null };
+      readonly credentials: TaskCredentials;
       readonly accessToken: AccessServiceToken | null;
+      /** Custom variables of the run's environment; absent from older servers. */
+      readonly variables?: Readonly<Record<string, string>>;
     }
   | {
       readonly kind: 'explore';
       readonly mode: E2eMode;
       readonly url: string;
       readonly accessToken: AccessServiceToken | null;
+      /** Test account to sign in with before exploring; absent from older servers. */
+      readonly credentials?: TaskCredentials;
+      /** What to explore; absent from older servers, which explore everything. */
+      readonly focus?: string;
+      /** Map the whole application (a Source exploration); absent from older servers. */
+      readonly thorough?: boolean;
     };
 
 export interface ClaimedTask {
@@ -232,6 +248,15 @@ export class LocalRunnerAgent {
     }
   }
 
+  /** The test account of the task, unless this computer was told to use another one. */
+  private credentials(given: TaskCredentials): TaskCredentials {
+    const { overrides } = this.options;
+    return {
+      username: overrides?.username ?? given.username,
+      password: overrides?.password ?? given.password,
+    };
+  }
+
   private async explore(
     task: ClaimedTask,
     input: Extract<RunnerTaskInput, { kind: 'explore' }>,
@@ -243,6 +268,9 @@ export class LocalRunnerAgent {
       url: target.url,
       accessToken: target.accessToken,
       signal,
+      ...(input.credentials ? { credentials: this.credentials(input.credentials) } : {}),
+      ...(input.focus ? { focus: input.focus } : {}),
+      ...(input.thorough ? { thorough: true } : {}),
     });
     if (signal.aborted) throw new Cancelled();
     await this.complete(task, { kind: 'explore', snapshot });
@@ -274,7 +302,6 @@ export class LocalRunnerAgent {
       this.emit({ type: 'failed', task, message });
       return;
     }
-    const { overrides } = this.options;
     const target = this.target(input.baseUrl, input.accessToken);
     const result = await this.options.browser.run({
       script: input.script,
@@ -283,12 +310,10 @@ export class LocalRunnerAgent {
       baseUrl: new URL(target.url).origin,
       localOrigin: null,
       locale: input.locale,
-      credentials: {
-        username: overrides?.username ?? input.credentials.username,
-        password: overrides?.password ?? input.credentials.password,
-      },
+      credentials: this.credentials(input.credentials),
       accessToken: target.accessToken,
       signal,
+      ...(input.variables ? { variables: input.variables } : {}),
     });
     if (signal.aborted) throw new Cancelled();
     if (result.video) await this.upload(task, 'video.webm', result.video, 'video/webm');

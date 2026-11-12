@@ -12,6 +12,8 @@ import { AgentService } from '../modules/agents/application/agent-service.js';
 import { PrismaAgentWorkflowRepository } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import type { PrismaAgentWorkflowClient } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import { PrismaE2eStore } from '../modules/e2e/adapters/prisma-e2e-store.js';
+import { PrismaE2eEnvironmentStore } from '../modules/e2e/adapters/prisma-e2e-environment-store.js';
+import { E2eEnvironmentService } from '../modules/e2e/application/e2e-environments.js';
 import { PrismaE2eJobQueue } from '../modules/e2e/adapters/prisma-e2e-queue.js';
 import { PrismaE2eRunnerTaskStore } from '../modules/e2e/adapters/prisma-runner-task-store.js';
 import { LocalE2eRunner } from '../modules/e2e/application/local-runner.js';
@@ -22,6 +24,7 @@ import {
   FfmpegVideoTranscoder,
   resolveFfmpegPath,
 } from '../modules/e2e/adapters/ffmpeg-transcoder.js';
+import { createPrismaKnowledgeAdapters } from '../modules/knowledge/adapters/prisma-knowledge.js';
 import { AgentE2eAuthor } from '../modules/e2e/application/e2e-author.js';
 import { E2eExecutor } from '../modules/e2e/application/e2e-executor.js';
 import { E2eWorker } from '../modules/e2e/application/e2e-worker.js';
@@ -32,6 +35,8 @@ import { PrismaApiTestStore } from '../modules/apitests/adapters/prisma-api-test
 import { ApiTestService } from '../modules/apitests/application/api-test-service.js';
 import { ApiTestWorker } from '../modules/apitests/application/api-test-worker.js';
 import { chromiumHostArgs, hostAccessFetch, hostAliasFromEnv } from '../shared/host-access.js';
+import { PrismaMessagingChatStore } from '../modules/messaging/application/messaging-chat-store.js';
+import { TelegramRunNotifier } from '../modules/messaging/application/run-notifier.js';
 
 /**
  * On-demand E2E worker. Shares the API's database (queue, runs, videos) and integrations,
@@ -61,6 +66,12 @@ const agents = new AgentService({
   ),
   dynamicProviderFactory: providers,
 });
+// Runs finished here are told to the chats paired with the workspace's Telegram bot.
+const notifier = new TelegramRunNotifier({
+  integrations,
+  chats: new PrismaMessagingChatStore(database.client),
+  frontendUrl: process.env['FRONTEND_URL']?.trim() || undefined,
+});
 const ffmpegPath = resolveFfmpegPath();
 // A local install reaches the user's localhost through Docker's host alias (shared/host-access.ts).
 const hostAlias = hostAliasFromEnv();
@@ -87,19 +98,26 @@ const worker = new E2eWorker({
       artifacts,
     }),
     transcoder: ffmpegPath ? new FfmpegVideoTranscoder({ ffmpegPath }) : null,
-    author: new AgentE2eAuthor({ agents, providers }),
+    // Runs that use the Brain search the same knowledge base as the API.
+    author: new AgentE2eAuthor({
+      agents,
+      providers,
+      knowledge: createPrismaKnowledgeAdapters(database.client).search,
+    }),
+    environments: new E2eEnvironmentService(new PrismaE2eEnvironmentStore(database.client)),
     reporter: new E2eRunReporter({
       store,
       artifacts,
       testManagement: new IntegrationTestManagementResolver(integrations),
     }),
+    notifier,
   }),
   onIdle: () => console.log('[E2eWorker] Queue empty; idle until the next wake.'),
 });
 
 // Remote integration and load runs share the worker host and its wake call.
 const apiTests = new ApiTestWorker({
-  service: new ApiTestService({ store: new PrismaApiTestStore(database.client) }),
+  service: new ApiTestService({ store: new PrismaApiTestStore(database.client), notifier }),
   concurrency: Number(process.env['API_TESTS_WORKER_CONCURRENCY']) || 2,
   allowPrivateNetwork: process.env['API_TESTS_ALLOW_PRIVATE_NETWORK'] === 'true',
   hostAlias,

@@ -51,8 +51,9 @@ with a rate for provider `mcp` and the MCP client name as the model.
 
 - `agents_create { name, instructions, role?, description?, isDefault?, model?, temperature? }`.
 - `agents_update { agentId, ...fields }`, `agents_get`, `agents_delete` (confirm first).
-- `agents_workflow_get` reads the workspace sequence; `agents_workflow_update { enabled, steps }`
-  replaces it and requires `agents:edit` permission.
+- `agents_workflow_get` reads the workspace sequence; `agents_workflow_update { enabled, steps, canvas? }`
+  replaces it and requires `agents:edit` permission. `canvas` holds the editor flow (trigger,
+  conditions, module actions, waits); omitting it drops a saved canvas.
 - ADK rejects instructions that look like prompt injection; rephrase them instead of working around
   the check.
 

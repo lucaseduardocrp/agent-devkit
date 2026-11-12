@@ -14,9 +14,22 @@ import {
   type E2eTestCase,
   type E2eVerdict,
 } from '../domain/e2e.js';
+import type { E2eExplorationLogEntry, E2eExplorationPage } from '../domain/e2e-insight.js';
+import type { E2eSourceDocumentation } from '../domain/e2e-source.js';
 import type { NewE2eTestCase } from './e2e-store.js';
 import type { E2eRunHooks, E2eSnapshot } from './e2e-runner.js';
 import { stripCodeFence } from './script-guard.js';
+import type { KnowledgeSearchPort } from '../../knowledge/application/knowledge-search.js';
+import {
+  BRAIN_RULES,
+  brainContext,
+  brainQueries,
+  searchBrain,
+  searchSourceBrain,
+} from './e2e-brain.js';
+import { sourceDiscovery } from '../domain/e2e-source.js';
+
+export { MAX_SOURCE_DOCUMENTS } from './e2e-brain.js';
 
 export const MAX_E2E_TESTS = 10;
 
@@ -38,6 +51,8 @@ export interface E2eScriptRequest {
   readonly previous?: { readonly script: string; readonly problem: string };
   /** Before Run and After Run of the test: the spec must not repeat what they do. */
   readonly hooks?: E2eRunHooks | null;
+  /** Names of the custom variables the spec may read from its environment. */
+  readonly variableNames?: readonly string[];
   readonly signal?: AbortSignal;
 }
 
@@ -53,7 +68,22 @@ export interface E2eHookRequest {
   readonly signal?: AbortSignal;
 }
 
+export interface E2eSourceRequest {
+  readonly creation: E2eCreation;
+  readonly startUrl: string;
+  /** Pages the agent reached while exploring the whole application. */
+  readonly pages: readonly E2eExplorationPage[];
+  /** What the agent did, in order. */
+  readonly script: readonly E2eExplorationLogEntry[];
+  readonly signal?: AbortSignal;
+}
+
 export interface E2eAuthor {
+  /**
+   * Documents the system for its Source: an overview and every flow, from the whole Brain and
+   * from what the exploration discovered. Authors without it leave the Source undocumented.
+   */
+  documentSource?(input: E2eSourceRequest): Promise<E2eSourceDocumentation>;
   plan(input: {
     creation: E2eCreation;
     snapshot: E2eSnapshot | null;
@@ -84,11 +114,55 @@ const planSchema = z.object({
         title: z.string().trim().min(1).max(200),
         description: z.string().trim().max(2_000).default(''),
         priority: z.enum(['high', 'medium', 'low']).catch('medium'),
+        category: z.string().trim().max(60).nullish().catch(null),
         steps: z.array(z.string().trim().min(1).max(1_000)).max(20).default([]),
       }),
     )
     .min(1),
 });
+
+export const sourceDocumentationSchema = z.object({
+  overview: z.string().trim().min(1).max(40_000),
+  areas: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(120),
+        description: z.string().trim().max(2_000).default(''),
+        flows: z
+          .array(
+            z.object({
+              title: z.string().trim().min(1).max(200),
+              description: z.string().trim().max(2_000).default(''),
+              steps: z.array(z.string().trim().min(1).max(1_000)).max(30).default([]),
+              pages: z.array(z.string().trim().min(1).max(300)).max(20).default([]),
+              origin: z.enum(['documented', 'discovered', 'both']).catch('discovered'),
+            }),
+          )
+          .max(80)
+          .default([]),
+      }),
+    )
+    .max(60)
+    .default([]),
+});
+
+/** How to document the system for its Source; shared by the workspace agent and the MCP host. */
+export const sourceRules = (creation: Pick<E2eCreation, 'locale'>): string[] => [
+  'You are a senior QA analyst documenting a whole software system, like the knowledge base TestSprite builds before testing.',
+  'You receive brainKnowledge (documents of the Brain, the workspace knowledge base: the product specification) and what an agent discovered by browsing the running application (discoveredPages with their controls, and discoveredNavigation: the ordered actions and the page each one led to).',
+  '1. overview: a Markdown document describing the system as a whole: its purpose, who uses it (profiles and permissions), its modules or areas, the main business rules and how the areas relate. Use headings and lists.',
+  '2. areas: every feature area of the system. For each one, every possible user flow in it: happy paths, alternative paths, validations, permissions and error cases. Be exhaustive: this is the reference of ALL flows of the system, not a sample.',
+  'Each flow has a title, a short description, its ordered steps as a user would perform them, the names of the pages it goes through (use the names in discoveredPages when the flow was seen there) and its origin: "documented" when it comes only from brainKnowledge, "discovered" when it was only seen in the application, "both" when the two agree.',
+  'Combine both sources: the Brain says what the system should do, the discovery shows what exists. Use only facts stated in them; never invent features, pages or rules. A page that was discovered but is not in the Brain is still documented, as "discovered".',
+  `Write every text value in ${languageName(creation.locale)}.`,
+];
+
+/** The JSON the documentation of the system is written as. */
+export const SOURCE_RESPONSE_FORMAT =
+  '{"overview": string, "areas": [{"name": string, "description": string, "flows": [{"title": string, "description": string, "steps": string[], "pages": string[], "origin": "documented"|"discovered"|"both"}]}]}';
+
+const SOURCE_TASK = (creation: Pick<E2eCreation, 'locale'>) =>
+  [...sourceRules(creation), `Respond ONLY with JSON: ${SOURCE_RESPONSE_FORMAT}.`].join('\n');
 
 const analysisSchema = z.object({
   verdict: z.enum(['app_bug', 'test_issue', 'environment']),
@@ -144,13 +218,23 @@ export const planRules = (creation: E2eCreation): string[] => [
     ? 'Scope: CODE DIFF. Focus only on behavior affected by the provided code diff.'
     : 'Scope: CODEBASE. Cover the most important journeys of the whole product.',
   'Prefer critical journeys, validation rules, permissions and edge cases stated in the PRD. Use only facts from the PRD and the snapshot; never invent features.',
+  ...(creation.useBrain ? BRAIN_RULES : []),
   'Each test starts from the application URL; when a test needs to be authenticated it logs in with the provided test account.',
   'Data or configuration a test needs beforehand (e.g. a record that must exist or be edited first) is built by the Before Run of the test, and what it creates is removed by its After Run; both are written separately, so state them as preconditions and postconditions in the description, not as steps.',
   `Write every text value in ${languageName(creation.locale)}.`,
 ];
 
 /** How to write each Playwright spec; the same rules the script guard enforces. */
-export const scriptRules = (creation: E2eCreation): string[] => [
+export const scriptRules = (
+  creation: E2eCreation,
+  /** Names of the custom variables of the run's environment. */
+  variableNames: readonly string[] = [],
+): string[] => [
+  ...(variableNames.length
+    ? [
+        `- The environment defines these custom variables: ${variableNames.join(', ')}. Read one as process.env.E2E_VAR_<NAME> (e.g. process.env.E2E_VAR_${variableNames[0]}) instead of hardcoding its value.`,
+      ]
+    : []),
   "- The only import is: import { test, expect } from '@playwright/test';",
   '- Declare exactly one test(...) whose name starts with the test code (e.g. "TC001 - ...").',
   `- baseURL is configured; navigate with relative paths, starting at '${creation.path}'.`,
@@ -172,7 +256,7 @@ export const scriptRules = (creation: E2eCreation): string[] => [
   creation.username && creation.passwordSecret
     ? '- When login is needed, use process.env.E2E_USERNAME and process.env.E2E_PASSWORD. Never hardcode credentials.'
     : '- No test account was provided: do not attempt to log in; verify only behavior reachable without authentication.',
-  '- Forbidden: other imports, require, Node APIs, process (except the two env vars), file paths, test.use, launching browsers, computed member access with strings (obj["x"]), eval.',
+  '- Forbidden: other imports, require, Node APIs, process (except the two env vars and the E2E_VAR_ custom variables), file paths, test.use, launching browsers, computed member access with strings (obj["x"]), eval.',
   '- When beforeRunPreparesPreconditions is given, those preconditions are ready when the test starts: do not create them again, and find the records by the names it uses. Leave cleanup to afterRunCleansUp.',
   `- Write exactly one top-level await test.step(...) per listed test step, in the same order, named "${creation.locale === 'en-US' ? 'Step' : 'Passo'} N - <short action>" (N starting at 1), and assert the step's expected result inside it. Each top-level step becomes the step result and screenshot evidence published to the test management platform; nested steps are allowed but count as part of their parent. Keep it under 150 lines.`,
 ];
@@ -214,13 +298,13 @@ export const hookRules = (creation: E2eCreation, kind: E2eHookKind): string[] =>
 const PLAN_TASK = (creation: E2eCreation) =>
   [
     ...planRules(creation),
-    'Respond ONLY with JSON: {"summary": string, "tests": [{"title": string (short, max 80 chars), "description": string (one or two sentences on what is verified), "priority": "high"|"medium"|"low", "steps": string[] (3-10 concrete steps including expected results)}]}.',
+    'Respond ONLY with JSON: {"summary": string, "tests": [{"title": string (short, max 80 chars), "category": string (the feature area the test belongs to, one to three words, the same text for related tests), "description": string (one or two sentences on what is verified), "priority": "high"|"medium"|"low", "steps": string[] (3-10 concrete steps including expected results)}]}.',
   ].join('\n');
 
-const SCRIPT_TASK = (creation: E2eCreation) =>
+const SCRIPT_TASK = (creation: E2eCreation, variableNames?: readonly string[]) =>
   [
     'Write ONE Playwright Test file in TypeScript for the given test case.',
-    ...scriptRules(creation),
+    ...scriptRules(creation, variableNames),
     '- Return only the code, without Markdown fences or explanations.',
   ].join('\n');
 
@@ -242,8 +326,14 @@ const ANALYSIS_TASK = (creation: E2eCreation) =>
     'Respond ONLY with JSON: {"verdict": "app_bug"|"test_issue"|"environment", "summary": string}.',
   ].join('\n');
 
+/** What to look up in the Brain for one test: the whole case, its title and its first steps. */
+const testQueries = (test: E2eTestCase): string[] =>
+  brainQueries(`${test.title} ${test.description}`, test.title, ...test.steps.slice(0, 4));
+
 export interface AgentE2eAuthorOptions {
   readonly agents: AgentService;
+  /** The Brain; runs that use it are grounded in what this search finds. */
+  readonly knowledge?: KnowledgeSearchPort;
   readonly providers?: DynamicProviderFactory;
   readonly defaultLlm?: LlmPort;
 }
@@ -253,10 +343,28 @@ export class AgentE2eAuthor implements E2eAuthor {
   constructor(private readonly options: AgentE2eAuthorOptions) {}
 
   async plan(input: Parameters<E2eAuthor['plan']>[0]): Promise<E2ePlan> {
+    const brain = await this.brain(
+      input.creation,
+      brainQueries(
+        `${input.creation.name} ${input.creation.instructions ?? ''}`,
+        input.creation.instructions,
+        input.creation.name,
+        input.creation.diff,
+        input.creation.prd,
+      ),
+      input.signal,
+    );
+    // Without a PRD, a Brain that knows nothing about the run would force the AI to invent.
+    if (brain && brain.brainKnowledge.length === 0 && !input.creation.prd.trim())
+      throw new ApplicationError(
+        'E2E_BRAIN_EMPTY',
+        'The Brain has no documents about this run. Sync or write them, or use a PRD.',
+        422,
+      );
     const text = await this.complete(
       input.creation,
       PLAN_TASK(input.creation),
-      { ...creationContext(input.creation), applicationSnapshot: input.snapshot },
+      { ...creationContext(input.creation), ...brain, applicationSnapshot: input.snapshot },
       input.signal,
     );
     const parsed = planSchema.safeParse(parseJsonObject(text));
@@ -268,12 +376,43 @@ export class AgentE2eAuthor implements E2eAuthor {
     };
   }
 
-  async writeScript(input: E2eScriptRequest): Promise<string> {
+  async documentSource(input: E2eSourceRequest): Promise<E2eSourceDocumentation> {
+    // The Source always reads the Brain, whatever the run it explores was configured to use.
+    const documents = this.options.knowledge
+      ? await searchSourceBrain(this.options.knowledge, input.creation, input.pages, input.signal)
+      : [];
     const text = await this.complete(
       input.creation,
-      SCRIPT_TASK(input.creation),
+      SOURCE_TASK(input.creation),
+      {
+        applicationUrl: input.startUrl,
+        ...brainContext(documents),
+        ...sourceDiscovery(input),
+      },
+      input.signal,
+    );
+    const parsed = sourceDocumentationSchema.safeParse(parseJsonObject(text));
+    if (!parsed.success)
+      throw new ApplicationError(
+        'E2E_SOURCE_INVALID',
+        'AI response is not a valid documentation of the system.',
+        502,
+      );
+    return {
+      ...parsed.data,
+      brainDocuments: documents.map(({ title, source }) => ({ title, source })),
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  async writeScript(input: E2eScriptRequest): Promise<string> {
+    const brain = await this.brain(input.creation, testQueries(input.test), input.signal);
+    const text = await this.complete(
+      input.creation,
+      SCRIPT_TASK(input.creation, input.variableNames),
       {
         ...creationContext(input.creation),
+        ...brain,
         testCase: {
           code: input.test.code,
           title: input.test.title,
@@ -298,11 +437,13 @@ export class AgentE2eAuthor implements E2eAuthor {
   }
 
   async writeHook(input: E2eHookRequest): Promise<string | null> {
+    const brain = await this.brain(input.creation, testQueries(input.test), input.signal);
     const text = await this.complete(
       input.creation,
       HOOK_TASK(input.creation, input.kind),
       {
         ...creationContext(input.creation),
+        ...brain,
         testCase: {
           code: input.test.code,
           title: input.test.title,
@@ -349,6 +490,22 @@ export class AgentE2eAuthor implements E2eAuthor {
     return parsed.success
       ? parsed.data
       : { verdict: 'app_bug', summary: stripCodeFence(text).slice(0, 10_000) };
+  }
+
+  /** Brain excerpts for a task of a run that uses the Brain; null for the other runs. */
+  private async brain(
+    creation: E2eCreation,
+    queries: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<ReturnType<typeof brainContext> | null> {
+    if (!creation.useBrain) return null;
+    if (!this.options.knowledge)
+      throw new ApplicationError(
+        'E2E_BRAIN_UNAVAILABLE',
+        'The Brain is not available for E2E automation.',
+        503,
+      );
+    return brainContext(await searchBrain(this.options.knowledge, creation, queries, signal));
   }
 
   private async complete(

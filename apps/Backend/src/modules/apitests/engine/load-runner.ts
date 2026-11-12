@@ -32,9 +32,13 @@ class Histogram {
   percentile(p: number): number {
     if (!this.count) return 0;
     const rank = Math.ceil((p / 100) * this.count);
-    // rank <= count, so the walk always stops inside the array.
+    // The counts add up to `count`, so the rank is always reached.
     let ms = 0;
-    for (let seen = this.counts[0]!; seen < rank; seen += this.counts[ms]!) ms += 1;
+    let seen = this.counts[0]!;
+    while (seen < rank) {
+      ms += 1;
+      seen += this.counts[ms]!;
+    }
     return ms;
   }
 
@@ -182,7 +186,6 @@ export async function runLoad(plan: LoadPlan, options: LoadRunOptions = {}): Pro
       case 'errorRate':
         return overall.count ? failed / overall.count : 0;
       case 'rps':
-        // durationSec is never below 1 ms (see summarize).
         return overall.count / durationSec;
       case 'checksRate':
         return checksPassed + checksFailed ? checksPassed / (checksPassed + checksFailed) : 1;
@@ -282,11 +285,6 @@ export async function runLoad(plan: LoadPlan, options: LoadRunOptions = {}): Pro
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    // A virtual user only reaches its think time right after a request that was not itself
-    // cut short by the abort (the caller already bails out on that case), so this can only be
-    // true in the narrow window where the signal fires between that check and this call —
-    // not a race a test can land on reliably.
-    /* v8 ignore next */
     if (signal.aborted) return resolve();
     const timer = setTimeout(done, ms);
     function done() {

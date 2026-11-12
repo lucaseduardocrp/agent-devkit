@@ -8,6 +8,19 @@ export const ptBR = {
   E2E_INVALID_ACCESS_TOKEN: 'As credenciais de acesso ao túnel são inválidas.',
   RELEASE_NOTE_NOT_FOUND: 'Nota de versão não encontrada.',
   RELEASE_NOTE_ITEMS_REQUIRED: 'Selecione pelo menos um item.',
+  DEVELOPMENT_CHANGE_NOT_FOUND: 'Change não encontrada.',
+  DEVELOPMENT_SESSION_NOT_FOUND: 'Sessão não encontrada.',
+  DEVELOPMENT_COMMENT_NOT_FOUND: 'Comentário não encontrado.',
+  DEVELOPMENT_CHANGE_SLUG_TAKEN: 'Já existe uma change com este identificador.',
+  DEVELOPMENT_CHANGE_LOCKED: 'Changes arquivadas ou rejeitadas não podem ser editadas.',
+  DEVELOPMENT_CHANGE_INVALID_TRANSITION:
+    'Uma change no estado "{status}" não aceita a ação "{action}".',
+  DEVELOPMENT_CHANGE_HAS_ACTIVE_SESSIONS:
+    'Conclua ou cancele as sessões desta change antes de arquivá-la.',
+  DEVELOPMENT_CHANGE_HAS_SESSIONS: 'Exclua as sessões desta change antes de excluí-la.',
+  DEVELOPMENT_CHANGE_NOT_APPROVED:
+    'A change precisa ser aprovada antes que os agentes comecem a trabalhar nela.',
+  DEVELOPMENT_SESSION_INVALID_STATE: 'Isso não é possível com a sessão no estado "{status}".',
   UNAUTHORIZED: 'Credenciais inválidas ou ausentes.',
   FORBIDDEN: 'Acesso negado.',
   MODULE_ACCESS_BLOCKED: 'Acesso ao módulo {module} bloqueado.',
@@ -29,6 +42,9 @@ export const ptBR = {
   LOAD_SCENARIO_NOT_FOUND: 'Cenário de carga não encontrado.',
   API_RUN_NOT_FOUND: 'Execução não encontrada.',
   API_RUN_ACTIVE: 'Cancele a execução antes de excluí-la.',
+  TELEGRAM_BOT_OFFLINE: 'Salve um token de bot válido antes de parear um chat.',
+  TELEGRAM_WEBHOOK_FORBIDDEN: 'Segredo do webhook inválido.',
+  MESSAGING_CHAT_NOT_FOUND: 'Chat não encontrado.',
   API_TEST_TARGET_LOCAL:
     '{host} não é acessível pelos workers do ADK. Execute no seu computador (com o devkit runner aberto).',
   LOAD_TEST_NOT_AUTHORIZED: 'Confirme que você tem autorização para gerar carga no sistema alvo.',
@@ -198,6 +214,7 @@ export const ptBR = {
   E2E_NOT_RUNNING: 'Esta execução E2E não está em andamento.',
   E2E_VIDEO_NOT_FOUND: 'Nenhum vídeo disponível para este teste.',
   E2E_PLAN_INVALID: 'A IA não retornou um plano de testes válido. Tente novamente.',
+  E2E_SOURCE_INVALID: 'A IA não retornou uma documentação válida do sistema. Tente novamente.',
   E2E_TARGET_UNREACHABLE:
     'Não foi possível acessar a aplicação. Verifique se o servidor está rodando e acessível a partir do backend.',
   E2E_BROWSER_NOT_INSTALLED:
@@ -223,6 +240,14 @@ export const ptBR = {
   E2E_SAVED_CASES_NOT_FOUND: 'Nenhum caso de teste salvo foi encontrado.',
   E2E_REPORTING_REQUIRED: 'Escolha a plataforma de gestão de testes que recebe esta execução.',
   E2E_EVIDENCE_NOT_FOUND: 'Nenhuma evidência disponível para este passo.',
+  E2E_ENVIRONMENT_NOT_FOUND: 'Ambiente não encontrado.',
+  E2E_SOURCE_AUTHOR_UNSUPPORTED:
+    'A IA do workspace não consegue documentar o sistema aqui. Escreva a documentação com o seu cliente de IA, usando as ferramentas e2e_prepare_source e e2e_save_source_documentation do ADK.',
+  E2E_AGENT_REQUIRED: 'Escolha o agente que documenta o sistema.',
+  E2E_SOURCE_NOT_FOUND: 'O workspace ainda não tem Source. Explore a aplicação primeiro.',
+  E2E_SOURCE_RUN_MISSING: 'A execução que explorou o Source não existe mais. Atualize o Source.',
+  E2E_INVALID_VARIABLE:
+    'Nomes de variáveis usam letras, dígitos e sublinhados, começam com letra e não se repetem.',
   TEST_MANAGEMENT_NOT_CONFIGURED:
     'Configure a integração da plataforma de gestão de testes (Azure DevOps, TestRail ou Xray).',
   TEST_MANAGEMENT_REQUEST_FAILED: 'A plataforma de gestão de testes retornou um erro.',
@@ -256,6 +281,21 @@ export const ptBR = {
   HUB_SKILL_TOO_LARGE: 'Esta skill é grande demais para um agente.',
   IMAGE_NOT_FOUND: 'Imagem não encontrada.',
   WORKFLOW_ANSWER_REQUIRED: 'Uma resposta é obrigatória.',
+  REALTIME_UNAVAILABLE: 'As atualizações ao vivo não estão disponíveis.',
+  BRIDGE_BAD_CHAT: 'Id de chat inválido.',
+  BRIDGE_FORBIDDEN: 'Token do bridge inválido.',
+  NOTIFICATION_CHANNEL_UNKNOWN: 'Canal desconhecido: {channels}.',
+  NOTIFICATION_CONTACT_INVALID: '{detail}',
+  NOTIFICATION_EVENT_UNKNOWN: 'Este evento não existe.',
+  NOTIFICATION_RECIPIENT_INVALID: 'Este evento não tem uma pessoa a que se refira.',
+  NOTIFICATION_RULE_NOT_FOUND: 'Regra de notificação não encontrada.',
+  UNAUTHENTICATED: 'Entre para continuar.',
+  E2E_BRAIN_EMPTY:
+    'O Brain não tem documentos sobre esta execução. Sincronize ou escreva-os, ou use um PRD.',
+  E2E_BRAIN_UNAVAILABLE: 'O Brain não está disponível para a automação E2E.',
+  E2E_EXPLORATION_NOT_FOUND: 'Script de exploração não encontrado.',
+  NO_WORKFLOW: 'Esta execução não tem etapas de workflow para reportar.',
+  UNKNOWN_STEP: 'Esta etapa não faz parte do workflow da execução.',
 } as const;
 
 export type ErrorMessageCode = keyof typeof ptBR;

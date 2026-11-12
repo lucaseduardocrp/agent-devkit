@@ -28,13 +28,63 @@ const contractValues = z
   .describe(
     'Values keyed by push contract field key, e.g. { "iterationPath": "Project\\Sprint 4" }.',
   );
+const customValue = z.union([
+  z.string().max(30000),
+  z.number().finite(),
+  z.boolean(),
+  z.array(z.string().max(500)).max(100),
+  z.null(),
+]);
+const sourceData = z
+  .object({
+    adkPriority: z.string().max(20).optional(),
+    adkAgentId: z.string().max(100).optional(),
+    adkAssigneeUserId: z
+      .string()
+      .max(100)
+      .optional()
+      .describe('Workspace member user id (must be a member).'),
+    adkCardType: z.string().max(100).optional().describe('Work item type key.'),
+    customFields: z
+      .record(z.string().max(100), z.record(z.string().max(200), customValue))
+      .optional()
+      .describe('Custom field values keyed by provider id, then field id.'),
+  })
+  .optional()
+  .describe('ADK metadata: priority, agent, assignee, card type and per-provider custom fields.');
 const fields = {
   title: z.string().trim().min(1).max(240),
   description: z.string().max(30000).optional(),
   status: z.string().trim().min(1).max(100).optional(),
   parentId: itemId.nullable().optional(),
   position: z.number().finite().optional(),
+  sourceData,
 };
+const workItemType = z.object({
+  key: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9][a-z0-9-]{0,39}$/),
+  label: z.string().trim().min(1).max(60),
+  color: z
+    .string()
+    .describe(
+      'A named color (red, orange, amber, emerald, cyan, sky, blue, violet, fuchsia, pink, slate) or a #rrggbb hex.',
+    ),
+  icon: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9-]{1,40}$/)
+    .describe('Tabler icon name without the "ti-" prefix, e.g. "bug".'),
+  aliases: z
+    .array(z.string().trim().toLowerCase().min(1).max(60))
+    .max(20)
+    .default([])
+    .describe(
+      'Provider type names (e.g. Azure DevOps "Product Backlog Item") mapped to this type.',
+    ),
+});
 export const pbiModule: McpModule = {
   toolset: 'pbi',
   tools: [
@@ -203,6 +253,7 @@ export const pbiModule: McpModule = {
         status: fields.status,
         parentId: fields.parentId,
         position: fields.position,
+        sourceData: fields.sourceData,
       },
       run: async ({ itemId: target, ...body }, { api }) =>
         json(await api.request({ method: 'PATCH', path: `/pbi/items/${segment(target)}`, body })),
@@ -249,9 +300,9 @@ export const pbiModule: McpModule = {
         itemId,
         providerId,
         fields: contractValues.optional(),
-        boardId: z.string().optional(),
-        listId: z.string().optional(),
-        issueType: z.string().optional(),
+        boardId: z.string().trim().max(200).optional(),
+        listId: z.string().trim().max(200).optional(),
+        issueType: z.string().trim().max(100).optional(),
         templateId: z
           .string()
           .uuid()
@@ -343,6 +394,30 @@ export const pbiModule: McpModule = {
             }),
           ),
         ),
+    }),
+    defineTool({
+      name: 'pbi_work_item_types_get',
+      title: 'Get work item types',
+      description:
+        'Lists the work item types of the workspace (key, label, color, icon and provider aliases) used by PBIs, cards and issues.',
+      toolset: 'pbi',
+      access: 'read',
+      routes: ['GET /work-item-types'],
+      input: {},
+      run: async (_, { api }) =>
+        json(await api.request({ method: 'GET', path: '/work-item-types' })),
+    }),
+    defineTool({
+      name: 'pbi_work_item_types_save',
+      title: 'Save work item types',
+      description:
+        'Replaces the full list of work item types of the workspace (call pbi_work_item_types_get first and send the whole list back with your changes). Requires PBI edit permission.',
+      toolset: 'pbi',
+      access: 'write',
+      routes: ['PUT /work-item-types'],
+      input: { types: z.array(workItemType).max(40) },
+      run: async (body, { api }) =>
+        json(await api.request({ method: 'PUT', path: '/work-item-types', body })),
     }),
   ],
 };

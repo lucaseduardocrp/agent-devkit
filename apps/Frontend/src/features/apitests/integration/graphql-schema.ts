@@ -3,6 +3,7 @@
 
 import type { ApiRequestSpec, RequestResult } from '../api-test-types.js';
 import type { CompletionSource, WordCompletion } from './CodeEditor.js';
+import { formatMessage, getMessages } from '../../../lib/i18n/index.js';
 
 /** The standard introspection query (as graphql-js `getIntrospectionQuery()`, descriptions on). */
 export const INTROSPECTION_QUERY = `query IntrospectionQuery {
@@ -133,7 +134,9 @@ export function parseIntrospection(result: RequestResult): GraphqlSchema {
   try {
     json = JSON.parse(result.response?.bodyPreview ?? '');
   } catch {
-    throw new Error(`HTTP ${result.status ?? '—'}: not JSON`);
+    throw new Error(
+      formatMessage(getMessages().apiTests.graphqlNotJson, { status: result.status ?? '—' }),
+    );
   }
   const body = json as {
     data?: { __schema?: Record<string, unknown> };

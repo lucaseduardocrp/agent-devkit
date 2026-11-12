@@ -10,6 +10,18 @@ export const enUS = {
   E2E_INVALID_ACCESS_TOKEN: 'The tunnel access credentials are invalid.',
   RELEASE_NOTE_NOT_FOUND: 'Release note not found.',
   RELEASE_NOTE_ITEMS_REQUIRED: 'Select at least one item.',
+  DEVELOPMENT_CHANGE_NOT_FOUND: 'Change not found.',
+  DEVELOPMENT_SESSION_NOT_FOUND: 'Session not found.',
+  DEVELOPMENT_COMMENT_NOT_FOUND: 'Comment not found.',
+  DEVELOPMENT_CHANGE_SLUG_TAKEN: 'A change with this identifier already exists.',
+  DEVELOPMENT_CHANGE_LOCKED: 'Archived and rejected changes cannot be edited.',
+  DEVELOPMENT_CHANGE_INVALID_TRANSITION:
+    'A change in the "{status}" state does not accept the "{action}" action.',
+  DEVELOPMENT_CHANGE_HAS_ACTIVE_SESSIONS:
+    'Finish or cancel the sessions of this change before archiving it.',
+  DEVELOPMENT_CHANGE_HAS_SESSIONS: 'Delete the sessions of this change before deleting it.',
+  DEVELOPMENT_CHANGE_NOT_APPROVED: 'The change must be approved before agents start working on it.',
+  DEVELOPMENT_SESSION_INVALID_STATE: 'This is not possible while the session is "{status}".',
   UNAUTHORIZED: 'Invalid or missing credentials.',
   FORBIDDEN: 'Access denied.',
   MODULE_ACCESS_BLOCKED: 'Access to the {module} module is blocked.',
@@ -31,6 +43,9 @@ export const enUS = {
   LOAD_SCENARIO_NOT_FOUND: 'Load scenario not found.',
   API_RUN_NOT_FOUND: 'Run not found.',
   API_RUN_ACTIVE: 'Cancel the run before deleting it.',
+  TELEGRAM_BOT_OFFLINE: 'Save a valid bot token before pairing a chat.',
+  TELEGRAM_WEBHOOK_FORBIDDEN: 'Invalid webhook secret.',
+  MESSAGING_CHAT_NOT_FOUND: 'Chat not found.',
   API_TEST_TARGET_LOCAL:
     '{host} is not reachable from the ADK workers. Run it on your computer (with devkit runner open).',
   LOAD_TEST_NOT_AUTHORIZED: 'Confirm that you are allowed to put load on the target system.',
@@ -197,6 +212,7 @@ export const enUS = {
   E2E_NOT_RUNNING: 'This E2E run is not in progress.',
   E2E_VIDEO_NOT_FOUND: 'No video is available for this test.',
   E2E_PLAN_INVALID: 'The AI did not return a valid test plan. Try again.',
+  E2E_SOURCE_INVALID: 'The AI did not return a valid documentation of the system. Try again.',
   E2E_TARGET_UNREACHABLE:
     'Could not reach the application. Make sure the server is running and reachable from the backend.',
   E2E_BROWSER_NOT_INSTALLED:
@@ -221,6 +237,14 @@ export const enUS = {
   E2E_SAVED_CASES_NOT_FOUND: 'No saved test case was found.',
   E2E_REPORTING_REQUIRED: 'Choose the test management platform that receives this run.',
   E2E_EVIDENCE_NOT_FOUND: 'No evidence is available for this step.',
+  E2E_ENVIRONMENT_NOT_FOUND: 'Environment not found.',
+  E2E_SOURCE_AUTHOR_UNSUPPORTED:
+    'The workspace AI cannot document the system here. Write it with your AI client using the ADK tools e2e_prepare_source and e2e_save_source_documentation.',
+  E2E_AGENT_REQUIRED: 'Choose the agent that documents the system.',
+  E2E_SOURCE_NOT_FOUND: 'The workspace has no Source yet. Explore the application first.',
+  E2E_SOURCE_RUN_MISSING: 'The run that explored the Source no longer exists. Update the Source.',
+  E2E_INVALID_VARIABLE:
+    'Variable names use letters, digits and underscores, start with a letter and cannot repeat.',
   TEST_MANAGEMENT_NOT_CONFIGURED:
     'Configure the test management integration (Azure DevOps, TestRail or Xray).',
   TEST_MANAGEMENT_REQUEST_FAILED: 'The test management platform returned an error.',
@@ -251,4 +275,18 @@ export const enUS = {
   HUB_SKILL_TOO_LARGE: 'This skill is too large for an agent.',
   IMAGE_NOT_FOUND: 'Image not found.',
   WORKFLOW_ANSWER_REQUIRED: 'A response is required.',
+  REALTIME_UNAVAILABLE: 'Live updates are not available.',
+  BRIDGE_BAD_CHAT: 'Invalid chat id.',
+  BRIDGE_FORBIDDEN: 'Invalid bridge token.',
+  NOTIFICATION_CHANNEL_UNKNOWN: 'Unknown channel: {channels}.',
+  NOTIFICATION_CONTACT_INVALID: '{detail}',
+  NOTIFICATION_EVENT_UNKNOWN: 'This event does not exist.',
+  NOTIFICATION_RECIPIENT_INVALID: 'This event has no person it is about.',
+  NOTIFICATION_RULE_NOT_FOUND: 'Notification rule not found.',
+  UNAUTHENTICATED: 'Sign in to continue.',
+  E2E_BRAIN_EMPTY: 'The Brain has no documents about this run. Sync or write them, or use a PRD.',
+  E2E_BRAIN_UNAVAILABLE: 'The Brain is not available for E2E automation.',
+  E2E_EXPLORATION_NOT_FOUND: 'Exploration script not found.',
+  NO_WORKFLOW: 'This run has no workflow steps to report.',
+  UNKNOWN_STEP: 'This step is not part of the workflow of the run.',
 } as const satisfies Record<ErrorMessageCode, string>;

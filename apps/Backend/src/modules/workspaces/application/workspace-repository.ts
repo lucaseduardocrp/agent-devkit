@@ -48,6 +48,18 @@ export interface UserWorkspaceMembership {
   readonly access?: EffectiveAccess;
 }
 
+export interface MemberSearch {
+  /** Part of the name or e-mail, in any case; empty matches everyone. */
+  readonly search: string;
+  readonly offset: number;
+  readonly limit: number;
+}
+
+export interface MemberPage {
+  readonly members: readonly WorkspaceMemberEntity[];
+  readonly total: number;
+}
+
 export interface WorkspaceRepository {
   createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceEntity>;
   findById(id: string): Promise<WorkspaceEntity | null>;
@@ -57,6 +69,8 @@ export interface WorkspaceRepository {
   findMember(workspaceId: string, userId: string): Promise<WorkspaceMemberEntity | null>;
   findMemberById(memberId: string): Promise<WorkspaceMemberEntity | null>;
   listMembers(workspaceId: string): Promise<readonly WorkspaceMemberEntity[]>;
+  /** One page of the members whose name or e-mail contains `search`, and how many match in all. */
+  searchMembers(workspaceId: string, query: MemberSearch): Promise<MemberPage>;
   updateMember(memberId: string, input: UpdateWorkspaceMemberInput): Promise<WorkspaceMemberEntity>;
   deleteMember(memberId: string): Promise<void>;
   countAdmins(workspaceId: string): Promise<number>;

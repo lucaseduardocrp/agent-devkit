@@ -23,6 +23,11 @@ export interface SaveIntegrationData {
 
 export interface UserIntegrationStore {
   listByOwner(ownerId: string): Promise<readonly UserIntegrationRecord[]>;
+  /** Every workspace's record of one provider, e.g. to start the messaging bots at boot. */
+  listByProvider(
+    category: IntegrationCategory,
+    providerId: string,
+  ): Promise<readonly UserIntegrationRecord[]>;
   getByOwner(
     ownerId: string,
     category: IntegrationCategory,

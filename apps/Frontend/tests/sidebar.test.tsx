@@ -65,6 +65,9 @@ describe('Sidebar', () => {
     fireEvent.click(getByRole('button', { name: 'Integrações' }));
     expect(onSelect).toHaveBeenCalledWith('connect');
 
+    fireEvent.click(getByTestId('sidebar-notifications-button'));
+    expect(onSelect).toHaveBeenCalledWith('notifications');
+
     fireEvent.click(getByTestId('sidebar-settings-footer-button'));
     expect(onSelect).toHaveBeenCalledWith('settings');
   });
@@ -176,7 +179,8 @@ describe('Sidebar', () => {
     window.localStorage.removeItem('adk.sidebar.collapsed');
     const view = render(<Sidebar activeTab="brain" onSelectTab={vi.fn()} />);
     const edge = () => view.getByRole('separator', { name: 'Redimensionar barra lateral' });
-    pressAt(edge(), 280);
+    // The sidebar starts 420px wide: dragging it 300px left ends well below the 240px minimum.
+    pressAt(edge(), 420);
     moveTo(120);
     release();
     expect(view.getByRole('complementary')).toHaveAttribute('data-collapsed', 'true');

@@ -13,8 +13,10 @@ import {
 } from './field-mappings/tools.js';
 import { integrationsModule } from './integrations/tools.js';
 import { issuesModule } from './issues/tools.js';
+import { notificationsModule } from './notifications/tools.js';
 import { pbiModule } from './pbi/tools.js';
 import { releaseNotesModule } from './release-notes/tools.js';
+import { developmentModule } from './development/tools.js';
 import { specModule } from './spec/tools.js';
 import { testPlansModule } from './testplans/tools.js';
 import { workspacesModule } from './workspaces/tools.js';
@@ -41,7 +43,9 @@ export const modules: readonly McpModule[] = [
   integrationTestsModule,
   loadTestsModule,
   releaseNotesModule,
+  developmentModule,
   auditModule,
+  notificationsModule,
 ];
 
 /** Backend routes that are intentionally not exposed as tools, with the reason. */
@@ -50,8 +54,6 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Browser redirect target of the OAuth provider; auth_get_oauth_url starts the flow instead.',
   'POST /auth/tokens':
     'Creating a token returns its secret; it must not transit through the model. Use the web app or `devkit login`, which stores it locally.',
-  'GET /capabilities':
-    'Public install descriptor the web app adapts its UI to (whether workers reach localhost); the run tools describe their "local" target instead.',
   'POST /costs/usage':
     'Internal usage accounting: the MCP server itself reports the estimated host-model tokens of every tool call; it is not an action for the model.',
   'GET /e2e/tests/:id/video':
@@ -76,12 +78,10 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Internal call from the ADK API to the E2E worker service (worker token, not a user route); e2e_create and e2e_run enqueue work and wake it.',
   'POST /WikiWebhook/azure-devops':
     'Inbound Azure DevOps service hook, called by Azure and not by users; brain_sync covers manual sync.',
-  'POST /attachments/files':
-    'Binary upload from the web app, which keeps pasted and attached files as drafts until the item is saved; no file bytes go through the model.',
+  'GET /runs/stream':
+    'Server-sent events for the web app (Agent map, run flow); a model asks issues_runs or issues_run_get when it needs a run.',
   'GET /attachments/files/:id':
     'Binary download of a stored attachment for the web app; no file bytes go through the model.',
-  'DELETE /attachments/files/:id':
-    'Discards an unsaved upload of the web app; saved files are deleted with the item that holds them.',
   'GET /attachments/images/:scope/:id':
     'Binary image stream of attachments saved before generic attachments, kept for the web app.',
   'GET /attachments/proxy':
@@ -92,8 +92,26 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Saves the attachment panel of a Brain document after the browser uploads its files.',
   'POST /runs/:id/continue':
     'Human review gate of a paused server run (approve, answer or request changes); the agent being reviewed must not approve its own work.',
+  'POST /messaging/bridge/send':
+    'Server-to-server call of the messaging Bridge, authenticated with the bridge token; not a user action.',
+  'POST /messaging/bridge/typing':
+    'Server-to-server call of the messaging Bridge, authenticated with the bridge token; not a user action.',
+  'GET /capabilities':
+    'Feature detection of the web app (host access of a local install); not workspace data.',
   'PUT /integration-tests/collections/:id/runtime':
     'Hand-editing runtime variables and cookies happens in the web request editor; runs set them, and integration_clear_runtime resets them.',
+  'GET /integration-tests/dynamic-values':
+    'Mock value catalog for the completion menu of the web request editor; the generated values are documented in the integration tool descriptions.',
+  'POST /messaging/telegram/webhook/:workspaceId':
+    'Inbound Telegram webhook, called by Telegram with its secret header and not by users.',
+  'POST /integrations/MESSAGING/telegram/pairing-code':
+    'Pairing codes let whoever sends them talk to the workspace agents; they are shown to a person in Connect and must not transit through the model.',
+  'GET /integrations/MESSAGING/telegram/chats':
+    'Telegram allowlist managed in Connect; the bot itself is the channel to the agents.',
+  'PATCH /integrations/MESSAGING/telegram/chats/:id':
+    'Telegram allowlist managed in Connect; the bot itself is the channel to the agents.',
+  'DELETE /integrations/MESSAGING/telegram/chats/:id':
+    'Removing a paired Telegram chat is an access-control change made by a person in Connect.',
   'GET /design/settings':
     'Repository and branch of the Design module, chosen by a person in the Design settings of the web app; the design tools work in whatever it points to.',
   'PUT /design/settings':
@@ -106,4 +124,14 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Branch picker of the Design settings in the web app; e2e_list_branches lists the same branches.',
   'PUT /e2e/tests/:id/hook-instructions':
     "Guidance for ADK's own author of Before Run and After Run scripts, edited in the web app; an MCP host writes those scripts itself with e2e_update_script.",
+  'GET /development/stream':
+    'Server-sent events for the web app (pipeline and session board); a model asks development_pipeline or development_get_session when it needs the current state.',
+  'GET /e2e/creations/:id/exploration/images/:page':
+    'Binary JPEG of an explored page for the web app; e2e_get_exploration reports the pages found, so no image bytes go through the model.',
+  'GET /e2e/source/images/:page':
+    'Binary JPEG of a discovered page of the Source for the web app; e2e_get_source reports the same pages as data.',
+  'GET /e2e/tests/:id/trail/:kind/:index':
+    'Binary JPEG of a trail page or element for the web app; e2e_get_action_map reports the same pages and elements as data.',
+  'GET /e2e/tests/:id/live':
+    'Live JPEG frame of a running test for the web player; e2e_get shows its status and steps.',
 };

@@ -48,12 +48,15 @@ const prefixes: readonly [RegExp, PermissionModule][] = [
   [/^\/design(\/|$)/, 'design'],
   [/^\/spec(\/|$)/, 'specs'],
   [/^\/release-notes(\/|$)/, 'releaseNotes'],
+  [/^\/development(\/|$)/, 'development'],
   [/^\/TestPlan(\/|$)/, 'testplans'],
   [/^\/e2e(\/|$)/, 'e2e'],
   [/^\/integration-tests(\/|$)/, 'integrationTests'],
   // Load scenarios also read collections: their routes require view on Integration Tests too.
   [/^\/load-tests(\/|$)/, 'loadTests'],
   [/^\/integrations(\/|$)/, 'integrations'],
+  // Which channels exist and who is told about what is configured like an integration.
+  [/^\/notifications(\/|$)/, 'integrations'],
 ];
 
 /**
@@ -71,6 +74,9 @@ export function moduleRequirements(method: string, path: string): readonly Modul
   // A member's own credentials and runtime state of integration tests are personal data.
   if (/^\/integration-tests\/(personal-secrets|collections\/[^/]+\/runtime)$/.test(path))
     return [{ module: 'integrationTests', operation: 'view' }];
+  // Sending a message about an issue, or a test to oneself, needs no say over the rules.
+  if (method === 'POST' && /^\/notifications\/(send|test)$/.test(path))
+    return [{ module: 'issues', operation: 'edit' }];
   // Budget and rates are governed by the manageCosts workspace permission.
   if (/^\/costs(\/|$)/.test(path)) return [{ module: 'issues', operation: 'view' }];
   if (method === 'POST' && path === '/agents/default/brain-query')

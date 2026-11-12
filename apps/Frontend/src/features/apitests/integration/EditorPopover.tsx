@@ -73,9 +73,9 @@ export function EditorPopover({
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         data-testid={testId}
-        onClick={(event) => {
+        onClick={() => {
           if (open) return setPosition(null);
-          const rect = event.currentTarget.getBoundingClientRect();
+          const rect = trigger.current!.getBoundingClientRect();
           setPosition({
             left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
             top: rect.bottom + 4,

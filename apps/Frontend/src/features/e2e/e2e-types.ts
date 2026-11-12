@@ -1,3 +1,5 @@
+import { getMessages } from '../../lib/i18n/index.js';
+
 export type E2eMode = 'frontend' | 'backend';
 export type E2eScope = 'codebase' | 'diff';
 export type E2eCreationStatus =
@@ -181,6 +183,8 @@ export interface E2eTestSummary {
   readonly description: string;
   readonly steps: readonly string[];
   readonly priority: E2ePriority;
+  /** Feature area the test belongs to; groups the tests of a run. */
+  readonly category?: string | null;
   /** Spec file in the run's repository; null until the AI writes it. */
   readonly scriptPath: string | null;
   /** What the user tells the AI about how to write the Before Run; rich text. */
@@ -230,7 +234,11 @@ export interface E2eCreationSummary {
   readonly username: string | null;
   readonly hasPassword: boolean;
   readonly hasAccessServiceToken?: boolean;
+  /** Saved environment the run was configured from. */
+  readonly environmentId?: string | null;
   readonly prdFileNames: readonly string[];
+  /** The tests are planned and written from the Brain instead of a PRD. */
+  readonly useBrain?: boolean;
   /** Null only for runs created before scripts moved to repositories. */
   readonly repository: E2eRepositoryRef | null;
   /** Test management platform that receives the results; null when not reported. */
@@ -273,12 +281,16 @@ export interface E2eCreationInput {
   readonly path?: string;
   readonly username?: string;
   readonly password?: string;
+  /** Saved environment to configure the run from; null unlinks it. */
+  readonly environmentId?: string | null;
   readonly accessClientId?: string;
   readonly accessClientSecret?: string;
   readonly clearAccessServiceToken?: boolean;
   /** May be empty when the run automates imported test cases. */
   readonly prd: string;
   readonly prdFileNames?: readonly string[];
+  /** Plans and writes the tests from the Brain; `prd` may then be empty. */
+  readonly useBrain?: boolean;
   readonly diff?: string;
   readonly instructions?: string;
   /** Automates these test management cases instead of planning tests from the PRD. */
@@ -315,17 +327,18 @@ export function isCreationActive(status: E2eCreationStatus): boolean {
 
 /** Removes execution paths and infrastructure details from text shown in the test UI. */
 export function safeE2eOutput(value: string): string {
+  const m = getMessages().e2e;
   return value
     .split(/\r?\n/)
     .filter((line) => !/^\s*at\s/.test(line))
     .map((line) =>
       line
-        .replace(/\/app\/(?:\.e2e-workspaces|node_modules)\/[^\s)]+/gi, '[test runtime]')
-        .replace(/\b[a-z0-9.-]+\.railway\.(?:app|internal)\b/gi, '[service address]')
-        .replace(/\b[A-Z]:\\[^\s)]+/gi, '[local path]')
-        .replace(/\bRailway\b/gi, 'test environment')
-        .replace(/Cloudflare Access/gi, 'tunnel authentication')
-        .replace(/(?:postgres(?:ql)?|mysql):\/\/[^\s]+/gi, '[connection details hidden]'),
+        .replace(/\/app\/(?:\.e2e-workspaces|node_modules)\/[^\s)]+/gi, m.redactedRuntime)
+        .replace(/\b[a-z0-9.-]+\.railway\.(?:app|internal)\b/gi, m.redactedServiceAddress)
+        .replace(/\b[A-Z]:\\[^\s)]+/gi, m.redactedLocalPath)
+        .replace(/\bRailway\b/gi, m.redactedEnvironment)
+        .replace(/Cloudflare Access/gi, m.redactedTunnelAuth)
+        .replace(/(?:postgres(?:ql)?|mysql):\/\/[^\s]+/gi, m.redactedConnection),
     )
     .join('\n')
     .trim();
@@ -407,3 +420,218 @@ export function suggestedScriptFolder(name: string): string {
     .slice(0, 50);
   return slug ? `tests/e2e/${slug}` : 'tests/e2e';
 }
+
+// --- Environments: where an application runs and how the agent signs in to it. ---
+
+export interface E2eEnvironment {
+  readonly id: string;
+  readonly name: string;
+  readonly baseUrl: string;
+  readonly username: string | null;
+  readonly hasPassword: boolean;
+  /** The first environment of the workspace. */
+  readonly isDefault: boolean;
+  /** Names of the custom variables; their values never leave the server. */
+  readonly variableNames: readonly string[];
+}
+
+export interface E2eEnvironmentInput {
+  readonly name: string;
+  readonly baseUrl: string;
+  readonly username?: string;
+  readonly password?: string;
+  /** A variable sent without a value keeps the saved one. */
+  readonly variables: readonly { readonly key: string; readonly value?: string }[];
+}
+
+// --- Exploration: the agent signs in and browses the site before the tests are planned. ---
+
+export type E2eExplorationStatus = 'signing_in' | 'exploring' | 'ready' | 'failed';
+
+export interface E2eExplorationPage {
+  readonly index: number;
+  readonly url: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly elements: readonly string[];
+  readonly hasScreenshot: boolean;
+}
+
+export interface E2eExplorationLogEntry {
+  readonly atMs: number;
+  readonly action: 'navigate' | 'sign_in' | 'click';
+  readonly target: string;
+  readonly result: string | null;
+}
+
+export interface E2eExploration {
+  readonly status: E2eExplorationStatus;
+  /** What the exploration was asked to cover; null or absent when it was open. */
+  readonly description?: string | null;
+  /** True when the exploration replaces the Source of the workspace when it ends well. */
+  readonly source?: boolean;
+  /** Where it ended up: "database" or "source". */
+  readonly savedTo?: string | null;
+  /** Why the script could not be kept. */
+  readonly saveError?: string | null;
+  readonly startedAt: string;
+  readonly updatedAt: string;
+  readonly signedInMs: number | null;
+  readonly finishedAt: string | null;
+  readonly error: string | null;
+  readonly pages: readonly E2eExplorationPage[];
+  readonly log: readonly E2eExplorationLogEntry[];
+  readonly hasLiveFrame: boolean;
+}
+
+export function isExplorationActive(exploration: E2eExploration | null): boolean {
+  return exploration?.status === 'signing_in' || exploration?.status === 'exploring';
+}
+
+// --- Action map: the pages the tests of a run went through and what they touched. ---
+
+export type E2eTouchAction = 'click' | 'type' | 'press' | 'check' | 'uncheck' | 'select' | 'hover';
+
+export interface E2eMapImage {
+  readonly testId: string;
+  readonly index: number;
+}
+
+export interface E2eMapTouch {
+  readonly testId: string;
+  readonly step: number;
+  readonly action: E2eTouchAction;
+  readonly value: string | null;
+}
+
+export interface E2eMapElement {
+  readonly id: string;
+  readonly kind: string;
+  readonly name: string;
+  /** Part of the page the element occupies, each value between 0 and 1. */
+  readonly box: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  } | null;
+  readonly image: E2eMapImage | null;
+  readonly touches: readonly E2eMapTouch[];
+}
+
+export interface E2eMapPage {
+  readonly id: string;
+  readonly path: string;
+  readonly title: string;
+  readonly image: E2eMapImage | null;
+  readonly testIds: readonly string[];
+  readonly touches: number;
+  readonly failedTestIds: readonly string[];
+  readonly elements: readonly E2eMapElement[];
+}
+
+export interface E2eMapEdge {
+  /** Null for the edge that leaves the start of the run. */
+  readonly from: string | null;
+  readonly to: string;
+  readonly testIds: readonly string[];
+}
+
+export interface E2eLiveActivity {
+  readonly step: number;
+  readonly action: E2eTouchAction;
+  readonly kind: string;
+  readonly name: string;
+}
+
+export interface E2eActionMap {
+  readonly pages: readonly E2eMapPage[];
+  readonly edges: readonly E2eMapEdge[];
+  readonly tests: readonly {
+    readonly id: string;
+    readonly status: E2eTestStatus;
+    readonly path: readonly string[];
+    readonly live: E2eLiveActivity | null;
+  }[];
+}
+
+// --- Source: the single map of the application, replaced by each Source exploration. ---
+
+/** One way through the application: the action that ends it; `map.tests` has its pages. */
+export interface E2eSourceFlow {
+  readonly id: string;
+  /** Position of the action in the script, starting at 1. */
+  readonly step: number;
+  readonly action: E2eExplorationLogEntry['action'];
+  readonly target: string;
+  /** Name of the page the flow ends on; flows are grouped by it. */
+  readonly group: string;
+}
+
+export type E2eSourceFlowOrigin = 'documented' | 'discovered' | 'both';
+
+/** The system documented by the AI from the Brain and from what the agent discovered. */
+export interface E2eSourceDocumentation {
+  /** Markdown: what the system is, who uses it, its modules and main rules. */
+  readonly overview: string;
+  readonly areas: readonly {
+    readonly name: string;
+    readonly description: string;
+    readonly flows: readonly {
+      readonly title: string;
+      readonly description: string;
+      readonly steps: readonly string[];
+      readonly pages: readonly string[];
+      readonly origin: E2eSourceFlowOrigin;
+    }[];
+  }[];
+  readonly brainDocuments: readonly { readonly title: string; readonly source: string }[];
+  readonly generatedAt: string;
+}
+
+export interface E2eSource {
+  readonly workspaceId: string;
+  /** Hidden run that carried the exploration. */
+  readonly creationId: string;
+  /** Saved environment whose application was explored; null when it was deleted. */
+  readonly environmentId: string | null;
+  readonly startUrl: string;
+  readonly signedInMs: number | null;
+  /** What the agent did, in order: the script kept in the database. */
+  readonly script: readonly E2eExplorationLogEntry[];
+  readonly pages: readonly E2eExplorationPage[];
+  /** Overview and flows of the system; null when the AI could not write them. */
+  readonly documentation: E2eSourceDocumentation | null;
+  readonly documentationError: string | null;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly updatedAt: string;
+  /** The graph of pages, with one "test" per flow. */
+  readonly map: E2eActionMap;
+  readonly flows: readonly E2eSourceFlow[];
+}
+
+/** The Source, and whether an exploration or a documentation is being written. */
+export interface E2eSourceState {
+  readonly source: E2eSource | null;
+  /** Hidden run carrying the jobs of the Source; its exploration is followed like a run's. */
+  readonly anchorId: string | null;
+  /** The agent that documents the system; the one of the last exploration. */
+  readonly agentId: string | null;
+  readonly busy: boolean;
+}
+
+/** Where the images of the E2E module are served, relative to `/e2e`. */
+export const e2eImagePath = {
+  sourcePage: (index: number) => `source/images/${index}`,
+  explorationPage: (creationId: string, index: number) =>
+    `creations/${encodeURIComponent(creationId)}/exploration/images/${index}`,
+  explorationLive: (creationId: string) =>
+    `creations/${encodeURIComponent(creationId)}/exploration/images/live`,
+  trail: (image: E2eMapImage, kind: 'page' | 'element') =>
+    `tests/${encodeURIComponent(image.testId)}/trail/${kind}/${image.index}`,
+  live: (testId: string) => `tests/${encodeURIComponent(testId)}/live`,
+  /** Screenshot taken by a step of the latest execution. */
+  step: (testId: string, position: number) =>
+    `tests/${encodeURIComponent(testId)}/steps/${position}/screenshot`,
+};

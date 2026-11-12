@@ -43,6 +43,39 @@ const detailTabs: readonly { id: DetailTab; label: TranslationKey; icon: string 
   { id: 'afterRun', label: 'e2e.afterRun', icon: 'ti-eraser' },
 ];
 
+/** The run page while the test loads: the title row, the tab bar and the preview, as loaded. */
+function E2eTestDetailSkeleton() {
+  return (
+    <div
+      className="flex flex-col gap-4"
+      role="status"
+      aria-busy="true"
+      data-testid="e2e-test-detail-skeleton"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-6 w-24 rounded-full" />
+          <Skeleton className="h-6 w-72 max-w-[50vw] rounded-md" />
+        </div>
+        <div className="flex gap-2">
+          <Skeleton className="h-8 w-36 rounded-md" />
+          <Skeleton className="h-8 w-32 rounded-md" />
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
+        <div className="flex flex-wrap gap-1 border-b border-[var(--border)] p-1.5">
+          {[28, 36, 24, 32, 32].map((width, index) => (
+            <Skeleton key={index} className="h-8 rounded-md" style={{ width: width * 4 }} />
+          ))}
+        </div>
+        <div className="p-3">
+          <Skeleton className="aspect-video max-h-[480px] w-full rounded-lg" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export interface E2eTestDetailProps {
   readonly apiClient: ApiClient;
   readonly testId: string;
@@ -100,7 +133,7 @@ export function E2eTestDetail({
 
   if (!test) {
     return (
-      <div className="flex flex-col gap-4 p-6" data-testid="e2e-test-detail">
+      <div className="flex flex-col gap-4" data-testid="e2e-test-detail">
         <Button variant="ghost" size="sm" className="w-fit" onClick={onBack}>
           <i className="ti ti-arrow-left" aria-hidden="true" />
           {t('e2e.back')}
@@ -110,7 +143,7 @@ export function E2eTestDetail({
             {error}
           </p>
         ) : (
-          <Skeleton className="h-96 w-full" />
+          <E2eTestDetailSkeleton />
         )}
       </div>
     );
@@ -121,11 +154,7 @@ export function E2eTestDetail({
   const showsRun = tab === 'preview' || tab === 'testCase';
 
   return (
-    <div
-      className="flex min-w-0 flex-col gap-4 p-6"
-      data-testid="e2e-test-detail"
-      aria-busy={active}
-    >
+    <div className="flex min-w-0 flex-col gap-4" data-testid="e2e-test-detail" aria-busy={active}>
       <div className="flex flex-col gap-3">
         <Button variant="ghost" size="sm" className="w-fit" onClick={onBack}>
           <i className="ti ti-arrow-left" aria-hidden="true" />

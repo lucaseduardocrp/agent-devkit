@@ -190,6 +190,16 @@ describe('LocalE2eRunner task payloads and cancellation', () => {
     expect(payload()).toMatchObject({ url: 'https://app.example.com/', accessToken: token });
   });
 
+  it('hands the focus of an exploration to the runner', async () => {
+    const { runner, payload } = runnerFinishingExplore();
+    await runner.explore({
+      mode: 'frontend',
+      url: 'http://localhost:5173/',
+      focus: 'the billing screens',
+    });
+    expect(payload()).toMatchObject({ focus: 'the billing screens' });
+  });
+
   it('cancels and cleans up when the task disappears while waiting', async () => {
     const tasks = new InMemoryE2eRunnerTaskStore();
     const artifacts = new InMemoryE2eArtifactStore();

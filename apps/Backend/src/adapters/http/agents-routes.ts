@@ -72,6 +72,17 @@ const brainQuerySchema = z.object({
 });
 
 /** The modules a rule or an action node can cover. */
+const workflowNotificationSchema = z.object({
+  channels: z.array(z.string().trim().min(1).max(50)).max(10).default([]),
+  userIds: z.array(z.string().uuid()).max(50).default([]),
+  roles: z
+    .array(z.enum(['assignee', 'proofreader']))
+    .max(2)
+    .default([]),
+  subject: z.string().max(200).default(''),
+  message: z.string().max(5000).default(''),
+});
+
 const workflowToolsetSchema = z.enum([
   'all',
   'agents',
@@ -84,10 +95,12 @@ const workflowToolsetSchema = z.enum([
   'design',
   'e2e',
   'releasenotes',
+  'development',
   'integrationtests',
   'loadtests',
   'audit',
   'workspaces',
+  'notifications',
 ]);
 
 const agentWorkflowSchema = z.object({
@@ -169,6 +182,7 @@ const agentWorkflowSchema = z.object({
                   .regex(/^[a-z][a-z0-9_]{2,63}$/)
                   .optional(),
                 provider: z.string().trim().min(1).max(100).optional(),
+                notification: workflowNotificationSchema.optional(),
               })
               .optional(),
             condition: z

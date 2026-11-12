@@ -18,6 +18,7 @@ export interface Issue {
   type: string;
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
+  proofreaderUserId: string | null;
   pbiItemId: string | null;
   createdBy: string;
   createdAt: Date;
@@ -50,12 +51,34 @@ export type IssueChanges = Partial<
     | 'type'
     | 'assigneeAgentId'
     | 'assigneeUserId'
+    | 'proofreaderUserId'
     | 'pbiItemId'
   >
 >;
 
+export interface IssueSearchOptions {
+  /** Text of the title, or the number of the issue. */
+  q?: string;
+  page: number;
+  pageSize: number;
+}
+export interface IssueSearchResult {
+  issues: Issue[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+const matchesQuery = (issue: Pick<Issue, 'title' | 'number'>, q: string): boolean => {
+  const needle = q.replace(/^#/, '').toLocaleLowerCase();
+  return (
+    issue.title.toLocaleLowerCase().includes(needle) || String(issue.number).startsWith(needle)
+  );
+};
+
 export interface IssueStore {
   list(workspaceId: string): Promise<Issue[]>;
+  /** One page of the issues, newest activity first, narrowed by what was typed. */
+  search(workspaceId: string, options: IssueSearchOptions): Promise<IssueSearchResult>;
   get(workspaceId: string, issueId: string): Promise<Issue | null>;
   create(
     workspaceId: string,
@@ -87,6 +110,17 @@ export class InMemoryIssueStore implements IssueStore {
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()),
     );
   }
+  async search(workspaceId: string, options: IssueSearchOptions): Promise<IssueSearchResult> {
+    const q = options.q?.trim();
+    const matches = (await this.list(workspaceId)).filter((issue) => !q || matchesQuery(issue, q));
+    const offset = (options.page - 1) * options.pageSize;
+    return {
+      issues: matches.slice(offset, offset + options.pageSize),
+      total: matches.length,
+      page: options.page,
+      pageSize: options.pageSize,
+    };
+  }
   get(workspaceId: string, issueId: string): Promise<Issue | null> {
     const issue = this.issues.get(issueId);
     return Promise.resolve(issue?.workspaceId === workspaceId ? issue : null);
@@ -111,6 +145,7 @@ export class InMemoryIssueStore implements IssueStore {
       type: changes.type ?? '',
       assigneeAgentId: changes.assigneeAgentId ?? null,
       assigneeUserId: changes.assigneeUserId ?? null,
+      proofreaderUserId: changes.proofreaderUserId ?? null,
       pbiItemId: changes.pbiItemId ?? null,
       createdBy: actorId,
       createdAt: now,
@@ -179,6 +214,39 @@ export class PrismaIssueStore implements IssueStore {
       return { ...issue, attachments: row.attachments as unknown as ImageAttachment[] };
     });
   }
+  async search(workspaceId: string, options: IssueSearchOptions): Promise<IssueSearchResult> {
+    const q = options.q?.trim().replace(/^#/, '');
+    const where: Prisma.IssueRecordWhereInput = {
+      workspaceId,
+      deletedAt: null,
+      ...(q
+        ? {
+            OR: [
+              { title: { contains: q, mode: 'insensitive' } },
+              ...(/^\d{1,9}$/.test(q) ? [{ number: Number(q) }] : []),
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.db.issueRecord.findMany({
+        where,
+        orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+        skip: (options.page - 1) * options.pageSize,
+        take: options.pageSize,
+      }),
+      this.db.issueRecord.count({ where }),
+    ]);
+    return {
+      issues: rows.map((row) => {
+        const issue = row as unknown as Issue;
+        return { ...issue, attachments: row.attachments as unknown as ImageAttachment[] };
+      }),
+      total,
+      page: options.page,
+      pageSize: options.pageSize,
+    };
+  }
   async get(workspaceId: string, issueId: string): Promise<Issue | null> {
     const row = await this.db.issueRecord.findFirst({
       where: { id: issueId, workspaceId, deletedAt: null },
@@ -210,6 +278,7 @@ export class PrismaIssueStore implements IssueStore {
           type: changes.type ?? '',
           assigneeAgentId: changes.assigneeAgentId,
           assigneeUserId: changes.assigneeUserId,
+          proofreaderUserId: changes.proofreaderUserId,
           pbiItemId: changes.pbiItemId,
           createdBy: actorId,
         },

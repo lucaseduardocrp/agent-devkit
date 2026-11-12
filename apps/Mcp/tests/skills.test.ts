@@ -20,6 +20,7 @@ describe('packaged skills', () => {
       'adk-api-tests',
       'adk-brain',
       'adk-design',
+      'adk-development',
       'adk-e2e',
       'adk-getting-started',
       'adk-release-notes',

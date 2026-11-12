@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useKanbanDraft } from '../../lib/use-kanban-draft.js';
 import type { ApiClient } from '../../lib/api-client.js';
-import { useI18n } from '../../lib/i18n/index.js';
+import { formatMessage, useI18n } from '../../lib/i18n/index.js';
+import type { I18nDictionary } from '../../lib/i18n/index.js';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
@@ -9,12 +10,15 @@ import { Select } from '../../components/ui/select.js';
 import { Pagination, PagingSentinel, usePaging } from '../../components/ui/pagination.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import { Modal } from '../../components/ui/modal.js';
+import { UnsavedChangesDialog } from '../../components/ui/unsaved-changes-dialog.js';
 import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/skeleton.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import type { CustomAgentDto } from '../agents/agent-types.js';
 import type { PbiItem } from '../pbi/pbi-types.js';
 import type { WorkspaceMember } from '../workspaces/workspace-types.js';
 import { AgentBriefTab } from './AgentBriefTab.js';
+import type { BriefReference } from './agent-brief-types.js';
+import type { ReferenceFocus } from '../shared/reference-focus.js';
 import { HistoryViewer } from '../audit/HistoryViewer.js';
 import { usePermissions } from '../workspaces/permissions.js';
 import {
@@ -79,9 +83,8 @@ function formatIssueDescription(value: string): string {
   const parser = new DOMParser();
   let parsed = parser.parseFromString(value, 'text/html');
   // Some imported work items contain HTML that was escaped before being stored.
-  const text = parsed.body.textContent;
-  if (!/<\/?[a-z][^>]*>/i.test(value) && /<\/?[a-z][^>]*>/i.test(text))
-    parsed = parser.parseFromString(text, 'text/html');
+  if (!/<\/?[a-z][^>]*>/i.test(value) && /<\/?[a-z][^>]*>/i.test(parsed.body.textContent))
+    parsed = parser.parseFromString(parsed.body.textContent, 'text/html');
   for (const element of [...parsed.body.querySelectorAll<HTMLElement>('*')]) {
     if (['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'MATH'].includes(element.tagName)) {
       element.remove();
@@ -112,7 +115,6 @@ function formatIssueDescription(value: string): string {
         continue;
       element.removeAttribute(attribute.name);
     }
-    if (element.tagName === 'IMG' && !element.hasAttribute('src')) element.remove();
   }
   return parsed.body.innerHTML;
 }
@@ -144,309 +146,6 @@ function isHtmlDescription(value: string): boolean {
     value.replace(/&lt;/gi, '<').replace(/&gt;/gi, '>'),
   );
 }
-
-const copy = {
-  'pt-BR': {
-    dashboard: 'Dashboard',
-    inbox: 'Inbox',
-    issues: 'Issues',
-    perPage: 'Issues por página',
-    newIssue: 'Nova issue',
-    agents: 'Agentes',
-    recentIssues: 'Issues recentes',
-    recentActivity: 'Atividade recente',
-    agentsEnabled: 'Agentes habilitados',
-    tasksInProgress: 'Tarefas em andamento',
-    openTasks: 'Tarefas abertas',
-    totalTasks: 'Total de tarefas',
-    issuesByPriority: 'Issues por prioridade',
-    issuesByStatus: 'Issues por status',
-    last14Days: 'Últimos 14 dias',
-    noActivity: 'Ainda não há atividade.',
-    noAgents: 'Nenhum agente configurado.',
-    noIssues: 'Nenhuma issue encontrada.',
-    moveTo: 'Mover para',
-    savingMove: 'Salvando movimento',
-    draftPendingCard: 'Alteração pendente',
-    draftLabels: {
-      pending: 'movimento(s) pendente(s): salvos automaticamente quando você parar de mexer',
-      saving: 'Salvando alterações',
-      offline:
-        'Sem conexão: as alterações ficam guardadas neste navegador e serão enviadas ao reconectar.',
-      error: 'Não foi possível salvar',
-      saveNow: 'Salvar agora',
-      retry: 'Tentar novamente',
-      discard: 'Descartar',
-    },
-    createFirst: 'Crie a primeira issue para começar.',
-    mine: 'Minhas',
-    inboxEmpty: 'Nenhuma execução foi feita enquanto uma issue estava atribuída a você.',
-    runCount: (count: number) => (count === 1 ? '1 execução' : `${count} execuções`),
-    recent: 'Recentes',
-    unread: 'Não lidas',
-    blocked: 'Bloqueadas',
-    all: 'Todas',
-    search: 'Buscar issues',
-    filterStatus: 'Filtrar status',
-    listView: 'Lista',
-    boardView: 'Kanban',
-    anyStatus: 'Todos os status',
-    allAssignees: 'Todos os responsáveis',
-    noAssignee: 'Sem responsável',
-    allAgents: 'Todos os agentes',
-    allPriorities: 'Todas as prioridades',
-    allIterations: 'Todas as iterações',
-    iteration: 'Iteração',
-    savedFilters: 'Filtros salvos',
-    saveFilter: 'Salvar filtro',
-    detailsTab: 'Detalhes',
-    agentInfoTab: 'Informações do Agente',
-    showFilters: 'Filtros',
-    hideFilters: 'Ocultar filtros',
-    saveFilterTitle: 'Salvar filtros atuais',
-    filterName: 'Nome do filtro',
-    deleteSavedFilter: 'Excluir filtro salvo',
-    clearFilters: 'Limpar filtros',
-    title: 'Título',
-    description: 'Descrição',
-    status: 'Status',
-    priority: 'Prioridade',
-    type: 'Tipo',
-    noType: 'Sem tipo',
-    assignee: 'Responsável',
-    unassigned: 'Sem responsável',
-    agent: 'Agente',
-    noAgent: 'Sem agente',
-    create: 'Criar issue',
-    save: 'Salvar',
-    edit: 'Editar',
-    cancel: 'Cancelar',
-    close: 'Fechar',
-    comments: 'Comentários',
-    addComment: 'Adicionar comentário',
-    commentPlaceholder: 'Escreva um comentário...',
-    archive: 'Arquivar',
-    restore: 'Restaurar',
-    markRead: 'Marcar como lida',
-    markUnread: 'Marcar como não lida',
-    refresh: 'Atualizar',
-    retry: 'Tentar novamente',
-    loadError: 'Não foi possível carregar os dados.',
-    loadingDetails: 'Carregando detalhes da issue...',
-    saveError: 'Não foi possível salvar.',
-    delete: 'Excluir',
-    deleteConfirm: 'Excluir esta issue?',
-    liveIssue: 'Issue atual',
-    noAssignedIssue: 'Sem issue em andamento',
-    monthSpend: 'Gasto do mês',
-    totalTokens: 'Total de tokens usados',
-    tokenBreakdown: 'Entrada / saída',
-    monthlyBudget: 'Orçamento mensal (USD; 0 = sem limite)',
-    costRates: 'Tarifas por modelo (USD por 1 milhão de tokens)',
-    inputRate: 'Entrada',
-    outputRate: 'Saída',
-    provider: 'Provedor',
-    model: 'Modelo',
-    addRate: 'Salvar tarifa',
-    unpricedRuns: 'execuções sem tarifa',
-    mcpUsage: 'Uso via MCP neste mês',
-    mcpUsageHint:
-      'Tokens que o assistente (Claude, Codex...) gastou lendo e enviando dados do ADK pelo MCP. Valores com ≈ são estimados (cerca de 4 caracteres por token).',
-    mcpCalls: 'Chamadas',
-    mcpTokens: 'Tokens',
-    mcpSpend: 'Gasto',
-    mcpTopTools: 'Ferramentas que mais consumiram',
-    mcpClients: 'Clientes MCP',
-    mcpUnpriced:
-      'chamadas sem tarifa: cadastre uma tarifa com provedor "mcp" e o nome do cliente como modelo.',
-    mcpEmpty: 'Nenhum uso via MCP neste mês.',
-    runs: 'Execuções do agente',
-    startRun: 'Executar agente',
-    cancelRun: 'Cancelar execução',
-    noRuns: 'Nenhuma execução ainda.',
-    stepProgress: 'Etapa',
-    of: 'de',
-    approveAndContinue: 'Aprovar e continuar',
-    approveFinal: 'Aprovar resultado final',
-    revisionPlaceholder: 'Descreva o ajuste necessário...',
-    requestRevision: 'Pedir ajuste',
-    answerQuestion: 'Responder ao agente',
-    answerPlaceholder: 'Escreva sua resposta para continuar esta etapa...',
-    submitAnswer: 'Enviar resposta',
-    waitingForReview: 'Revise o resultado desta etapa para liberar a próxima.',
-    waitingForAnswer: 'O agente pausou porque precisa desta informação:',
-    runStatus: {
-      queued: 'Na fila',
-      running: 'Executando',
-      waiting_review: 'Aguardando sua aprovação',
-      waiting_input: 'Aguardando sua resposta',
-      succeeded: 'Concluída',
-      failed: 'Falhou',
-      cancelled: 'Cancelada',
-    },
-    updated: 'Atualizada',
-    statusNames: {
-      backlog: 'Backlog',
-      todo: 'A fazer',
-      in_progress: 'Em andamento',
-      in_review: 'Em revisão',
-      blocked: 'Bloqueada',
-      done: 'Concluída',
-      cancelled: 'Cancelada',
-    },
-    priorityNames: { urgent: 'Urgente', high: 'Alta', medium: 'Média', low: 'Baixa' },
-  },
-  'en-US': {
-    dashboard: 'Dashboard',
-    inbox: 'Inbox',
-    issues: 'Issues',
-    perPage: 'Issues per page',
-    newIssue: 'New issue',
-    agents: 'Agents',
-    recentIssues: 'Recent issues',
-    recentActivity: 'Recent activity',
-    agentsEnabled: 'Agents enabled',
-    tasksInProgress: 'Tasks in progress',
-    openTasks: 'Open tasks',
-    totalTasks: 'Total tasks',
-    issuesByPriority: 'Issues by priority',
-    issuesByStatus: 'Issues by status',
-    last14Days: 'Last 14 days',
-    noActivity: 'No activity yet.',
-    noAgents: 'No agents configured.',
-    noIssues: 'No issues found.',
-    moveTo: 'Move to',
-    savingMove: 'Saving move',
-    draftPendingCard: 'Pending change',
-    draftLabels: {
-      pending: 'pending move(s): saved automatically once you stop',
-      saving: 'Saving changes',
-      offline: 'Offline: changes are kept in this browser and sent when you reconnect.',
-      error: 'Could not save',
-      saveNow: 'Save now',
-      retry: 'Try again',
-      discard: 'Discard',
-    },
-    createFirst: 'Create your first issue to get started.',
-    mine: 'Mine',
-    inboxEmpty: 'No runs were executed while an issue was assigned to you.',
-    runCount: (count: number) => (count === 1 ? '1 run' : `${count} runs`),
-    recent: 'Recent',
-    unread: 'Unread',
-    blocked: 'Blocked',
-    all: 'All',
-    search: 'Search issues',
-    filterStatus: 'Filter status',
-    listView: 'List',
-    boardView: 'Kanban',
-    anyStatus: 'All statuses',
-    allAssignees: 'All assignees',
-    noAssignee: 'No assignee',
-    allAgents: 'All agents',
-    allPriorities: 'All priorities',
-    allIterations: 'All iterations',
-    iteration: 'Iteration',
-    savedFilters: 'Saved filters',
-    saveFilter: 'Save filter',
-    detailsTab: 'Details',
-    agentInfoTab: 'Agent Information',
-    showFilters: 'Filters',
-    hideFilters: 'Hide filters',
-    saveFilterTitle: 'Save current filters',
-    filterName: 'Filter name',
-    deleteSavedFilter: 'Delete saved filter',
-    clearFilters: 'Clear filters',
-    title: 'Title',
-    description: 'Description',
-    status: 'Status',
-    priority: 'Priority',
-    type: 'Type',
-    noType: 'No type',
-    assignee: 'Assignee',
-    unassigned: 'Unassigned',
-    agent: 'Agent',
-    noAgent: 'No agent',
-    create: 'Create issue',
-    save: 'Save',
-    edit: 'Edit',
-    cancel: 'Cancel',
-    close: 'Close',
-    comments: 'Comments',
-    addComment: 'Add comment',
-    commentPlaceholder: 'Write a comment...',
-    archive: 'Archive',
-    restore: 'Restore',
-    markRead: 'Mark as read',
-    markUnread: 'Mark as unread',
-    refresh: 'Refresh',
-    retry: 'Try again',
-    loadError: 'Could not load the data.',
-    loadingDetails: 'Loading issue details...',
-    saveError: 'Could not save.',
-    delete: 'Delete',
-    deleteConfirm: 'Delete this issue?',
-    liveIssue: 'Current issue',
-    noAssignedIssue: 'No issue in progress',
-    monthSpend: 'Month spend',
-    totalTokens: 'Total tokens used',
-    tokenBreakdown: 'Input / output',
-    monthlyBudget: 'Monthly budget (USD; 0 = unlimited)',
-    costRates: 'Model rates (USD per 1 million tokens)',
-    inputRate: 'Input',
-    outputRate: 'Output',
-    provider: 'Provider',
-    model: 'Model',
-    addRate: 'Save rate',
-    unpricedRuns: 'runs without a rate',
-    mcpUsage: 'MCP usage this month',
-    mcpUsageHint:
-      'Tokens the assistant (Claude, Codex...) spent reading and sending ADK data through MCP. Values marked ≈ are estimates (about 4 characters per token).',
-    mcpCalls: 'Calls',
-    mcpTokens: 'Tokens',
-    mcpSpend: 'Spend',
-    mcpTopTools: 'Top tools by tokens',
-    mcpClients: 'MCP clients',
-    mcpUnpriced:
-      'calls without a rate: add a rate with provider "mcp" and the client name as the model.',
-    mcpEmpty: 'No MCP usage this month.',
-    runs: 'Agent runs',
-    startRun: 'Run agent',
-    cancelRun: 'Cancel run',
-    noRuns: 'No runs yet.',
-    stepProgress: 'Step',
-    of: 'of',
-    approveAndContinue: 'Approve and continue',
-    approveFinal: 'Approve final result',
-    revisionPlaceholder: 'Describe the change needed...',
-    requestRevision: 'Request changes',
-    answerQuestion: 'Answer the agent',
-    answerPlaceholder: 'Write your answer to continue this step...',
-    submitAnswer: 'Send answer',
-    waitingForReview: 'Review this step result to release the next step.',
-    waitingForAnswer: 'The agent paused because it needs this information:',
-    runStatus: {
-      queued: 'Queued',
-      running: 'Running',
-      waiting_review: 'Waiting for your approval',
-      waiting_input: 'Waiting for your answer',
-      succeeded: 'Succeeded',
-      failed: 'Failed',
-      cancelled: 'Cancelled',
-    },
-    updated: 'Updated',
-    statusNames: {
-      backlog: 'Backlog',
-      todo: 'To do',
-      in_progress: 'In progress',
-      in_review: 'In review',
-      blocked: 'Blocked',
-      done: 'Done',
-      cancelled: 'Cancelled',
-    },
-    priorityNames: { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' },
-  },
-} as const;
-
 function memberLabel(member: WorkspaceMember): string {
   return member.user?.name || member.user?.email || member.userId;
 }
@@ -542,6 +241,11 @@ export interface WorkViewProps {
   onNewIssueHandled?: () => void;
   onInboxCountChange?: (count: number) => void;
   onOpenIssues?: () => void;
+  /** Goes to the module of a reference the agent reads first (Brain, PBIs, Specs...). */
+  onOpenReference?: (reference: BriefReference) => void;
+  /** An item another module sent the user to; opened once its data is there. */
+  readonly focus?: ReferenceFocus | null;
+  readonly onFocusHandled?: () => void;
 }
 
 export function WorkView({
@@ -555,9 +259,12 @@ export function WorkView({
   onNewIssueHandled,
   onInboxCountChange,
   onOpenIssues,
+  onOpenReference,
+  focus,
+  onFocusHandled,
 }: WorkViewProps) {
-  const { locale } = useI18n();
-  const t = copy[locale];
+  const { locale, messages } = useI18n();
+  const t = messages.issues;
   const workItemTypes = useWorkItemTypes(apiClient, workspaceId);
   const permissions = usePermissions();
   const canDelete = !isReadOnly && permissions.can('issues', 'delete');
@@ -758,9 +465,33 @@ export function WorkView({
   }, [newIssueRequest, onNewIssueHandled]);
 
   const selectedIssue = issues.find((issue) => issue.id === selectedId) ?? null;
+  // Changes to the card's fields stay in this draft until the user saves: nothing is sent to the
+  // server per interaction.
+  const [sidebarDraft, setSidebarDraft] = useState<IssueChanges>({});
+  const [confirmClose, setConfirmClose] = useState(false);
+  /** The issue as it will be once saved: the stored one with the draft applied. */
+  const issueView = { ...selectedIssue, ...sidebarDraft } as Issue;
+  const detailsDirty =
+    !!selectedIssue &&
+    editingDetails &&
+    (detailDraft.title !== selectedIssue.title ||
+      detailDraft.description !== selectedIssue.description ||
+      JSON.stringify(detailDraft.attachments) !== JSON.stringify(selectedIssue.attachments ?? []));
+  const hasUnsaved = Object.keys(sidebarDraft).length > 0 || detailsDirty;
   const issueDescriptionRef = useRef<HTMLDivElement>(null);
   useInlineImages(issueDescriptionRef, selectedIssue?.description);
   const selectedInbox = inbox.find((item) => item.issue.id === selectedId);
+
+  // Another module sent the user to an issue: open it as if it had been clicked in the list.
+  const handledFocus = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.kind !== 'issue' || handledFocus.current === focus.nonce) return;
+    const issue = issues.find((candidate) => candidate.id === focus.ref);
+    if (!issue) return;
+    handledFocus.current = focus.nonce;
+    void openIssue(issue);
+    onFocusHandled?.();
+  }, [focus, issues, onFocusHandled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openIssue = async (issue: Issue) => {
     setDetailTab('details');
@@ -772,6 +503,8 @@ export function WorkView({
     setSelectedDetailsLoading(true);
     discardDrafts(detailDraft);
     setEditingDetails(false);
+    setSidebarDraft({});
+    setConfirmClose(false);
     setDetailDraft({
       title: issue.title,
       description: issue.description,
@@ -852,10 +585,59 @@ export function WorkView({
     });
   };
 
-  const updateIssue = (issueId: string, changes: IssueChanges) => {
-    void runAction(async () => {
-      await apiClient.updateIssue(issueId, changes);
+  /** Records a field change in the draft; going back to the stored value removes it. */
+  const updateIssue = (changes: IssueChanges) => {
+    setSidebarDraft((current) => {
+      const next: Record<string, unknown> = { ...current, ...changes };
+      for (const [key, value] of Object.entries(changes))
+        if (((selectedIssue! as unknown as Record<string, unknown>)[key] ?? '') === (value ?? ''))
+          delete next[key];
+      return next;
     });
+  };
+
+  /** Sends every pending change of the open card (fields and details) in one request. */
+  const saveIssue = async (): Promise<boolean> => {
+    if (!selectedIssue || !hasUnsaved) return true;
+    if (detailsDirty && !detailDraft.title.trim()) return false;
+    setBusy(true);
+    setError(null);
+    try {
+      if (detailsDirty)
+        await saveWithDrafts(
+          apiClient,
+          'issue',
+          { description: detailDraft.description, attachments: detailDraft.attachments },
+          (files) =>
+            apiClient.updateIssue(selectedIssue.id, {
+              ...sidebarDraft,
+              title: detailDraft.title.trim(),
+              ...files,
+            }),
+        );
+      else await apiClient.updateIssue(selectedIssue.id, sidebarDraft);
+      setEditingDetails(false);
+      setSidebarDraft({});
+      await reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t.saveError);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+    return true;
+  };
+
+  const closeDetail = () => {
+    cancelDetailEdit();
+    setSidebarDraft({});
+    setConfirmClose(false);
+    setSelectedId(null);
+  };
+  /** Closing with unsaved changes asks what to do with them first. */
+  const requestCloseDetail = () => {
+    if (hasUnsaved) setConfirmClose(true);
+    else closeDetail();
   };
 
   const agentOptions = agents.map((agent) => (
@@ -1045,7 +827,10 @@ export function WorkView({
           className="hidden shrink-0 text-xs text-[var(--text-secondary)] sm:inline"
           data-testid={`inbox-runs-${issue.id}`}
         >
-          {t.runCount(item.runs.length)} · {t.runStatus[item.runs[0].status]}
+          {item.runs.length === 1
+            ? t.runCountOne
+            : formatMessage(t.runCountOther, { count: item.runs.length })}{' '}
+          · {t.runStatus[item.runs[0].status]}
         </span>
       )}
       <span className="hidden rounded bg-[var(--surface-2)] px-2 py-0.5 text-xs text-[var(--text-secondary)] sm:inline">
@@ -1546,7 +1331,7 @@ export function WorkView({
                 value={filters.assignee}
                 onChange={(event) => setFilter('assignee', event.target.value)}
                 aria-label={t.assignee}
-                containerClassName="max-w-48"
+                containerClassName="w-72 max-w-full flex-none"
               >
                 <option value="">{t.allAssignees}</option>
                 <option value="none">{t.noAssignee}</option>
@@ -1562,7 +1347,7 @@ export function WorkView({
                 value={filters.agent}
                 onChange={(event) => setFilter('agent', event.target.value)}
                 aria-label={t.agent}
-                containerClassName="max-w-44"
+                containerClassName="w-80 max-w-full flex-none"
               >
                 <option value="">{t.allAgents}</option>
                 <option value="none">{t.noAgent}</option>
@@ -1901,8 +1686,8 @@ export function WorkView({
               onPaste={formImages.onPaste}
               onDrop={formImages.onDrop}
             />
+            <ImageInputStatus state={formImages} />
           </label>
-          <ImageInputStatus state={formImages} />
           <AttachmentPanel
             apiClient={apiClient}
             scope="issue"
@@ -1993,10 +1778,7 @@ export function WorkView({
 
       <Modal
         open={Boolean(selectedId)}
-        onClose={() => {
-          cancelDetailEdit();
-          setSelectedId(null);
-        }}
+        onClose={requestCloseDetail}
         labelledBy="issue-detail-title"
       >
         <div className="flex h-[min(90vh,900px)] w-[min(96vw,1800px)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)]">
@@ -2021,7 +1803,7 @@ export function WorkView({
                     if (window.confirm(t.deleteConfirm))
                       void runAction(async () => {
                         await apiClient.deleteIssue(selectedIssue.id);
-                        setSelectedId(null);
+                        closeDetail();
                       });
                   }}
                 >
@@ -2037,7 +1819,7 @@ export function WorkView({
                   entityTitle={`#${selectedIssue.number} ${selectedIssue.title}`}
                   resolveValue={(key, value) => {
                     if (typeof value !== 'string') return undefined;
-                    if (key === 'assigneeUserId') {
+                    if (key === 'assigneeUserId' || key === 'proofreaderUserId') {
                       const member = members.find((entry) => entry.userId === value);
                       return member ? memberLabel(member) : value;
                     }
@@ -2051,11 +1833,22 @@ export function WorkView({
                   }}
                 />
               )}
+              {selectedIssue && !isReadOnly && (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={busy || !hasUnsaved}
+                  isLoading={busy}
+                  onClick={() => void saveIssue()}
+                >
+                  {t.save}
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                onClick={() => setSelectedId(null)}
+                onClick={requestCloseDetail}
                 aria-label={t.close}
               >
                 <i className="ti ti-x" aria-hidden="true" />
@@ -2112,6 +1905,8 @@ export function WorkView({
                   issueId={selectedIssue.id}
                   issueVersion={selectedIssue.updatedAt}
                   isReadOnly={isReadOnly}
+                  issueAttachments={selectedIssue.attachments}
+                  {...(onOpenReference ? { onOpenModule: onOpenReference } : {})}
                 />
               ) : (
                 <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
@@ -2142,22 +1937,7 @@ export function WorkView({
                           className="mt-2 space-y-3"
                           onSubmit={(event) => {
                             event.preventDefault();
-                            void runAction(async () => {
-                              await saveWithDrafts(
-                                apiClient,
-                                'issue',
-                                {
-                                  description: detailDraft.description,
-                                  attachments: detailDraft.attachments,
-                                },
-                                (files) =>
-                                  apiClient.updateIssue(selectedIssue.id, {
-                                    title: detailDraft.title.trim(),
-                                    ...files,
-                                  }),
-                              );
-                              setEditingDetails(false);
-                            });
+                            void saveIssue();
                           }}
                         >
                           <label className="block space-y-1 text-sm">
@@ -2182,8 +1962,8 @@ export function WorkView({
                               onPaste={detailImages.onPaste}
                               onDrop={detailImages.onDrop}
                             />
+                            <ImageInputStatus state={detailImages} />
                           </label>
-                          <ImageInputStatus state={detailImages} />
                           <div className="flex gap-2">
                             <Button
                               type="submit"
@@ -2372,11 +2152,9 @@ export function WorkView({
                         <span>{t.status}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.status}
+                          value={issueView.status}
                           onChange={(event) =>
-                            updateIssue(selectedIssue.id, {
-                              status: event.target.value as IssueStatus,
-                            })
+                            updateIssue({ status: event.target.value as IssueStatus })
                           }
                         >
                           {statusOrder.map((key) => (
@@ -2390,11 +2168,9 @@ export function WorkView({
                         <span>{t.priority}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.priority}
+                          value={issueView.priority}
                           onChange={(event) =>
-                            updateIssue(selectedIssue.id, {
-                              priority: event.target.value as IssuePriority,
-                            })
+                            updateIssue({ priority: event.target.value as IssuePriority })
                           }
                         >
                           {priorityOrder.map((key) => (
@@ -2408,10 +2184,8 @@ export function WorkView({
                         <span>{t.type}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.type ?? ''}
-                          onChange={(event) =>
-                            updateIssue(selectedIssue.id, { type: event.target.value })
-                          }
+                          value={issueView.type ?? ''}
+                          onChange={(event) => updateIssue({ type: event.target.value })}
                         >
                           <option value="">{t.noType}</option>
                           {workItemTypes.map((type) => (
@@ -2425,11 +2199,9 @@ export function WorkView({
                         <span>{t.agent}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.assigneeAgentId ?? ''}
+                          value={issueView.assigneeAgentId ?? ''}
                           onChange={(event) =>
-                            updateIssue(selectedIssue.id, {
-                              assigneeAgentId: event.target.value || null,
-                            })
+                            updateIssue({ assigneeAgentId: event.target.value || null })
                           }
                         >
                           <option value="">{t.noAgent}</option>
@@ -2440,21 +2212,40 @@ export function WorkView({
                         <span>{t.assignee}</span>
                         <Select
                           disabled={isReadOnly || busy}
-                          value={selectedIssue.assigneeUserId ?? ''}
+                          value={issueView.assigneeUserId ?? ''}
                           onChange={(event) =>
-                            updateIssue(selectedIssue.id, {
-                              assigneeUserId: event.target.value || null,
-                            })
+                            updateIssue({ assigneeUserId: event.target.value || null })
                           }
                         >
                           <option value="">{t.unassigned}</option>
                           {memberOptions}
-                          {selectedIssue.assigneeUserId &&
+                          {issueView.assigneeUserId &&
                             !members.some(
-                              (member) => member.userId === selectedIssue.assigneeUserId,
+                              (member) => member.userId === issueView.assigneeUserId,
                             ) && (
-                              <option value={selectedIssue.assigneeUserId}>
-                                {selectedIssue.assigneeUserId}
+                              <option value={issueView.assigneeUserId}>
+                                {issueView.assigneeUserId}
+                              </option>
+                            )}
+                        </Select>
+                      </label>
+                      <label className="space-y-1 text-sm">
+                        <span>{t.proofreader}</span>
+                        <Select
+                          disabled={isReadOnly || busy}
+                          value={issueView.proofreaderUserId ?? ''}
+                          onChange={(event) =>
+                            updateIssue({ proofreaderUserId: event.target.value || null })
+                          }
+                        >
+                          <option value="">{t.noProofreader}</option>
+                          {memberOptions}
+                          {issueView.proofreaderUserId &&
+                            !members.some(
+                              (member) => member.userId === issueView.proofreaderUserId,
+                            ) && (
+                              <option value={issueView.proofreaderUserId}>
+                                {issueView.proofreaderUserId}
                               </option>
                             )}
                         </Select>
@@ -2515,7 +2306,7 @@ export function WorkView({
                                   {run.provider}
                                   {run.model ? ` / ${run.model}` : ''}
                                   {run.inputTokens !== null
-                                    ? ` · ${run.inputTokens} / ${run.outputTokens} tokens`
+                                    ? ` · ${formatMessage(t.tokenUsage, { input: run.inputTokens, output: String(run.outputTokens) })}`
                                     : ''}
                                 </p>
                               )}
@@ -2716,6 +2507,20 @@ export function WorkView({
             </div>
           )}
         </div>
+        <UnsavedChangesDialog
+          open={confirmClose}
+          isSaving={busy}
+          labels={{
+            title: t.unsavedTitle,
+            description: t.unsavedBody,
+            cancel: t.cancel,
+            discard: t.discardChanges,
+            save: t.saveChanges,
+          }}
+          onCancel={() => setConfirmClose(false)}
+          onDiscard={closeDetail}
+          onSave={() => void saveIssue().then((saved) => saved && closeDetail())}
+        />
       </Modal>
     </div>
   );
@@ -2729,7 +2534,7 @@ function McpUsagePanel({
 }: {
   usage: McpUsageSummary;
   locale: string;
-  t: (typeof copy)[keyof typeof copy];
+  t: I18nDictionary['issues'];
 }) {
   const number = (value: number) => new Intl.NumberFormat(locale).format(value);
   const tokens = (value: number) => `${usage.estimated ? '≈ ' : ''}${number(value)}`;

@@ -22,36 +22,6 @@ interface SavedCase {
   readonly title: string;
   readonly planTitle: string;
 }
-
-const copy = {
-  'pt-BR': {
-    suite: 'Suíte',
-    plan: 'Test Plan',
-    anySuite: 'Selecione...',
-    allPlans: 'Todos os Test Plans da suíte',
-    choosePlan: 'Selecione...',
-    allCases: 'Todos os casos ({count})',
-    selected: '{count} de {total} selecionados',
-    loading: 'Carregando...',
-    empty: 'Nenhum caso de teste salvo aqui.',
-    nothingSaved: 'Ainda não há Test Plans salvos. Crie ou importe casos em Test Plans.',
-    hint: 'Casos importados de uma plataforma publicam o resultado de volta nela.',
-  },
-  'en-US': {
-    suite: 'Suite',
-    plan: 'Test Plan',
-    anySuite: 'Select...',
-    allPlans: 'Every Test Plan of the suite',
-    choosePlan: 'Select...',
-    allCases: 'All cases ({count})',
-    selected: '{count} of {total} selected',
-    loading: 'Loading...',
-    empty: 'No saved test case here.',
-    nothingSaved: 'There are no saved Test Plans yet. Create or import cases in Test Plans.',
-    hint: 'Cases imported from a platform publish their results back to it.',
-  },
-} as const;
-
 function descendants(suites: readonly TestSuiteDto[], rootId: string): Set<string> {
   const ids = new Set([rootId]);
   for (let grew = true; grew;) {
@@ -93,8 +63,8 @@ export function E2eSavedCasePicker({
   readonly invalid?: boolean;
   readonly onChange: (value: SavedCaseSelection) => void;
 }) {
-  const { locale } = useI18n();
-  const c = copy[locale];
+  const { messages } = useI18n();
+  const c = messages.e2eSavedCases;
   const [suites, setSuites] = useState<readonly TestSuiteDto[] | null>(null);
   const [plans, setPlans] = useState<readonly SavedTestPlanDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);

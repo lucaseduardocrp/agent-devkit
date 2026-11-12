@@ -197,9 +197,9 @@ describe('AgentsView extra paths', () => {
     await waitFor(() => expect(view.getByTestId('agent-card-qa-engineer')).toBeInTheDocument());
     fireEvent.click(view.getByTestId('tab-map'));
     expect(await view.findByText(/Map offline/)).toBeInTheDocument();
-    fireEvent.click(view.getByRole('button', { name: 'Atualizar' }));
+    fireEvent.click(view.getByRole('button', { name: 'Tentar novamente' }));
     expect(await view.findByText(/Não foi possível carregar o mapa\./)).toBeInTheDocument();
-    fireEvent.click(view.getByRole('button', { name: 'Atualizar' }));
+    fireEvent.click(view.getByRole('button', { name: 'Tentar novamente' }));
     await waitFor(() =>
       expect(view.queryByTestId('topology-agent-agent-qa')).not.toBeInTheDocument(),
     );

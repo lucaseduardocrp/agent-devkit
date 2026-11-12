@@ -77,7 +77,7 @@ function requireModule(request: Request, scope: AttachmentScope, operation: 'vie
   requireModuleAccess(request.context, [{ module: scopeModules[scope], operation }]);
 }
 
-/** `value` already passed the schema's URL check, so it always parses. */
+/** Only called with values the attachment schema already accepted as URLs. */
 function validExternalUrl(value: string): boolean {
   const url = new URL(value);
   return url.protocol === 'https:' && !url.username && !url.password;
@@ -254,7 +254,6 @@ export function createAttachmentsRouter(
         const scope = scopeSchema.parse(request.query['scope']);
         const name = nameSchema.parse(request.query['name']);
         requireModule(request, scope, 'edit');
-        // Never trust the parsed body's type: anything but raw bytes counts as an empty upload.
         const bytes = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
         if (!bytes.length)
           throw new ApplicationError('VALIDATION_ERROR', 'The file is empty.', 400);
@@ -262,7 +261,7 @@ export function createAttachmentsRouter(
         if (!detected)
           throw new ApplicationError(
             'ATTACHMENT_TYPE_UNSUPPORTED',
-            'Supported files: images (PNG, JPEG, WebP, GIF), videos (MP4, WebM, MOV) and documents (PDF, Word, Excel, PowerPoint, ZIP, TXT, CSV, Markdown).',
+            'Supported files: images (PNG, JPEG, WebP, GIF), videos (MP4, WebM, MOV) and documents (PDF, Word, Excel, PowerPoint, ZIP, TXT, CSV, TSV, Markdown, HTML, JSON, XML, YAML).',
             415,
           );
         if (bytes.length > attachmentLimits[detected.kind])

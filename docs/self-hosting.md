@@ -59,7 +59,9 @@ do, restart with `adk` / `./adk.sh` afterwards.
 | `API_TESTS_WORKER_CONCURRENCY`  | `2`                      | Integration and load test runs executed at once by the worker  |
 | `API_TESTS_ALLOW_PRIVATE_NETWORK` | `false`                | Lets remote API/load tests reach private networks (10.x, 192.168.x); loopback and the metadata endpoint stay blocked |
 | `ADK_HOST_ACCESS`               | `auto`                   | Tests of `http://localhost` reach this computer. `auto`: on while the ports listen on `127.0.0.1` only, off when they are open to the network; `true` or `false` force it |
+| `E2E_DEFAULT_EXECUTION` | `remote` | Where E2E runs execute when a run does not choose: `local` runs the browser on the computer of whoever starts the run, through `devkit runner` (the server spends no CPU on browsers); `remote` uses the ADK worker |
 | `E2E_R2_URL`, `E2E_R2_ACCESS_KEY_ID`, `E2E_R2_SECRET_ACCESS_KEY`, `E2E_R2_PREFIX` | *(empty)* | Store test videos in Cloudflare R2 instead of PostgreSQL |
+| `ATTACHMENTS_R2_URL`, `ATTACHMENTS_R2_ACCESS_KEY_ID`, `ATTACHMENTS_R2_SECRET_ACCESS_KEY`, `ATTACHMENTS_R2_PREFIX`, `ATTACHMENTS_DIR` | *(empty)* | Keep attachments and images apart from the E2E artifacts. With R2 they default to the bucket root (`attachments/`, next to `e2e/`); the credentials default to the `E2E_R2_*` ones. Move older files with `npm run migrate:attachments` |
 | `ADK_HUB_URL`                   | public ADK Hub           | Another hub index for the Hub tab of the Agents page (e.g. a mirror) |
 | `ADK_HUB_GITHUB_TOKEN`          | *(empty)*                | Read-only GitHub token; lifts the limit of 60 anonymous calls an hour |
 | `LOG_LEVEL`                     | `info`                   | `debug`, `info`, `warn` or `error`                             |
@@ -67,6 +69,9 @@ do, restart with `adk` / `./adk.sh` afterwards.
 LLM providers, Azure DevOps, GitHub repositories and other integrations are not configured here:
 each workspace adds them in the web app under **Connect**, and their credentials are stored
 encrypted with `INTEGRATION_ENCRYPTION_KEY`.
+
+A workspace's [Telegram bot](telegram.md) works on a local install without a public address:
+the API long-polls Telegram. Behind HTTPS it uses a webhook instead.
 
 ## Access from other devices and HTTPS
 

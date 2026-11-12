@@ -18,6 +18,8 @@ import type {
   KnowledgePushInput,
 } from '../../lib/api-client.js';
 import { MarkdownViewer } from './MarkdownViewer.js';
+import { clearPassageHighlight, highlightPassage } from '../shared/highlight-passage.js';
+import type { ReferenceFocus } from '../shared/reference-focus.js';
 import { stripLeadingTitleHeading } from './markdown-parser.js';
 import { BrainGraph } from './BrainGraph.js';
 import { createBrainGraphState } from './brain-graph-model.js';
@@ -43,6 +45,9 @@ export interface BrainViewProps {
   readonly initialDocuments?: readonly KnowledgeDocumentDto[];
   readonly isReadOnly?: boolean;
   readonly className?: string;
+  /** An item another module sent the user to; opened once its data is there. */
+  readonly focus?: ReferenceFocus | null;
+  readonly onFocusHandled?: () => void;
 }
 
 export interface OpenTabItem {
@@ -140,6 +145,8 @@ export function BrainView({
   initialDocuments,
   isReadOnly = false,
   className,
+  focus,
+  onFocusHandled,
 }: BrainViewProps) {
   const { t, formatDate } = useI18n();
   const { runActivity } = useActivityRunner();
@@ -218,11 +225,11 @@ export function BrainView({
     try {
       setRelations(await client.createKnowledgeRelation(document.pageId, linkTarget));
       setLinkTarget('');
-      setSyncFeedback({ type: 'success', message: 'Link adicionado ao documento.' });
+      setSyncFeedback({ type: 'success', message: t('brain.linkAddedToDocument') });
     } catch (error) {
       setSyncFeedback({
         type: 'error',
-        message: error instanceof Error ? error.message : 'Falha ao adicionar link.',
+        message: error instanceof Error ? error.message : t('brain.addLinkFailed'),
       });
     } finally {
       setIsLinking(false);
@@ -305,7 +312,7 @@ export function BrainView({
 
     try {
       const res = await runActivity(
-        { kind: 'sync', title: 'Sincronizando documentos', detail: 'Azure DevOps' },
+        { kind: 'sync', title: t('brain.syncingDocuments'), detail: 'Azure DevOps' },
         () => apiClient.syncKnowledge(),
       );
       const [updatedStats, updatedDocs, updatedRelations] = await Promise.all([
@@ -352,7 +359,11 @@ export function BrainView({
     setSyncFeedback(null);
     try {
       const result = await runActivity(
-        { kind: 'push', title: `Enviando “${doc.title}”`, detail: providerName },
+        {
+          kind: 'push',
+          title: t('brain.pushingDocument', { title: doc.title }),
+          detail: providerName,
+        },
         () => client.pushKnowledgeDocument(doc.pageId, input),
       );
       const [updatedDocs, updatedRelations] = await Promise.all([
@@ -376,8 +387,8 @@ export function BrainView({
             : tab;
         }),
       );
-      // Publishing is only available while a document tab is active, so a tab is selected.
-      setActiveTabId((prev) => published.get(prev!) ?? prev);
+      /* v8 ignore next -- publishing is only available while a document tab is active */
+      setActiveTabId((prev) => published.get(prev ?? '') ?? prev);
       const updatedStats = await client.getKnowledgeStats(defaultOwnerId);
       setStats({
         documentsCount: updatedStats.documentsCount,
@@ -445,15 +456,13 @@ export function BrainView({
         const results = await apiClient.searchKnowledge(trimmed, defaultOwnerId);
         setSearchResults(results);
       } catch (error) {
-        setSearchError(
-          error instanceof Error ? error.message : 'Falha ao realizar busca de conhecimento.',
-        );
+        setSearchError(error instanceof Error ? error.message : t('brain.knowledgeSearchFailed'));
         setSearchResults(null);
       } finally {
         setIsSearching(false);
       }
     },
-    [apiClient, defaultOwnerId],
+    [apiClient, defaultOwnerId, t],
   );
 
   // Live auto-search as user types
@@ -469,24 +478,22 @@ export function BrainView({
       return;
     }
 
-    const timer = setTimeout(() => {
+    searchTimeoutRef.current = setTimeout(() => {
       void executeSearch(searchQuery);
     }, 150);
-    searchTimeoutRef.current = timer;
 
-    return () => clearTimeout(timer);
+    // The timer is always set when this cleanup exists: the effect returns early without one.
+    return () => clearTimeout(searchTimeoutRef.current!);
   }, [searchQuery, executeSearch]);
 
   const handleSearch = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
+    clearTimeout(searchTimeoutRef.current!);
     await executeSearch(searchQuery);
   };
 
   const handleClearSearch = () => {
-    // Clearing the query runs the auto-search effect cleanup, which cancels a pending search.
+    clearTimeout(searchTimeoutRef.current!);
     setSearchQuery('');
     setSearchResults(null);
     setSearchError(null);
@@ -548,7 +555,7 @@ export function BrainView({
     setEditingDoc(doc);
     setEditTitle(doc.title);
     setEditContent(stripLeadingTitleHeading(doc.content ?? '', doc.title));
-    // Only the open document is edited, so its loaded attachments are the ones to edit.
+    // Editing starts from the open document, whose attachments are already loaded.
     setEditAttachments(docAttachments);
     setEditAttachmentsChanged(false);
     setEditPreview(false);
@@ -585,7 +592,10 @@ export function BrainView({
     };
     const history = [...assistantMessages, userMessage]
       .slice(-8)
-      .map((item) => `${item.role === 'user' ? 'Usuário' : 'Assistente'}: ${item.content}`)
+      .map(
+        (item) =>
+          `${item.role === 'user' ? t('brain.roleUser') : t('brain.roleAssistant')}: ${item.content}`,
+      )
       .join('\n\n');
     setAssistantMessages((current) => [...current, userMessage]);
     setAssistantMessage('');
@@ -595,13 +605,17 @@ export function BrainView({
       const response = await runActivity(
         {
           kind: 'agent',
-          title: 'Agente auxiliando a documentação',
-          detail: editTitle || 'Novo documento',
+          title: t('brain.assistantActivity'),
+          detail: editTitle || t('brain.assistantNewDocument'),
         },
         () =>
           apiClient.executeAgent(assistantAgentId, {
             useKnowledge: true,
-            prompt: `Você está ajudando a escrever documentação Markdown. Título: ${editTitle || 'Sem título'}.\n\nConteúdo atual:\n${editContent.slice(-8000)}\n\nConversa:\n${history}\n\nResponda em Markdown, com uma sugestão pronta para inserir quando for apropriado.`,
+            prompt: t('brain.assistantPrompt', {
+              title: editTitle || t('brain.assistantUntitled'),
+              content: editContent.slice(-8000),
+              history,
+            }),
           }),
       );
       setAssistantMessages((current) => [
@@ -609,9 +623,7 @@ export function BrainView({
         { id: crypto.randomUUID(), role: 'assistant', content: response.content },
       ]);
     } catch (error) {
-      setAssistantError(
-        error instanceof Error ? error.message : 'Não foi possível consultar o agente.',
-      );
+      setAssistantError(error instanceof Error ? error.message : t('brain.assistantFailed'));
     } finally {
       setIsAssistantWorking(false);
     }
@@ -636,7 +648,10 @@ export function BrainView({
     };
     const history = researchMessages
       .slice(-8)
-      .map((item) => `${item.role === 'user' ? 'Usuário' : 'Agente'}: ${item.content}`)
+      .map(
+        (item) =>
+          `${item.role === 'user' ? t('brain.roleUser') : t('brain.roleAgent')}: ${item.content}`,
+      )
       .join('\n\n');
     setResearchMessages((current) => [...current, userMessage]);
     setResearchMessage('');
@@ -649,9 +664,7 @@ export function BrainView({
         { id: crypto.randomUUID(), role: 'assistant', content: result.content },
       ]);
     } catch (error) {
-      setResearchError(
-        error instanceof Error ? error.message : 'Não foi possível consultar o Brain.',
-      );
+      setResearchError(error instanceof Error ? error.message : t('brain.researchFailed'));
     } finally {
       setIsResearching(false);
     }
@@ -754,8 +767,7 @@ export function BrainView({
                     newParentPageId,
                   )
                 : await apiClient.createKnowledgeDocument(trimmedTitle, files.content)
-              : // Saving is only offered from the editor, so a document is being edited.
-                await apiClient.updateKnowledgeDocument(
+              : await apiClient.updateKnowledgeDocument(
                   editingDoc!.pageId,
                   trimmedTitle,
                   files.content,
@@ -767,7 +779,7 @@ export function BrainView({
           return saved;
         },
       );
-      if (editingDoc === 'new') {
+      if (savedDocument && editingDoc === 'new') {
         const newDoc = newParentPageId
           ? { ...savedDocument, parentPageId: newParentPageId }
           : savedDocument;
@@ -777,17 +789,15 @@ export function BrainView({
           type: 'success',
           message: t('brain.documentCreated', { title: newDoc.title }),
         });
-      } else {
-        // Saving is only offered from the editor, so a document is being edited.
-        const editedDoc = editingDoc!;
+      } else if (savedDocument && editingDoc && editingDoc !== 'new') {
         const updatedDoc = savedDocument;
-        setDocuments((prev) => prev.map((d) => (d.pageId === editedDoc.pageId ? updatedDoc : d)));
+        setDocuments((prev) => prev.map((d) => (d.pageId === editingDoc.pageId ? updatedDoc : d)));
         setTabs((prev) =>
           prev.map((t) =>
-            t.id === editedDoc.id ? { ...t, id: updatedDoc.id, title: updatedDoc.title } : t,
+            t.id === editingDoc.id ? { ...t, id: updatedDoc.id, title: updatedDoc.title } : t,
           ),
         );
-        if (activeTabId === editedDoc.id) {
+        if (activeTabId === editingDoc.id) {
           setActiveTabId(updatedDoc.id);
         }
         setSyncFeedback({
@@ -796,15 +806,17 @@ export function BrainView({
         });
       }
 
-      let updatedRelations = relations;
-      for (const targetPageId of pendingRelationIds) {
-        updatedRelations = await apiClient.createKnowledgeRelation(
-          savedDocument.pageId,
-          targetPageId,
-        );
+      if (savedDocument) {
+        let updatedRelations = relations;
+        for (const targetPageId of pendingRelationIds) {
+          updatedRelations = await apiClient.createKnowledgeRelation(
+            savedDocument.pageId,
+            targetPageId,
+          );
+        }
+        setRelations(updatedRelations);
+        setPendingRelationIds([]);
       }
-      setRelations(updatedRelations);
-      setPendingRelationIds([]);
 
       const updatedStats = await apiClient.getKnowledgeStats(defaultOwnerId);
       setStats({
@@ -874,7 +886,7 @@ export function BrainView({
       if (prev.some((t) => t.id === 'graph')) {
         return prev;
       }
-      return [...prev, { id: 'graph', title: 'Graph view', type: 'graph' }];
+      return [...prev, { id: 'graph', title: t('brain.graphView'), type: 'graph' }];
     });
     setActiveTabId('graph');
   };
@@ -956,16 +968,48 @@ export function BrainView({
   const wordCount = fullTextContent.trim().split(/\s+/).filter(Boolean).length;
   const charCount = fullTextContent.length;
 
+  // Another module sent the user to a page: open its tab and, when it came with the passage
+  // that matched, show the page at that passage.
+  const docContent = useRef<HTMLDivElement>(null);
+  const [passage, setPassage] = useState<{ docId: string; text: string } | null>(null);
+  const handledFocus = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.kind !== 'brain' || handledFocus.current === focus.nonce) return;
+    const target = documents.find((candidate) => candidate.pageId === focus.ref);
+    if (!target) return;
+    handledFocus.current = focus.nonce;
+    openDocumentTab(target);
+    setPassage(focus.excerpt ? { docId: target.id, text: focus.excerpt } : null);
+    onFocusHandled?.();
+  }, [focus, documents, onFocusHandled]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const container = docContent.current;
+    if (!passage || !container || activeDoc?.id !== passage.docId) return;
+    // The page renders after the tab opens, so look for the passage until it is there.
+    let frame = 0;
+    let attempts = 0;
+    const look = () => {
+      if (highlightPassage(container, passage.text) || attempts++ > 30) return;
+      frame = requestAnimationFrame(look);
+    };
+    look();
+    return () => {
+      cancelAnimationFrame(frame);
+      clearPassageHighlight();
+    };
+  }, [passage, activeDoc?.id, fullTextContent]);
+
   return (
     <div
-      className={cn('flex h-full w-full overflow-hidden bg-[#181818] text-[#dcddde]', className)}
+      className={cn('flex h-full w-full gap-4 overflow-hidden text-[#dcddde]', className)}
       data-testid="screen-brain"
     >
       {/* ========================================================================= */}
       {/* 1. LEFT SIDEBAR: MINIMALIST OBSIDIAN VAULT TREE                           */}
       {/* ========================================================================= */}
       <ResizableSidebar
-        className="border-r border-[#262626] bg-[#1a1a1a] text-sm select-none"
+        gap
+        className="overflow-hidden rounded-lg border border-[#262626] bg-[#1a1a1a] text-sm select-none"
         defaultWidth={260}
         minWidth={220}
         maxWidth="container"
@@ -1246,7 +1290,7 @@ export function BrainView({
       {/* ========================================================================= */}
       {/* 2. MAIN WORKSPACE: TABS BAR + NAV HEADER + CONTENT AREA                   */}
       {/* ========================================================================= */}
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#161616]">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[#262626] bg-[#161616]">
         {/* ======================================================================= */}
         {/* TOP MULTI-TABS BAR (Supports N tabs open at the same time)              */}
         {/* ======================================================================= */}
@@ -1748,8 +1792,8 @@ export function BrainView({
                                   onChange={(event) => {
                                     const files = [...event.currentTarget.files!];
                                     event.currentTarget.value = '';
-                                    // This input is rendered next to the editor textarea.
-                                    editorImages.insertFiles(editorRef.current!, files);
+                                    if (editorRef.current)
+                                      editorImages.insertFiles(editorRef.current, files);
                                   }}
                                 />
                               </label>
@@ -1969,15 +2013,17 @@ export function BrainView({
                       </div>
 
                       {/* MARKDOWN VIEWER */}
-                      <MarkdownViewer
-                        content={fullTextContent}
-                        documentTitle={activeDoc.title}
-                        sourceUrl={
-                          activeDoc.source.startsWith('http') ? activeDoc.source : undefined
-                        }
-                        showModeToggle={true}
-                        onWikilinkClick={handleOpenWikilink}
-                      />
+                      <div ref={docContent}>
+                        <MarkdownViewer
+                          content={fullTextContent}
+                          documentTitle={activeDoc.title}
+                          sourceUrl={
+                            activeDoc.source.startsWith('http') ? activeDoc.source : undefined
+                          }
+                          showModeToggle={true}
+                          onWikilinkClick={handleOpenWikilink}
+                        />
+                      </div>
                       <AttachmentPanel scope="brain" attachments={docAttachments} />
                     </div>
                   ) : (
@@ -2141,8 +2187,9 @@ export function BrainView({
           minWidth={280}
           maxWidth="container"
           resizeEdge="left"
-          resizeLabel="Redimensionar assistente de documentação"
-          className="overflow-hidden border-l border-[#262626] bg-[#1a1a1a]"
+          resizeLabel={t('brain.resizeAssistant')}
+          gap
+          className="overflow-hidden rounded-lg border border-[#262626] bg-[#1a1a1a]"
         >
           <section className="flex min-h-0 flex-1 flex-col p-4">
             <div className="flex items-center justify-between gap-3">
@@ -2263,7 +2310,7 @@ export function BrainView({
         </ResizableSidebar>
       ) : isResearchSidebarCollapsed ? (
         <aside
-          className="flex w-12 shrink-0 flex-col items-center border-l border-[#262626] bg-[#1a1a1a] py-3"
+          className="flex w-12 shrink-0 flex-col items-center rounded-lg border border-[#262626] bg-[#1a1a1a] py-3"
           aria-label={t('brain.researchTitle')}
         >
           <Button
@@ -2286,7 +2333,8 @@ export function BrainView({
           maxWidth="container"
           resizeEdge="left"
           resizeLabel={t('common.resizeSidebar')}
-          className="overflow-hidden border-l border-[#262626] bg-[#1a1a1a]"
+          gap
+          className="overflow-hidden rounded-lg border border-[#262626] bg-[#1a1a1a]"
         >
           <section className="flex min-h-0 flex-1 flex-col p-4">
             <div className="flex items-start justify-between gap-3">

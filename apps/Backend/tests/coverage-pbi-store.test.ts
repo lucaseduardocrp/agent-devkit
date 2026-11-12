@@ -56,6 +56,17 @@ describe('InMemoryPbiStore.search', () => {
     ).toEqual(['A']);
   });
 
+  it('filters by the text of the title or the id in the provider', async () => {
+    const { store } = await seed();
+    await store.create('ws', { kind: 'pbi', title: 'Fix the LOGIN form', position: 4 });
+    expect(titles(await store.search('ws', { q: 'login', page: 1, pageSize: 10 }))).toEqual([
+      'Fix the LOGIN form',
+    ]);
+    // "#2" is the id of C in trello; B and A have id 1.
+    expect(titles(await store.search('ws', { q: '#2', page: 1, pageSize: 10 }))).toEqual(['C']);
+    expect(titles(await store.search('ws', { q: '1', page: 1, pageSize: 10 }))).toEqual(['A', 'B']);
+  });
+
   it('paginates the matches and reports the total', async () => {
     const { store } = await seed();
     expect(await store.search('ws', { page: 2, pageSize: 2 })).toEqual({
@@ -157,6 +168,20 @@ describe('PrismaPbiStore', () => {
     expect(items.count).toHaveBeenLastCalledWith({ where: { workspaceId: 'ws' } });
   });
 
+  it('searches the title or the provider id with the typed text', async () => {
+    const { store, items } = setup();
+    await store.search('ws', { q: '#42', page: 1, pageSize: 5 });
+    expect(items.count).toHaveBeenLastCalledWith({
+      where: {
+        workspaceId: 'ws',
+        OR: [
+          { title: { contains: '42', mode: 'insensitive' } },
+          { links: { some: { externalId: { startsWith: '42' } } } },
+        ],
+      },
+    });
+  });
+
   it('lists, gets and lists children of a workspace', async () => {
     const { store, items } = setup();
     expect((await store.list('ws'))[0]!.links).toEqual([expectedLink]);
@@ -200,6 +225,13 @@ describe('PrismaPbiStore', () => {
       },
       include: { links: true },
     });
+    const attachment = {
+      id: 'att',
+      name: 'shot.png',
+      scope: 'pbi',
+      source: 'adk',
+      url: '/attachments/files/att',
+    } as const;
     await store.create('ws', {
       kind: 'card',
       title: 'Card',
@@ -208,6 +240,7 @@ describe('PrismaPbiStore', () => {
       status: 'done',
       position: 5,
       sourceData: { a: 1 },
+      attachments: [attachment],
     });
     expect(items.create).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -217,6 +250,7 @@ describe('PrismaPbiStore', () => {
           status: 'done',
           position: 5,
           sourceData: { a: 1 },
+          attachments: [attachment],
         }),
       }),
     );

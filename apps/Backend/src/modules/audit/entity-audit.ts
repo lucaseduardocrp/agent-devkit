@@ -79,6 +79,7 @@ export function issueSnapshot(issue: Issue): EntitySnapshot {
     description: issue.description,
     assigneeAgentId: issue.assigneeAgentId,
     assigneeUserId: issue.assigneeUserId,
+    proofreaderUserId: issue.proofreaderUserId,
     pbiItemId: issue.pbiItemId,
   };
 }
@@ -87,6 +88,7 @@ export function issueSnapshot(issue: Issue): EntitySnapshot {
 export function auditedIssueStore(store: IssueStore, audit: EntityAuditLog): IssueStore {
   return {
     list: (workspaceId) => store.list(workspaceId),
+    search: (workspaceId, options) => store.search(workspaceId, options),
     get: (workspaceId, issueId) => store.get(workspaceId, issueId),
     comments: (issueId) => store.comments(issueId),
     inboxStates: (workspaceId, userId) => store.inboxStates(workspaceId, userId),

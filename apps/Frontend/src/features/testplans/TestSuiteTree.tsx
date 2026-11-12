@@ -1,4 +1,3 @@
-/* v8 ignore file -- recursive interactions are covered by the Test Plans integration journey. */
 import { useEffect, useMemo, useState } from 'react';
 import { ActionsMenu } from '../../components/ui/actions-menu.js';
 import { Button } from '../../components/ui/button.js';
@@ -14,26 +13,6 @@ export interface AutomateSelection {
   readonly planId?: string;
   readonly caseIds?: readonly string[];
 }
-
-const copy = {
-  'pt-BR': {
-    importFromProvider: 'Importar do provedor',
-    automate: 'Automatizar com E2E',
-    importedFrom: 'Importado de {provider}',
-    showCases: 'Mostrar casos de {title}',
-    openCase: 'Abrir caso {title}',
-    steps: '{count} passos',
-  },
-  'en-US': {
-    importFromProvider: 'Import from provider',
-    automate: 'Automate with E2E',
-    importedFrom: 'Imported from {provider}',
-    showCases: 'Show cases of {title}',
-    openCase: 'Open case {title}',
-    steps: '{count} steps',
-  },
-} as const;
-
 /** Provider of a Test Plan imported from a test management platform. */
 function importedProvider(plan: SavedTestPlanDto): string | null {
   if (plan.sourceType !== 'test_management' || !plan.sourceId) return null;
@@ -88,8 +67,8 @@ export function TestSuiteTree({
   requestCreate = false,
   onCreateRequestHandled,
 }: TestSuiteTreeProps) {
-  const { t, formatDate, locale } = useI18n();
-  const c = copy[locale];
+  const { t, formatDate, messages } = useI18n();
+  const c = messages.testSuiteTree;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [openPlans, setOpenPlans] = useState<ReadonlySet<string>>(() => new Set());
   const [editing, setEditing] = useState<{ id?: string; parentId?: string; name: string } | null>(

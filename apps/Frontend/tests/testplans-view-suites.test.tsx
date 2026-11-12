@@ -1,4 +1,5 @@
 import { fireEvent, render, waitFor, within } from '@testing-library/react';
+import { exportFormatSelect } from './helpers/export-format';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestPlansView } from '../src/features/testplans/TestPlansView.js';
 import { ApiClient } from '../src/lib/api-client.js';
@@ -426,7 +427,7 @@ describe('TestPlansView suite export', () => {
     const ui = view(api);
 
     await ui.findByTestId('test-suite-tree');
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
     fireEvent.click(ui.getByRole('button', { name: 'Ações: Regression' }));
     fireEvent.click(ui.getByRole('button', { name: 'Exportar suite (.zip)' }));
 
@@ -457,7 +458,7 @@ describe('TestPlansView suite export', () => {
     const ui = view(api);
 
     await ui.findByTestId('test-suite-tree');
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
     fireEvent.click(ui.getByRole('button', { name: 'Ações: Regression' }));
     fireEvent.click(ui.getByRole('button', { name: 'Exportar suite (.zip)' }));
 
@@ -470,7 +471,7 @@ describe('TestPlansView suite export', () => {
     const ui = view(api);
 
     await ui.findByTestId('test-suite-tree');
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
     fireEvent.click(ui.getByRole('button', { name: 'Ações: Regression' }));
     fireEvent.click(ui.getByRole('button', { name: 'Exportar suite (.zip)' }));
 
@@ -522,13 +523,13 @@ describe('TestPlansView export settings', () => {
     const ui = view(api);
 
     await ui.findByTestId('panel-saved-plans');
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), {
+    fireEvent.change(exportFormatSelect(ui), {
       target: { value: 'standard' },
     });
 
     expect(ui.queryByLabelText('Area Path')).not.toBeInTheDocument();
 
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'azure' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'azure' } });
     await waitFor(() => expect(ui.getByLabelText('Area Path')).toBeInTheDocument());
   });
 
@@ -540,10 +541,10 @@ describe('TestPlansView export settings', () => {
     const ui = view(api);
 
     await ui.findByTestId('panel-saved-plans');
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), {
+    fireEvent.change(exportFormatSelect(ui), {
       target: { value: 'standard' },
     });
-    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'azure' } });
+    fireEvent.change(exportFormatSelect(ui), { target: { value: 'azure' } });
 
     fireEvent.click(await ui.findByRole('button', { name: 'Recarregar opções do Azure' }));
     await waitFor(() => expect(load.mock.calls.length).toBeGreaterThan(1));

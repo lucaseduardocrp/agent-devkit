@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export type E2eJobKind = 'generate' | 'execute' | 'explore' | 'publish';
+export type E2eJobKind = 'generate' | 'execute' | 'explore' | 'publish' | 'document';
 export type E2eJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 /** One unit of work for a worker: plan + run a creation, or rerun some of its tests. */

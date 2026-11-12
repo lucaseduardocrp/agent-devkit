@@ -15,9 +15,9 @@ export const SERVER_NAME = 'adk';
 
 export function packageVersion(): string {
   const manifest = JSON.parse(readFileSync(join(packageRoot(), 'package.json'), 'utf8')) as {
-    version: string;
+    version?: string;
   };
-  return manifest.version;
+  return manifest.version ?? '0.0.0';
 }
 
 export const SERVER_INSTRUCTIONS = `ADK MCP server: Brain (knowledge base), Specs, Test Plans, Agents, Design prototypes, E2E Automation, Workspaces and Integrations.
@@ -58,7 +58,13 @@ export function createToolContext(deps: ServerDependencies, requestToken?: strin
       };
     },
   });
-  return { api, session: deps.session, apiUrl: deps.apiUrl };
+  return {
+    api,
+    session: deps.session,
+    apiUrl: deps.apiUrl,
+    // A request token only exists on the hosted HTTP transport.
+    allowLocalFiles: requestToken === undefined,
+  };
 }
 
 export async function runTool(tool: McpTool, input: unknown, context: ToolContext) {

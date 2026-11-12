@@ -100,6 +100,7 @@ export class HttpHubCatalog implements HubCatalog {
 
   private async download(): Promise<HubIndex> {
     const urls = this.options.indexUrl ? [this.options.indexUrl] : await this.latestIndexUrls();
+    // Every failure below is an Error: get() wraps what the network throws.
     let lastError: unknown;
     for (const url of urls) {
       try {

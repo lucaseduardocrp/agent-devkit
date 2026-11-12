@@ -59,18 +59,6 @@ export const integrationTestsModule: McpModule = {
         json(await api.request({ method: 'GET', path: '/integration-tests/collections' })),
     }),
     defineTool({
-      name: 'integration_list_dynamic_values',
-      title: 'List API test dynamic values',
-      description:
-        'Lists the `{{$randomFullName}}`-style helpers that URLs, headers and bodies of collection requests can use, each with a fresh sample value.',
-      toolset: 'integrationtests',
-      access: 'read',
-      routes: ['GET /integration-tests/dynamic-values'],
-      input: {},
-      run: async (_, { api }) =>
-        json(await api.request({ method: 'GET', path: '/integration-tests/dynamic-values' })),
-    }),
-    defineTool({
       name: 'integration_get_collection',
       title: 'Get API test collection',
       description: `Returns a collection with its folders, requests, assertions, captures, scripts and variables. ${personalNote}`,
@@ -98,7 +86,7 @@ export const integrationTestsModule: McpModule = {
         collection: z
           .record(z.string(), z.unknown())
           .describe(
-            '{ name, description?, variables, auth, items: [folders and requests], ci? } where ci is { repository: { provider, id, name, branch, path }, tool: bruno|postman|insomnia, environmentId? } (see integration_list_repositories)',
+            '{ name, description?, variables, auth, items: [folders and requests], headers? (collection-level key/value list), scripts?, scriptFlow? (sandwich|sequential), settings?, protoFiles? ([{ name, content }] for gRPC), ci? } where ci is { repository: { provider, id, name, branch, path }, tool: bruno|postman|insomnia, environmentId? } (see integration_list_repositories)',
           ),
       },
       run: async (input, { api }) =>
@@ -138,7 +126,7 @@ export const integrationTestsModule: McpModule = {
       routes: ['POST /integration-tests/collections/import'],
       input: {
         content: z.string().min(1).max(5_000_000).describe('The file content.'),
-        format: z.enum(['adk', 'postman', 'insomnia', 'openapi']).optional(),
+        format: z.enum(['adk', 'postman', 'insomnia', 'openapi', 'bruno']).optional(),
         name: z.string().trim().min(1).max(200).optional().describe('Name for the new collection.'),
       },
       run: async (input, { api }) =>
@@ -359,7 +347,7 @@ export const integrationTestsModule: McpModule = {
       routes: ['POST /integration-tests/runs'],
       input: {
         collectionId,
-        environmentId: environmentId.optional(),
+        environmentId: environmentId.nullable().optional(),
         itemIds: z
           .array(z.string().trim().min(1).max(100))
           .max(500)
@@ -393,6 +381,18 @@ export const integrationTestsModule: McpModule = {
           .optional()
           .describe(
             "Start from the user's runtime variables and cookies of previous sends (default true).",
+          ),
+        mode: z
+          .enum(['run', 'grpc-reflect'])
+          .optional()
+          .describe(
+            '"grpc-reflect" lists the services of the one selected gRPC request (itemIds) instead of running it. Default "run".',
+          ),
+        request: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(
+            'An unsaved request to run alone: it replaces the saved item with the same id or is added at the root. Use {{variables}} for credentials; never put secrets in it.',
           ),
       },
       run: async (input, { api }) =>

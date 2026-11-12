@@ -94,12 +94,13 @@ export function EnvironmentsPane({
     }
   };
 
+  // Only offered, and confirmed, while an environment is selected.
   const remove = async () => {
-    if (!selectedId) return;
+    const id = selectedId!;
     setConfirmDelete(false);
     try {
-      await apiClient.deleteApiEnvironment(selectedId);
-      if (activeId === selectedId) onActivate('');
+      await apiClient.deleteApiEnvironment(id);
+      if (activeId === id) onActivate('');
       setSelectedId(null);
       await onChanged();
     } catch (err) {
@@ -224,8 +225,8 @@ export function EnvironmentsPane({
                   )}
                   {selectedId && (
                     <Button
-                      variant="ghost"
-                      className="ml-auto text-[var(--text-danger)]"
+                      variant="destructive"
+                      className="ml-auto"
                       onClick={() => setConfirmDelete(true)}
                     >
                       <i className="ti ti-trash" aria-hidden="true" />

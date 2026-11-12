@@ -474,7 +474,9 @@ describe('file-read', () => {
     }
     globalThis.FileReader = FailingReader as unknown as typeof FileReader;
     try {
-      await expect(readFileText(new Blob(['x']))).rejects.toThrow('read failed');
+      await expect(readFileText(new Blob(['x']))).rejects.toThrow(
+        'Não foi possível ler o arquivo.',
+      );
       // A result that is not text reads as empty.
       expect(await readFileBase64(new Blob(['x']))).toBe('');
     } finally {

@@ -75,6 +75,8 @@ function creation(overrides: Partial<E2eCreationSummary> = {}): E2eCreationSumma
 
 function api(list: readonly E2eCreationSummary[] | Error = [creation()]) {
   return {
+    apiUrl: 'https://api.adk.example.com',
+    getE2eRunners: vi.fn().mockResolvedValue([]),
     getE2eCreations: vi.fn(() =>
       list instanceof Error ? Promise.reject(list) : Promise.resolve(list),
     ),
@@ -130,6 +132,64 @@ describe('E2eView', () => {
     expect(view.getByText(/Aguardando o seu computador/)).toBeInTheDocument();
   });
 
+  it('never waits for a runner in the desktop app, which runs everything on this computer', async () => {
+    Object.defineProperty(window, 'adkDesktop', {
+      value: { apiUrl: 'http://127.0.0.1:60675' },
+      configurable: true,
+    });
+    try {
+      const client = api([
+        creation({ executionTarget: 'local', status: 'running', passed: 0, tests: [] }),
+      ]);
+      const view = render(<E2eView apiClient={asClient(client)} />);
+      await view.findByText('ama');
+      expect(view.queryByText('No meu computador')).toBeNull();
+      expect(view.queryByText(/Aguardando o seu computador/)).toBeNull();
+      expect(view.queryByTestId('e2e-local-runner-wait')).toBeNull();
+      expect(client.getE2eRunners).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(window, 'adkDesktop');
+    }
+  });
+
+  describe('waiting for a local runner', () => {
+    const panel = (view: ReturnType<typeof render>) => view.queryByTestId('e2e-local-runner-wait');
+
+    it('shows whether the computer is connected while a local run waits', async () => {
+      const client = api([
+        creation({ executionTarget: 'local', status: 'queued', passed: 0, tests: [] }),
+      ]);
+      const view = render(<E2eView apiClient={asClient(client)} />);
+      expect(await view.findByTestId('e2e-local-runner-wait')).toBeInTheDocument();
+      // Nobody connected: the panel explains how to start the runner.
+      await waitFor(() => expect(client.getE2eRunners).toHaveBeenCalled());
+      expect(view.getByTestId('e2e-local-runner-wait')).toHaveTextContent('devkit runner');
+    });
+
+    it('stays out of the way for runs on the ADK worker and for finished local runs', async () => {
+      const remote = render(
+        <E2eView
+          apiClient={asClient(
+            api([creation({ executionTarget: 'remote', status: 'running', tests: [] })]),
+          )}
+        />,
+      );
+      await remote.findByText('ama');
+      expect(panel(remote)).toBeNull();
+      remote.unmount();
+
+      const done = render(
+        <E2eView
+          apiClient={asClient(
+            api([creation({ executionTarget: 'local', status: 'completed', tests: [] })]),
+          )}
+        />,
+      );
+      await done.findByText('ama');
+      expect(panel(done)).toBeNull();
+    });
+  });
+
   it('lists runs with pass counts and expands the newest one', async () => {
     const client = api([
       creation(),
@@ -175,7 +235,7 @@ describe('E2eView', () => {
     await view.findByText('alpha');
     const names = () =>
       Array.from(
-        view.container.querySelectorAll('tbody > tr > td:nth-child(2) > span:first-child'),
+        view.container.querySelectorAll('tbody > tr > td:nth-child(2) > button:first-child'),
       ).map((node) => node.textContent);
 
     fireEvent.change(view.getByLabelText('Ordenar'), { target: { value: 'name' } });
@@ -439,7 +499,7 @@ describe('E2eView', () => {
     expect(view.getByText(/Aguardando o plano de testes e os scripts/)).toBeInTheDocument();
     const names = () =>
       Array.from(
-        view.container.querySelectorAll('tbody > tr > td:nth-child(2) > span:first-child'),
+        view.container.querySelectorAll('tbody > tr > td:nth-child(2) > button:first-child'),
       ).map((node) => node.textContent);
     fireEvent.change(view.getByLabelText('Filtrar por status'), { target: { value: 'active' } });
     expect(names()).toEqual(['login']);
@@ -481,10 +541,10 @@ describe('E2eView opened from Test Plans', () => {
     const view = render(
       <E2eView apiClient={asClient(client)} initialSavedCases={{ planId: 'plan-1' }} />,
     );
-    expect(await view.findByRole('radio', { name: 'Test cases salvos no ADK' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
+    const source = (await view.findByRole('combobox', {
+      name: 'Origem dos testes',
+    })) as HTMLSelectElement;
+    expect(source.value).toBe('saved');
     expect(client.getE2eCreations).not.toHaveBeenCalled();
   });
 
@@ -494,6 +554,6 @@ describe('E2eView opened from Test Plans', () => {
       <E2eView apiClient={asClient(client)} isReadOnly initialSavedCases={{ planId: 'plan-1' }} />,
     );
     expect(await view.findByText('ama')).toBeInTheDocument();
-    expect(view.queryByRole('radio', { name: 'Test cases salvos no ADK' })).toBeNull();
+    expect(view.queryByRole('combobox', { name: 'Origem dos testes' })).toBeNull();
   });
 });

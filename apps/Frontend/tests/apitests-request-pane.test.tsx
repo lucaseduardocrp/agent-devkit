@@ -926,7 +926,7 @@ describe('UrlBar', () => {
     const view = render(<Harness initial={request('grpc')} />);
     fireEvent.click(view.getByTestId('generate-code'));
     const dialog = await view.findByTestId('code-dialog');
-    expect(within(dialog).getByLabelText<HTMLSelectElement>('Linguagem').disabled).toBe(true);
+    expect((within(dialog).getByLabelText('Linguagem') as HTMLSelectElement).disabled).toBe(true);
     expect(dialog.textContent).toContain('grpcurl');
   });
 
