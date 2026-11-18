@@ -438,10 +438,7 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
     const docs = snap('Docs', { headings: [frame, 'Documents'] });
     // Too few screens to know which heading is the frame's.
     expect(withoutSharedHeadings(plan, [home])).toBe(plan);
-    expect(withoutSharedHeadings(docs, [home, plan]).headings).toEqual([
-      'Documents',
-      frame,
-    ]);
+    expect(withoutSharedHeadings(docs, [home, plan]).headings).toEqual(['Documents', frame]);
     // A screen with only shared headings keeps them.
     const only = snap('Only', { headings: [frame] });
     expect(withoutSharedHeadings(only, [home, plan])).toBe(only);

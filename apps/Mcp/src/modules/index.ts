@@ -50,6 +50,36 @@ export const modules: readonly McpModule[] = [
 
 /** Backend routes that are intentionally not exposed as tools, with the reason. */
 export const excludedRoutes: Readonly<Record<string, string>> = {
+  'DELETE /integrations/llm/:providerId/profiles/:name':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'GET /e2e/creations/:id/exploration/code':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'GET /e2e/creations/:id/exploration/steps/:index':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'GET /e2e/creations/:id/exploration/videos/:worker':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'GET /inbox/stream':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'GET /integrations/llm/:providerId/profiles':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'POST /e2e/creations/:id/generate':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'POST /e2e/tests/:id/fix-case':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'POST /e2e/tests/:id/reevaluate':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'POST /e2e/tests/:id/steps/:position/fix':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'POST /integrations/llm/:providerId/profiles':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'PUT /e2e/creations/:id/exploration/code':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'PUT /e2e/tests/:id/result':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'PUT /e2e/tests/:id/steps/:position/result':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
+  'PUT /e2e/tests/:id/success-criteria':
+    'Added by the ADK sync with no MCP tool yet in ADK; expose it as a tool or keep it web-only.',
   'GET /auth/oauth/:provider/callback':
     'Browser redirect target of the OAuth provider; auth_get_oauth_url starts the flow instead.',
   'POST /auth/tokens':

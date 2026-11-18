@@ -126,7 +126,9 @@ export async function searchKnowledgeWithPlan(
     .filter((query, index) => queries.findIndex((other) => other.text === query.text) === index)
     .slice(0, MAX_SEARCHES);
 
-  const settled = await Promise.allSettled(unique.map((query) => search.search(query.text, context)));
+  const settled = await Promise.allSettled(
+    unique.map((query) => search.search(query.text, context)),
+  );
   const failures = settled.filter(
     (result): result is PromiseRejectedResult => result.status === 'rejected',
   );

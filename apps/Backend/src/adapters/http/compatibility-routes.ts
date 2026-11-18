@@ -573,7 +573,7 @@ export function createCompatibilityRouter(
                     description: normalizeTestCaseDescription(
                       plan.description,
                       context.locale === 'en-US' ? 'en-US' : 'pt-BR',
-                      (plan).steps.map((step) => step.action),
+                      plan.steps.map((step) => step.action),
                     ),
                   },
             )

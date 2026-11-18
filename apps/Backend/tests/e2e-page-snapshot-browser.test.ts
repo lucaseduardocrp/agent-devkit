@@ -12,7 +12,9 @@ const browserInstalled =
   fs.readdirSync(browsersPath).some((entry) => entry.startsWith('chromium'));
 
 // A single-page app that keeps one heading in its frame on every screen.
-const screen = (extra: string) => `<!doctype html><html><head><title>Blue - Planejamento</title></head><body>
+const screen = (
+  extra: string,
+) => `<!doctype html><html><head><title>Blue - Planejamento</title></head><body>
 <header><h2>Configuração</h2></header>
 <nav><button>Painel</button></nav>
 <main><h1>Planejamento</h1>

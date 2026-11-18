@@ -2664,9 +2664,7 @@ function McpUsagePanel({
               <ul className="space-y-1 text-xs text-[var(--text-secondary)]">
                 {usage.bySource.map((item) => (
                   <li key={item.source} className="flex justify-between gap-3">
-                    <span className="min-w-0 truncate">
-                      {usageSourceLabel(item.source, t)}
-                    </span>
+                    <span className="min-w-0 truncate">{usageSourceLabel(item.source, t)}</span>
                     <span className="shrink-0">
                       {tokens(item.totalTokens)} · {number(item.calls)}× ·{' '}
                       {money(item.spendMicros, locale)}

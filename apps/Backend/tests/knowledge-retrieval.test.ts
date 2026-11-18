@@ -61,7 +61,9 @@ describe('planKnowledgeQuery', () => {
     }));
     const plan = await planKnowledgeQuery({ complete }, 'e o prazo?', ' Você: aprovação ');
     expect(plan).toEqual({ standalone: 'Qual o prazo?', keywords: ['prazo'] });
-    const request = (complete.mock.calls[0] as unknown as [{ prompt: string; instruction: string }])[0];
+    const request = (
+      complete.mock.calls[0] as unknown as [{ prompt: string; instruction: string }]
+    )[0];
     expect(request.prompt).toBe('Histórico:\nVocê: aprovação\n\nPergunta atual:\ne o prazo?');
     expect(request.instruction).toContain('apenas JSON');
   });

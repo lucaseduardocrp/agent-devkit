@@ -19,7 +19,13 @@ describe('scriptExploration', () => {
     const own = {
       pages: [page('Dashboard')],
       script: [
-        { atMs: 1, action: 'click' as const, target: 'Filters', result: 'Dashboard', reason: 'open filters' },
+        {
+          atMs: 1,
+          action: 'click' as const,
+          target: 'Filters',
+          result: 'Dashboard',
+          reason: 'open filters',
+        },
         { atMs: 2, action: 'note' as const, target: 'x', result: null },
       ],
     };

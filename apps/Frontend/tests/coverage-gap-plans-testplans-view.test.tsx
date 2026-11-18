@@ -279,7 +279,6 @@ describe('TestPlansView saving a plan', () => {
     expect(await ui.findByRole('alert')).toHaveTextContent('Plan is locked.');
     expect(update.mock.calls[0]![1].plans[0]!.steps).toEqual([]);
   });
-
 });
 
 describe('TestPlansView CSV export failures', () => {

@@ -45,12 +45,7 @@ export async function readExploration(
   }
 }
 
-function describePage(
-  index: number,
-  page: E2ePageSnapshot,
-  hasScreenshot: boolean,
-  flow?: string,
-) {
+function describePage(index: number, page: E2ePageSnapshot, hasScreenshot: boolean, flow?: string) {
   const screen = page.headings[0] || page.title || page.url;
   // The dialog open over the screen is what the capture shows, so it is part of the name.
   const name = page.dialog && page.dialog !== screen ? `${screen} · ${page.dialog}` : screen;

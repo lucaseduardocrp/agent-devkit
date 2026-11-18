@@ -238,7 +238,8 @@ function fakeBrowser(options: FakeOptions) {
         calls.push(`scroll:${arg as string}`);
         return undefined;
       }
-      if (fn === findSignInForm) return !options.signsIn || formShown ? (options.form ?? null) : null;
+      if (fn === findSignInForm)
+        return !options.signsIn || formShown ? (options.form ?? null) : null;
       if (fn === listNavAreas) return options.areas ?? [];
       if (fn === inspectSignIn) return arg ? { focused: true, user: '', passwordLength: 0 } : null;
       if (fn === isRendered || fn === isSettled) return true;

@@ -63,11 +63,7 @@ export function E2eResultControl({
   if (isReadOnly && !showsSource && !saved) return null;
 
   return (
-    <E2eCollapsibleSection
-      title={t('e2e.resultTitle')}
-      icon="ti-scale"
-      testId="e2e-result-control"
-    >
+    <E2eCollapsibleSection title={t('e2e.resultTitle')} icon="ti-scale" testId="e2e-result-control">
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         {showsSource && (
           <p

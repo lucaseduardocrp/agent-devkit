@@ -776,5 +776,4 @@ describe('the Sources page of the Test module', () => {
     await view.findByTestId('e2e-exploration');
     expect(view.queryByRole('button', { name: /Casos de Testes/ })).toBeNull();
   });
-
 });

@@ -299,7 +299,10 @@ describe('loading images for a model', () => {
       (_, index) => `0000000${index}-0000-4000-8000-000000000000`,
     );
     const meta = (id: string, mimeType: string, kind = 'image') =>
-      store.put(attachmentMetaKey('ws', id, kind as 'image'), Buffer.from(JSON.stringify({ id, kind, mimeType })));
+      store.put(
+        attachmentMetaKey('ws', id, kind as 'image'),
+        Buffer.from(JSON.stringify({ id, kind, mimeType })),
+      );
     await meta(ids[0]!, 'image/png');
     await store.put(attachmentContentKey('ws', ids[0]!, 'image'), PNG);
     await meta(ids[1]!, 'image/png', 'video');

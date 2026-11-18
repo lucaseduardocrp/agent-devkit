@@ -119,7 +119,6 @@ describe('BrainView publishing and editing', () => {
     await waitFor(() => expect(view.queryByRole('dialog')).toBeNull());
     expect(view.getByTestId('tab-active-doc')).toHaveTextContent('Alpha');
   });
-
 });
 
 describe('BrainGraph without a canvas context', () => {

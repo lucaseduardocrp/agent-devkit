@@ -53,16 +53,14 @@ describe('selectKnowledgeDocuments', () => {
   });
 
   it('shares the character allowance between documents, then gives the rest in rank order', () => {
-    const selected = selectKnowledgeDocuments(
-      [...pageChunks('A', 10), ...pageChunks('B', 10)],
-      { maxChars: 4000 },
-    );
+    const selected = selectKnowledgeDocuments([...pageChunks('A', 10), ...pageChunks('B', 10)], {
+      maxChars: 4000,
+    });
     expect(selected.map((document) => document.content.length)).toEqual([2000, 2000]);
 
-    const uneven = selectKnowledgeDocuments(
-      [...pageChunks('A', 10), chunk('B', 0, 'short')],
-      { maxChars: 4000 },
-    );
+    const uneven = selectKnowledgeDocuments([...pageChunks('A', 10), chunk('B', 0, 'short')], {
+      maxChars: 4000,
+    });
     expect(uneven[0]?.content.length).toBe(3500);
     expect(uneven[1]?.content).toBe('short');
   });
