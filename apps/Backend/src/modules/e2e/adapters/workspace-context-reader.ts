@@ -12,20 +12,29 @@ import type { E2eExplorationContextDocument } from '../domain/e2e-insight.js';
 
 /** Text of a description kept as HTML (Azure DevOps) or Markdown. */
 export function plainText(value: string): string {
-  return value
-    .replace(/<\s*br\s*\/?>/gi, '\n')
-    .replace(/<\/\s*(p|div|li|tr|h[1-6])\s*>/gi, '\n')
-    .replace(/<\s*li[^>]*>/gi, '\n- ')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const sanitizeOnce = (input: string): string =>
+    input
+      .replace(/<\s*br\s*\/?>/gi, '\n')
+      .replace(/<\/\s*(p|div|li|tr|h[1-6])\s*>/gi, '\n')
+      .replace(/<\s*li[^>]*>/gi, '\n- ')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n');
+
+  let previous: string;
+  let current = value;
+  do {
+    previous = current;
+    current = sanitizeOnce(current);
+  } while (current !== previous);
+
+  return current.trim();
 }
 
 /** Fields of a work item that say what to build or check, besides its description. */
