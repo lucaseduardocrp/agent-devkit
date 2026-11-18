@@ -229,6 +229,15 @@ export const ptBR = {
   SESSION_TOKEN_REQUIRED:
     'Tokens de acesso só podem ser criados a partir de uma sessão autenticada.',
   E2E_INVALID_URL: 'Informe uma URL http(s) válida e permitida para a aplicação.',
+  AGENT_WORKFLOW_PROVIDER_ACTION_REQUIRED: 'Restrições de provedor precisam do nome exato da ação.',
+  E2E_SCRIPT_PATH_INVALID: 'O caminho sai da pasta.',
+  E2E_STEP_FIX_UNAVAILABLE: 'Corrigir um passo com IA não está disponível.',
+  E2E_STEP_NOT_FOUND: 'O teste não tem esse passo.',
+  E2E_EXPLORATION_NOT_READY: 'A exploração não tem código até terminar.',
+  E2E_TESTS_EXIST: 'Esta execução já tem testes.',
+  E2E_STEP_FIX_NO_SCRIPT: 'O teste ainda não tem script para corrigir; reescreva-o.',
+  E2E_PRD_REQUIRED:
+    'Um documento de produto é necessário para planejar os testes: anexe um ao gerá-los.',
   E2E_CREATION_NOT_FOUND: 'Execução E2E não encontrada.',
   E2E_TEST_NOT_FOUND: 'Teste E2E não encontrado.',
   E2E_ALREADY_RUNNING: 'Esta execução E2E já está em andamento.',

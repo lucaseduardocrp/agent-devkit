@@ -125,7 +125,9 @@ try {
   await Promise.all([
     start('api', watchCommand, backend, { ready: watchReady }),
     start('mcp', watchCommand, mcp, { ready: watchReady }),
-    start('web', `npx vite --host 127.0.0.1 --port ${WEB_PORT} --strictPort`, frontend, { ready: /ready in/i }),
+    start('web', `npx vite --host 127.0.0.1 --port ${WEB_PORT} --strictPort`, frontend, {
+      ready: /ready in/i,
+    }),
   ]);
 } catch (error) {
   console.error(String(error));
