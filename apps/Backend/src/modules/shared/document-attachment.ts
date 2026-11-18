@@ -49,7 +49,25 @@ const HTML_LINK = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>
 
 /** A link in a description as a document attachment, or nothing when it is not a file to read. */
 function linkedFile(target: string, label: string, scope: AttachmentScope): Attachment | null {
-  const name = label.replace(/<[^>]*>/g, '').trim() || 'Linked file';
+  const name =
+    label
+      .replace(/[&<>"']/g, (ch) => {
+        switch (ch) {
+          case '&':
+            return '&amp;';
+          case '<':
+            return '&lt;';
+          case '>':
+            return '&gt;';
+          case '"':
+            return '&quot;';
+          case "'":
+            return '&#39;';
+          default:
+            return ch;
+        }
+      })
+      .trim() || 'Linked file';
   const adkId = ADK_FILE.exec(target)?.[1]?.toLowerCase();
   if (adkId) {
     return { id: adkId, name, kind: 'document', scope, source: 'adk', url: target.toLowerCase() };
