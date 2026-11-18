@@ -4,6 +4,16 @@ import type { TestCase } from './TestPlansView.js';
 
 const collapse = (text: string): string => text.replace(/\s+/g, ' ').trim();
 
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
 /**
  * The text of a description (Markdown, or the HTML of older cases): images go away and each block
  * ends in a line break.
@@ -13,7 +23,7 @@ export function richTextToPlain(html: string): string {
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/<img\b[^>]*>/gi, '')
     .replace(/<\/(?:p|div|h[1-6]|li|ul|ol)>|<br\s*\/?>/gi, '\n');
-  const text = String(new DOMParser().parseFromString(spaced, 'text/html').body.textContent);
+  const text = decodeHtmlEntities(spaced.replace(/<[^>]+>/g, ''));
   return text
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
