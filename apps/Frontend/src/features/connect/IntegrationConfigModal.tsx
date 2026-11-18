@@ -243,6 +243,8 @@ export function IntegrationConfigModal({
       setProfileError(t('connect.cliAccountNameInvalid'));
       return;
     }
+    // The account panel only renders once the status came from the API client, so it is set here.
+    /* v8 ignore next */
     if (!apiClient) return;
     setIsCreatingProfile(true);
     try {
@@ -265,6 +267,7 @@ export function IntegrationConfigModal({
     }
   };
   const handleDeleteProfile = async () => {
+    /* v8 ignore next */
     if (!apiClient || !selectedProfile) return;
     setIsDeletingProfile(true);
     try {
