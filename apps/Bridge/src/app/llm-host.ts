@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { pbkdf2Sync } from 'node:crypto';
 import { chmodSync, chownSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CliRegistry, type CliExecutor } from '../core/cli-registry.js';
@@ -179,7 +179,13 @@ export class LlmHost {
           `That is not a token ${CLI_SPECS[id].label} accepts. ${adapter.auth?.hint ?? ''}`.trim(),
         );
       }
-      const fingerprint = createHash('sha256').update(secret.trim()).digest('hex');
+      const fingerprint = pbkdf2Sync(
+        secret.trim(),
+        `llm-fingerprint:${identity}:${id}`,
+        210_000,
+        32,
+        'sha256',
+      ).toString('hex');
       if (credentials.getFingerprint(identity, id) !== fingerprint) {
         credentials.clear(identity, id);
         // A login file is written once and then kept fresh by the CLI: drop the old one.
