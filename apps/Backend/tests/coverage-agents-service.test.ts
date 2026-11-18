@@ -283,6 +283,24 @@ describe('AgentService workflow execution', () => {
     expect(secondCall.instruction).toContain('Other.');
   });
 
+  it('runs the agent once, without the workflow, when asked to skip it', async () => {
+    const { llm, complete } = llmReturning([{ text: 'only' }]);
+    const { service } = setup({ llm });
+    const main = await service.createAgent(ws, { name: 'Main', instructions: 'Main.' });
+    await service.setWorkflow(ws, workflow({ steps: [step('a'), step('b'), step('c')] }));
+    const result = await service.executeAgent(
+      ws,
+      main.id,
+      { prompt: 'Original request', skipWorkflow: true },
+      context,
+    );
+    expect(result.result).toBe('only');
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect((complete.mock.calls[0]?.[0] as { instruction: string }).instruction).not.toContain(
+      'etapa 1 de 3',
+    );
+  });
+
   it('omits usage when no step reported any', async () => {
     const { llm } = llmReturning([{ text: 'one' }]);
     const { service } = setup({ llm });
@@ -416,6 +434,79 @@ describe('AgentService execution details', () => {
     );
   });
 
+  it('answers a Brain question as the Brain researcher, without running the workflow', async () => {
+    const { llm, complete } = llmReturning([
+      { text: '{"standalone":"O que sabe?","keywords":[]}' },
+      { text: 'Resumo (Brain › Regras).' },
+    ]);
+    const other = { ...chunk, pageId: 'q', source: 'app://local?title=Outro', content: 'Outro.' };
+    const { service } = setup({ llm, knowledgeSearch: { search: async () => [chunk, other] } });
+    const agent = await service.createAgent(ws, {
+      name: 'Delivery',
+      instructions: 'Post comments.',
+    });
+    await service.setWorkflow(ws, workflow({ enabled: true, steps: [step('a'), step('b')] }));
+
+    const result = await service.askBrain(ws, agent.id, { prompt: 'O que sabe?' }, context);
+
+    expect(result.result).toBe('Resumo (Brain › Regras).');
+    // One call plans the search, one answers; the workflow steps are not run.
+    expect(complete).toHaveBeenCalledTimes(2);
+    const call = complete.mock.calls[1]?.[0] as { prompt: string; instruction: string };
+    expect(call.instruction).toContain('pesquisador do Brain');
+    expect(call.instruction).toContain('REGRA ABSOLUTA');
+    expect(call.instruction).not.toContain('Post comments.');
+    expect(call.instruction).not.toContain('Do a');
+    expect(call.prompt).toContain('Documentos do Brain encontrados para a pergunta (2)');
+    expect(call.prompt).toContain('[Documento do Brain: Outro]');
+    expect(call.prompt).toContain('Rule text.');
+  });
+
+  it('searches the Brain with the question rewritten from the conversation and its keywords', async () => {
+    const { llm, complete } = llmReturning([
+      {
+        text: '{"standalone":"Qual o prazo de aprovação de eventos?","keywords":["aprovar","prazo"]}',
+      },
+      { text: 'ok' },
+    ]);
+    const search = vi.fn(async (_query: string) => [chunk]);
+    const { service } = setup({ llm, knowledgeSearch: { search } });
+    const agent = await service.createAgent(ws, { name: 'Brain', instructions: 'Answer.' });
+
+    await service.askBrain(
+      ws,
+      agent.id,
+      { prompt: 'e o prazo?', knowledgeQuery: 'e o prazo?', knowledgeHistory: 'Você: aprovação?' },
+      context,
+    );
+
+    expect((complete.mock.calls[0]?.[0] as { prompt: string }).prompt).toContain(
+      'Você: aprovação?',
+    );
+    expect(search.mock.calls.map((call) => call[0])).toEqual([
+      'e o prazo?',
+      'Qual o prazo de aprovação de eventos?',
+      'aprovar',
+      'prazo',
+    ]);
+  });
+
+  it('still answers when the planner model fails', async () => {
+    const complete = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('planner down'))
+      .mockResolvedValue({ provider: 'fake', text: 'ok' });
+    const llm: LlmPort = { provider: 'fake', complete, async *stream() {} };
+    const search = vi.fn(async () => [chunk]);
+    const { service } = setup({ llm, knowledgeSearch: { search } });
+    const agent = await service.createAgent(ws, { name: 'Brain', instructions: 'Answer.' });
+
+    const result = await service.askBrain(ws, agent.id, { prompt: 'Regra?' }, context);
+
+    expect(result.result).toBe('ok');
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
   it('passes images along and adds the agent skills to its instruction', async () => {
     const { llm, complete } = llmReturning([{ text: 'seen' }, { text: 'seen again' }]);
     const { service } = setup({ llm });
@@ -434,11 +525,39 @@ describe('AgentService execution details', () => {
     });
     const images = [{ name: 'a.png', mimeType: 'image/png', data: 'AAAA' }];
     await service.executeAgent(ws, agent.id, { prompt: 'Review', images } as never, context);
-    await service.executeAgent(ws, agent.id, { prompt: 'Review', images: [] } as never, context);
+    await service.executeAgent(ws, agent.id, { prompt: 'Review', images: [] }, context);
     const withImages = complete.mock.calls[0]?.[0] as { images?: unknown; instruction: string };
     expect(withImages.images).toEqual(images);
     expect(withImages.instruction).toContain('<skill name="design">');
     expect(complete.mock.calls[1]?.[0]).not.toHaveProperty('images');
+  });
+
+  it('writes text files into the sandboxed prompt and hands PDFs only to a provider that reads them', async () => {
+    const text = {
+      name: 'rules.md',
+      mimeType: 'text/markdown',
+      data: Buffer.from('# Rules').toString('base64'),
+    };
+    const pdf = { name: 'spec.pdf', mimeType: 'application/pdf', data: 'JVBERi0=' };
+    const run = async (readsFiles: boolean) => {
+      const { llm, complete } = llmReturning([{ text: 'ok' }]);
+      const { service } = setup({ llm: { ...llm, readsFiles } });
+      const agent = await service.createAgent(ws, { name: 'Reader', instructions: 'Read.' });
+      await service.executeAgent(ws, agent.id, { prompt: 'Review', files: [text, pdf] }, context);
+      return complete.mock.calls[0]?.[0] as { prompt: string; files?: unknown };
+    };
+
+    const reading = await run(true);
+    const start = reading.prompt.indexOf('Attached file "rules.md"');
+    expect(start).toBeGreaterThan(0);
+    // Inside the envelope, like any other input.
+    expect(start).toBeLessThan(reading.prompt.lastIndexOf('</untrusted_input>'));
+    expect(reading.files).toEqual([pdf]);
+
+    const blind = await run(false);
+    expect(blind.prompt).toContain('Attached file "rules.md"');
+    expect(blind.prompt).toContain('1 attached document(s) could not be read');
+    expect(blind).not.toHaveProperty('files');
   });
 
   it('turns provider failures into application errors', async () => {

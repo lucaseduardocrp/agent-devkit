@@ -53,6 +53,30 @@ export function desktopStorage(): DesktopStorageBridge | undefined {
   return window.adkDesktop?.storage;
 }
 
+/** `web`: the web view's caches; `temp`: leftovers of interrupted runs; `browser`: the E2E browser. */
+export type DesktopCacheCategory = 'web' | 'temp' | 'browser';
+
+export interface DesktopCacheUsage {
+  readonly id: DesktopCacheCategory;
+  readonly bytes: number;
+}
+
+/**
+ * Files the desktop app keeps on this computer that can be deleted to free space. Implemented by
+ * the Electron main process (apps/Desktop/src/main/cache.ts); the data is never touched.
+ */
+export interface DesktopCacheBridge {
+  status(): Promise<DesktopOutcome<{ usage: DesktopCacheUsage[] }>>;
+  clear(
+    ids: DesktopCacheCategory[],
+  ): Promise<DesktopOutcome<{ freedBytes: number; failed: number }>>;
+}
+
+/** The cache calls of the desktop app; undefined in a browser or an older desktop build. */
+export function desktopCache(): DesktopCacheBridge | undefined {
+  return window.adkDesktop?.cache;
+}
+
 /** `safe` lets the agent edit files of the worktree only; `auto` also lets it run commands. */
 export type DesktopAutonomy = 'safe' | 'auto';
 
@@ -168,6 +192,8 @@ declare global {
       readonly apiUrl: string;
       /** Moves the data to a hosted PostgreSQL and back (Integrations > Storage). */
       readonly storage?: DesktopStorageBridge;
+      /** Deletes the cache files the app leaves on this computer (Settings > General). */
+      readonly cache?: DesktopCacheBridge;
       /** Executes Development sessions on this computer (Development > Code). */
       readonly development?: DesktopDevelopmentBridge;
     };

@@ -4,6 +4,7 @@ import { useI18n } from '../../lib/i18n/index.js';
 import type { TranslationKey } from '../../lib/i18n/types.js';
 import { Badge, type BadgeProps } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
+import { Textarea } from '../../components/ui/textarea.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import type { E2eSourceDocumentation, E2eSourceFlowOrigin } from './e2e-types.js';
 
@@ -20,15 +21,25 @@ export interface E2eSourceOverviewProps {
   readonly documentation: E2eSourceDocumentation | null;
   /** Why the documentation could not be written. */
   readonly error: string | null;
+  /** Keeps the overview the user edited; without it (or for a viewer) it cannot be edited. */
+  readonly onSaveOverview?: (overview: string) => Promise<void>;
 }
 
 /**
  * The documentation of the system kept by the Source: an overview and every flow of each feature
  * area, written by the AI from the Brain and from what the agent discovered in the application.
  */
-export function E2eSourceOverview({ documentation, error }: E2eSourceOverviewProps) {
+export function E2eSourceOverview({
+  documentation,
+  error,
+  onSaveOverview,
+}: E2eSourceOverviewProps) {
   const { t, formatDate } = useI18n();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  /** The overview being edited, with the text it started from to detect changes. */
+  const [draft, setDraft] = useState<{ original: string; value: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   if (!documentation)
     return (
@@ -51,6 +62,19 @@ export function E2eSourceOverview({ documentation, error }: E2eSourceOverviewPro
 
   const { areas, brainDocuments } = documentation;
   const flowCount = areas.reduce((total, area) => total + area.flows.length, 0);
+  /** Only reachable from the edit button, which exists with a way to save. */
+  const saveOverview = async (text: string) => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSaveOverview!(text);
+      setDraft(null);
+    } catch (reason) {
+      setSaveError(reason instanceof Error ? reason.message : t('e2e.sourcesOverviewSaveFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
   const toggle = (name: string) =>
     setCollapsed((current) => {
       const next = new Set(current);
@@ -73,23 +97,98 @@ export function E2eSourceOverview({ documentation, error }: E2eSourceOverviewPro
           </p>
         )}
         <section className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-5">
-          <h2 className="mb-2 font-semibold text-[var(--text-primary)]">
-            {t('e2e.sourcesOverview')}
-          </h2>
-          <MarkdownViewer
-            content={documentation.overview}
-            showModeToggle={false}
-            className="text-sm"
-          />
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold text-[var(--text-primary)]">{t('e2e.sourcesOverview')}</h2>
+            {onSaveOverview && !draft && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  setDraft({ original: documentation.overview, value: documentation.overview })
+                }
+              >
+                <i className="ti ti-pencil" aria-hidden="true" />
+                {t('e2e.sourcesOverviewEdit')}
+              </Button>
+            )}
+            {draft && (
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setDraft(null);
+                    setSaveError(null);
+                  }}
+                  disabled={saving}
+                >
+                  {t('e2e.cancel')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => void saveOverview(draft.value)}
+                  disabled={saving || !draft.value.trim() || draft.value === draft.original}
+                  isLoading={saving}
+                >
+                  <i className="ti ti-device-floppy" aria-hidden="true" />
+                  {t('e2e.sourcesOverviewSave')}
+                </Button>
+              </div>
+            )}
+          </div>
+          {saveError && (
+            <p className="mb-2 text-sm text-red-400" role="alert">
+              {saveError}
+            </p>
+          )}
+          {draft ? (
+            <Textarea
+              aria-label={t('e2e.sourcesOverviewLabel')}
+              value={draft.value}
+              onChange={(event) => setDraft({ ...draft, value: event.target.value })}
+              rows={22}
+              className="font-mono text-xs"
+            />
+          ) : (
+            <MarkdownViewer
+              content={documentation.overview}
+              showModeToggle={false}
+              className="text-sm"
+            />
+          )}
         </section>
 
         <section className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-5">
-          <h2 className="font-semibold text-[var(--text-primary)]">
-            {t('e2e.sourcesSystemFlows')}
-            <span className="ml-2 text-sm font-normal text-[var(--text-muted)]">
-              {t('e2e.sourcesDocStats', { areas: areas.length, flows: flowCount })}
-            </span>
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold text-[var(--text-primary)]">
+              {t('e2e.sourcesSystemFlows')}
+              <span className="ml-2 text-sm font-normal text-[var(--text-muted)]">
+                {t('e2e.sourcesDocStats', { areas: areas.length, flows: flowCount })}
+              </span>
+            </h2>
+            {areas.length > 0 && (
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setCollapsed(new Set())}
+                  disabled={collapsed.size === 0}
+                >
+                  <i className="ti ti-arrows-diagonal" aria-hidden="true" />
+                  {t('e2e.sourcesExpandAll')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setCollapsed(new Set(areas.map((area) => area.name)))}
+                  disabled={areas.every((area) => collapsed.has(area.name))}
+                >
+                  <i className="ti ti-arrows-diagonal-minimize-2" aria-hidden="true" />
+                  {t('e2e.sourcesCollapseAll')}
+                </Button>
+              </div>
+            )}
+          </div>
           {areas.length === 0 && (
             <p className="mt-2 text-sm text-[var(--text-muted)]">{t('e2e.sourcesNoAreas')}</p>
           )}

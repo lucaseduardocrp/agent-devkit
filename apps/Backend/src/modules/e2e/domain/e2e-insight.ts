@@ -49,7 +49,54 @@ export function normalizeVariables(
 
 /** The phase the agent is in; planning the tests belongs to the run, not to the exploration. */
 export type E2eExplorationStatus = 'signing_in' | 'exploring' | 'ready' | 'failed';
-export type E2eExplorationAction = 'navigate' | 'sign_in' | 'click';
+export type E2eExplorationAction =
+  'navigate' | 'sign_in' | 'click' | 'type' | 'select' | 'press' | 'scroll' | 'note';
+
+/**
+ * What a `note` of the exploration log says: its target is one of these codes, optionally followed
+ * by `:detail` (a number). The screen translates them.
+ */
+export const EXPLORE_NOTES = [
+  'sign_in_no_account',
+  'sign_in_no_form',
+  'sign_in_failed',
+  'not_rendered',
+  'stopped_no_targets',
+  'stopped_steps',
+  'stopped_pages',
+  'stopped_time',
+  'agent_done',
+  'agent_failed',
+  'agent_stuck',
+  'agent_unavailable',
+  'agent_plan',
+] as const;
+
+/** Where the extra context of an exploration comes from. */
+export const EXPLORATION_CONTEXT_KINDS = ['pbi', 'brain', 'issue'] as const;
+export type E2eExplorationContextKind = (typeof EXPLORATION_CONTEXT_KINDS)[number];
+/** Most documents of context one exploration takes. */
+export const MAX_EXPLORATION_CONTEXT = 20;
+
+/** A PBI, Brain document or issue the user chose as context of an exploration. */
+export interface E2eExplorationContextRef {
+  readonly kind: E2eExplorationContextKind;
+  /** Id of the PBI or issue; the document id (source and page) for the Brain. */
+  readonly id: string;
+  readonly title: string;
+}
+
+/** The agent the user picked to explore; its instructions and skills are read when it runs. */
+export interface E2eExplorationAgentRef {
+  readonly id: string;
+  readonly name: string;
+}
+
+/** A context item with the text the agent reads; `spec` is the specification of the run itself. */
+export interface E2eExplorationContextDocument extends Omit<E2eExplorationContextRef, 'kind'> {
+  readonly kind: E2eExplorationContextKind | 'spec';
+  readonly content: string;
+}
 
 export interface E2eExplorationPage {
   /** Position in the exploration, starting at 1; also names its screenshot. */
@@ -60,6 +107,8 @@ export interface E2eExplorationPage {
   /** Names of the main controls of the page. */
   readonly elements: readonly string[];
   readonly hasScreenshot: boolean;
+  /** The flow of the agent's plan this capture is the evidence of; `title` is then its name. */
+  readonly flow?: string;
 }
 
 export interface E2eExplorationLogEntry {
@@ -69,7 +118,18 @@ export interface E2eExplorationLogEntry {
   readonly target: string;
   /** What the agent saw after the action. */
   readonly result: string | null;
+  /** Why the AI agent did it, in its own words (or what went wrong, for a note). */
+  readonly reason?: string;
+  /** A picture of the screen once the action was done: the step of the replay. */
+  readonly hasScreenshot?: boolean;
+  /** The address the browser was on after the action. */
+  readonly url?: string;
+  /** Which browser did it, when several explored at once (1-based). */
+  readonly worker?: number;
 }
+
+/** Most actions of one exploration that keep a picture. */
+export const MAX_EXPLORATION_STEP_SHOTS = 250;
 
 export const MAX_EXPLORATION_DESCRIPTION = 2_000;
 
@@ -79,6 +139,13 @@ export interface E2eExploration {
   readonly description?: string | null;
   /** True when the exploration replaces the Source of the workspace when it ends well. */
   readonly source?: boolean;
+  /** The PBIs, Brain documents and issues that gave the agent context. */
+  readonly context?: readonly E2eExplorationContextRef[];
+  /**
+   * The agent the user chose to explore, with its instructions and skills. Absent when the
+   * exploration used the agent of the run.
+   */
+  readonly agent?: E2eExplorationAgentRef;
   /** Where the script ended up: "database" or "source". Scripts never go to the repository. */
   readonly savedTo?: string | null;
   /** Why the script could not be kept (for instance a failed commit); null when it was. */
@@ -93,6 +160,14 @@ export interface E2eExploration {
   readonly log: readonly E2eExplorationLogEntry[];
   /** True while a recent frame of the agent's browser is available. */
   readonly hasLiveFrame: boolean;
+  /** The recording of each browser that explored, once the exploration ends. */
+  readonly videos?: readonly E2eExplorationVideo[];
+}
+
+/** The recording of one browser of an exploration; `worker` is 1 when a single one explored. */
+export interface E2eExplorationVideo {
+  readonly worker: number;
+  readonly mimeType: 'video/mp4' | 'video/webm';
 }
 
 /**
@@ -125,11 +200,32 @@ export function explorationPrefix(creation: CreationRef): string {
 export function explorationStateKey(creation: CreationRef): string {
   return `${explorationPrefix(creation)}/state.json`;
 }
+/** The text of the context documents; kept outside the exploration, which each run replaces. */
+export function explorationContextKey(creation: CreationRef): string {
+  return `${creation.workspaceId}/${creation.id}/exploration-context.json`;
+}
 export function explorationLiveKey(creation: CreationRef): string {
   return `${explorationPrefix(creation)}/live.jpg`;
 }
 export function explorationPageKey(creation: CreationRef, index: number): string {
   return `${explorationPrefix(creation)}/page-${String(index).padStart(2, '0')}.jpg`;
+}
+/** Picture of an action of the log; `index` is its 1-based position in the log. */
+export function explorationStepKey(creation: CreationRef, index: number): string {
+  return `${explorationPrefix(creation)}/step-${String(index).padStart(3, '0')}.jpg`;
+}
+/** Recording of a browser of the exploration (1-based); replaced by the next exploration. */
+export function explorationVideoKey(
+  creation: CreationRef,
+  worker: number,
+  mimeType: E2eExplorationVideo['mimeType'],
+): string {
+  return `${explorationPrefix(creation)}/video-${worker}.${mimeType === 'video/mp4' ? 'mp4' : 'webm'}`;
+}
+
+/** The Playwright code the user saved for the exploration; replaced by the next exploration. */
+export function explorationCodeKey(creation: CreationRef): string {
+  return `${explorationPrefix(creation)}/script.spec.ts`;
 }
 
 // --- Action trail: what a test touched while it ran, page by page. ---

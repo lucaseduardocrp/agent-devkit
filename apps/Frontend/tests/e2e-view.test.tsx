@@ -2,6 +2,7 @@ import { act, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { E2eView } from '../src/features/e2e/E2eView.js';
 import type { ApiClient } from '../src/lib/api-client.js';
+import { pickRepository } from './helpers/pick-repository.js';
 import type {
   E2eCreationSummary,
   E2eTestDetail,
@@ -20,6 +21,7 @@ function testSummary(overrides: Partial<E2eTestSummary> = {}): E2eTestSummary {
     priority: 'high',
     beforeRunInstructions: null,
     afterRunInstructions: null,
+    scriptInstructions: null,
     scriptPath: 'tests/e2e/tc001-access.spec.ts',
     status: 'passed',
     error: null,
@@ -117,6 +119,8 @@ function api(list: readonly E2eCreationSummary[] | Error = [creation()]) {
     pullE2eCreation: vi.fn().mockResolvedValue({ linked: 2, imported: 1, missing: 0 }),
   };
 }
+
+const REPOSITORY_NAMES = { 'github:42': 'acme/demo-app' };
 
 const asClient = (value: ReturnType<typeof api>) => value as unknown as ApiClient;
 
@@ -461,10 +465,7 @@ describe('E2eView', () => {
     );
     fireEvent.change(view.getByLabelText('Nome da execução'), { target: { value: 'new run' } });
     fireEvent.change(view.getByLabelText('Ou cole o conteúdo'), { target: { value: 'PRD' } });
-    await waitFor(() =>
-      expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBe(2),
-    );
-    fireEvent.change(view.getByLabelText('Repositório'), { target: { value: 'github:42' } });
+    await pickRepository(REPOSITORY_NAMES, 'github:42');
     await waitFor(() =>
       expect((view.getByLabelText('Branch base') as HTMLSelectElement).value).toBe('main'),
     );
@@ -472,7 +473,8 @@ describe('E2eView', () => {
       target: { value: 'https://example.com' },
     });
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
-    expect(await view.findByRole('table', { name: 'new run' })).toBeInTheDocument();
+    // The new run opens on its own page, where its tests are generated.
+    await waitFor(() => expect(client.getE2eCreation).toHaveBeenCalledWith('c9'));
     expect(view.queryByRole('table', { name: 'ama' })).toBeNull();
   });
 

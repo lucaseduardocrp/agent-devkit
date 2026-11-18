@@ -228,7 +228,11 @@ describe('AiKnowledgeTestPlanGenerator with an agent workflow', () => {
     expect(executeAgent).toHaveBeenCalledWith(
       'ws-1',
       'chosen',
-      expect.objectContaining({ includeKnowledge: false, llmProvider: 'gemini' }),
+      expect.objectContaining({
+        includeKnowledge: false,
+        skipWorkflow: true,
+        llmProvider: 'gemini',
+      }),
       context,
     );
   });
@@ -284,7 +288,8 @@ describe('AiKnowledgeTestPlanGenerator with an agent workflow', () => {
       hopeless.generator.generate({ prompt: requirement }, context),
     ).rejects.toMatchObject({ code: 'AGENT_WORKFLOW_OUTPUT_INVALID', statusCode: 502 });
     expect(hopeless.executeAgent).toHaveBeenCalledTimes(2);
-    // An answer that is not JSON at all is not worth a second try.
+    // An answer that is not JSON at all is not worth a second try, and the reason is logged.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const garbage = build({ answers: ['not json at all'], stepAgentId: 'a' });
     await expect(
       garbage.generator.generate({ prompt: requirement }, context),
@@ -292,6 +297,30 @@ describe('AiKnowledgeTestPlanGenerator with an agent workflow', () => {
       code: 'AGENT_WORKFLOW_OUTPUT_INVALID',
     });
     expect(garbage.executeAgent).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not be read'));
+    warn.mockRestore();
+  });
+
+  it('keeps the usable cases when only some of the answer is rejected', async () => {
+    const generic = {
+      title: 'Generic',
+      description: 'Generic',
+      steps: [{ action: 'Execute the test.', expected: 'The report is displayed.' }],
+    };
+    const good = JSON.parse(validPlan)[0];
+    const mixed = JSON.stringify([good, generic]);
+    // Both attempts hold one weak case: the good one is still returned, not an error.
+    const { generator, executeAgent } = build({ answers: [mixed, mixed], stepAgentId: 'a' });
+    const result = await generator.generate({ prompt: requirement }, context);
+    expect(result.plans.map((plan) => plan.title)).toEqual(['Report filter']);
+    expect(executeAgent).toHaveBeenCalledTimes(2);
+    // A fully clean second answer wins over the partial first one.
+    const retry = build({ answers: [mixed, JSON.stringify([good, { ...good, title: 'Two' }])] });
+    const second = await retry.generator.generate(
+      { prompt: requirement, agentId: 'chosen' },
+      context,
+    );
+    expect(second.plans).toHaveLength(2);
   });
 
   it('uses the normal path when the workflow is off or has no steps', async () => {

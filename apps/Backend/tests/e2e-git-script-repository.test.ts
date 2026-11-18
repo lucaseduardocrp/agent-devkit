@@ -14,6 +14,8 @@ function setup(
       settings?: Record<string, unknown>;
     }[];
     secrets?: Record<string, string | null>;
+    /** The secrets were saved under another encryption key, so reading them throws. */
+    unreadableSecrets?: boolean;
   } = {},
 ) {
   const calls: { url: string; method: string; body?: unknown; headers: Record<string, string> }[] =
@@ -54,7 +56,9 @@ function setup(
       })),
     ),
     getDecryptedSecret: vi.fn((_ws: string, _category: string, providerId: string) =>
-      Promise.resolve(options.secrets ? (options.secrets[providerId] ?? null) : 'tok'),
+      options.unreadableSecrets
+        ? Promise.reject(new Error('Failed to decrypt integration secret.'))
+        : Promise.resolve(options.secrets ? (options.secrets[providerId] ?? null) : 'tok'),
     ),
   } as unknown as IntegrationsService;
   return { repo: new GitScriptRepository(integrations, fetcher as typeof fetch), calls };
@@ -407,6 +411,18 @@ describe('GitScriptRepository – connections', () => {
     expect(await repo.fileUrl('ws', azure, 'a.ts')).toBeNull();
   });
 
+  it('warns when a saved token cannot be decrypted instead of listing nothing silently', async () => {
+    const { repo } = setup([], {
+      integrations: [{ providerId: 'azure_devops_wiki', settings: { organization: 'org' } }],
+      // Saved under another encryption key (e.g. a cloud database opened without it).
+      unreadableSecrets: true,
+    });
+    expect(await repo.listRepositories('ws')).toEqual({
+      repositories: [],
+      warnings: [{ provider: 'azure_devops', code: 'CREDENTIALS_UNREADABLE' }],
+    });
+  });
+
   it('ignores disabled or incomplete integrations and keeps explicit auth schemes', async () => {
     const none = setup([], {
       integrations: [
@@ -558,5 +574,24 @@ describe('GitScriptRepository – commits of several files', () => {
       (_url, init) => (init.method === 'POST' ? json({}, 201) : undefined),
     ]);
     expect(await silent.repo.commitFiles('ws', azure, changes, 'update')).toBeNull();
+  });
+});
+
+describe('GitScriptRepository with a local folder', () => {
+  const local: E2eRepositoryRef = {
+    provider: 'local',
+    id: 'D:\Projects\finance-app-demo',
+    name: 'finance-app-demo',
+    branch: 'main',
+    path: 'tests/e2e',
+  };
+
+  it('leaves folders of this computer to the local repository', async () => {
+    const { repo } = setup([]);
+    await expect(repo.listFiles('ws', local)).rejects.toMatchObject({
+      code: 'E2E_REPOSITORY_NOT_CONFIGURED',
+      statusCode: 409,
+    });
+    expect(await repo.fileUrl('ws', local, 'tests/e2e/a.spec.ts')).toBeNull();
   });
 });

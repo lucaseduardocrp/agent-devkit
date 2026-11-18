@@ -34,7 +34,7 @@ import {
   loadRunnerIdentity,
   runnerHome,
 } from '../e2e/local-runner/playwright-setup.js';
-import { runLocally } from '../e2e/local-runner/run-command.js';
+import { DEFAULT_PARALLEL, runLocally } from '../e2e/local-runner/run-command.js';
 import { ApiTestRunnerAgent, formatApiRunnerEvent } from '../apitests/runner-agent.js';
 import { Git } from '../development/git.js';
 import { runStreaming } from '../development/process.js';
@@ -60,16 +60,17 @@ Usage:
                                    calls (APIs, SSO) with Cloudflare Tunnel until Ctrl+C
   devkit bridge --origin https://your-adk.vercel.app
                                    Let the ADK web app control local tunnels
-  devkit runner [--run ID] [--base-url URL]
+  devkit runner [--run ID] [--base-url URL] [--parallel N]
                                    Run the browser of your local E2E runs on this computer
-                                   (outbound HTTPS only, no tunnel) until Ctrl+C
+                                   (outbound HTTPS only, no tunnel) until Ctrl+C. The tests
+                                   of a run use up to N browsers at once (default 3).
   devkit develop [--repo PATH] [--session ID] [--autonomy safe|auto] [--worktrees DIR] [--any-repo]
                                    Execute your Development sessions here: one git worktree and
                                    one coding agent (claude, codex or gemini) per session, with
                                    progress and the diff sent to ADK for review, until Ctrl+C.
                                    --autonomy auto also lets the agent run commands.
   devkit e2e setup                 Download Chromium ahead of time (otherwise done on first use)
-  devkit e2e run [ID] [--test TC001] [--base-url URL] [--scripts DIR] [--set-local]
+  devkit e2e run [ID] [--test TC001] [--base-url URL] [--scripts DIR] [--set-local] [--parallel N]
                                    Start a run, execute it here and send the results,
                                    videos and screenshots to ADK. Defaults come from
                                    ./adk-e2e.json ({ "run", "baseUrl", "scripts" }).
@@ -124,6 +125,15 @@ async function ask(question: string, hidden = false): Promise<string> {
   return answer.trim();
 }
 
+/** `--parallel N`: how many browsers run tests at once; 3 when not given. */
+function parallelOption(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_PARALLEL;
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > 16)
+    throw new Error('Use --parallel with a whole number from 1 to 16.');
+  return count;
+}
+
 async function main(): Promise<void> {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -146,6 +156,7 @@ async function main(): Promise<void> {
       'base-url': { type: 'string' },
       scripts: { type: 'string' },
       'set-local': { type: 'boolean' },
+      parallel: { type: 'string' },
       config: { type: 'string' },
       'hub-url': { type: 'string' },
       category: { type: 'string' },
@@ -228,7 +239,11 @@ async function main(): Promise<void> {
         onEvent: (event) => say(formatApiRunnerEvent(event)),
       });
       await Promise.all([
-        agent.serve({ ...(values.run ? { creationId: values.run } : {}), signal }),
+        agent.serve({
+          ...(values.run ? { creationId: values.run } : {}),
+          parallel: parallelOption(values.parallel),
+          signal,
+        }),
         values.run ? Promise.resolve() : apiTests.serve({ signal }),
       ]);
       return;
@@ -295,6 +310,7 @@ async function main(): Promise<void> {
           ...(values.test ? { test: values.test } : {}),
           ...(scripts ? { scriptsDir: scripts } : {}),
           ...(values['set-local'] ? { setLocal: true } : {}),
+          ...(values.parallel ? { parallel: parallelOption(values.parallel) } : {}),
           signal,
         },
         say,

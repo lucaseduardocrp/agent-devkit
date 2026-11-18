@@ -229,8 +229,9 @@ describe('loadImageAttachments', () => {
   it('loads stored files of generic attachments after verifying their content', async () => {
     const store = new InMemoryE2eArtifactStore();
     const save = async (id: string, meta: Record<string, unknown> | null, content?: Buffer) => {
-      if (meta) await store.put(attachmentMetaKey('ws', id), Buffer.from(JSON.stringify(meta)));
-      if (content) await store.put(attachmentContentKey('ws', id), content);
+      if (meta)
+        await store.put(attachmentMetaKey('ws', id, 'image'), Buffer.from(JSON.stringify(meta)));
+      if (content) await store.put(attachmentContentKey('ws', id, 'image'), content);
     };
     const ids = [1, 2, 3, 4, 5, 6].map((n) => `${n}0000000-0000-4000-8000-000000000000`);
     await save(ids[0]!, { kind: 'image', mimeType: 'image/png' }, PNG);

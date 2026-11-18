@@ -1,9 +1,23 @@
-import { fireEvent, render, waitFor, within } from '@testing-library/react';
-import { exportFormatSelect } from './helpers/export-format';
+import { fireEvent, render, type RenderResult, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestPlansView } from '../src/features/testplans/TestPlansView.js';
 import { ApiClient } from '../src/lib/api-client.js';
 import type { SavedTestPlanDto, TestSuiteDto } from '../src/lib/api-client.js';
+
+/** The export format lives in the CSV settings dialog: open it before choosing a format. */
+function openCsvSettings(ui: Pick<RenderResult, 'getByTestId'>) {
+  fireEvent.click(ui.getByTestId('btn-csv-configuration'));
+}
+
+/** Chooses the export format in the CSV settings dialog and closes it again. */
+function chooseExportFormat(
+  ui: Pick<RenderResult, 'getByTestId' | 'getByLabelText' | 'getByRole'>,
+  value: 'azure' | 'standard',
+) {
+  openCsvSettings(ui);
+  fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value } });
+  fireEvent.click(ui.getByRole('button', { name: 'Fechar' }));
+}
 
 const ISO = '2026-09-18T00:00:00.000Z';
 const LOAD_FAILED = 'Falha ao carregar Test Plans.';
@@ -178,7 +192,7 @@ describe('TestPlansView suite failures', () => {
     vi.mocked(api.getAgents).mockRejectedValue(new Error('offline'));
     const ui = view(api);
     await waitFor(() => expect(api.getAgents).toHaveBeenCalled());
-    expect(ui.getByTestId('tab-create-test-plan')).toBeInTheDocument();
+    expect(ui.getByTestId('btn-new-test-plan')).toBeInTheDocument();
   });
 
   it('describes the work items linked when publishing a suite', async () => {
@@ -279,7 +293,7 @@ describe('TestPlansView exports that fail', () => {
     createUrl.mockImplementationOnce(() => {
       throw 'Blob unsupported';
     });
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
+    chooseExportFormat(ui, 'standard');
     for (const expected of ['Blob unsupported', CSV_FAILED]) {
       fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
       fireEvent.click(ui.getByRole('button', { name: 'Exportar CSV' }));
@@ -293,7 +307,7 @@ describe('TestPlansView exports that fail', () => {
       plans: [plan({ title: '   ', suiteId: 'suite-1' })],
     });
     const ui = await openTree(api);
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
+    chooseExportFormat(ui, 'standard');
     fireEvent.click(ui.getByRole('button', { name: 'Ações: Regression' }));
     fireEvent.click(ui.getByRole('button', { name: 'Exportar suite (.zip)' }));
     await waitFor(() => expect(anchorClick).toHaveBeenCalledOnce());

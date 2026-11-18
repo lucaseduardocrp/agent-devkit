@@ -254,3 +254,67 @@ describe('TestSuiteTree localization', () => {
     expect(view.getByRole('button', { name: 'Ações: Regression' })).toBeInTheDocument();
   });
 });
+
+describe('TestSuiteTree search', () => {
+  const suites = [
+    suite({ id: 's-pay', name: 'Pagamentos' }),
+    suite({ id: 's-pix', name: 'Pix', parentId: 's-pay' }),
+    suite({ id: 's-login', name: 'Login' }),
+  ];
+  const plans = [
+    plan({
+      id: 'p-card',
+      title: 'Cartão de crédito',
+      suiteId: 's-pay',
+      plans: [
+        { title: 'Aprovar compra', description: '', steps: [] },
+        { title: 'Recusar compra', description: '', steps: [] },
+      ],
+    }),
+    plan({ id: 'p-pix', title: 'Chave Pix', suiteId: 's-pix' }),
+    plan({ id: 'p-sso', title: 'SSO', suiteId: 's-login' }),
+  ];
+  const onOpenCase = vi.fn();
+  const search = (view: ReturnType<typeof setup>, value: string) =>
+    fireEvent.change(view.getByTestId('test-suite-tree-search'), { target: { value } });
+
+  it('shows no search box while there is nothing to search', () => {
+    expect(setup().queryByTestId('test-suite-tree-search')).toBeNull();
+  });
+
+  it('keeps a suite that matches by name with everything inside it, and hides the others', () => {
+    const view = setup({ suites, plans, onOpenCase });
+    search(view, 'pagamentos');
+    expect(view.getByTestId('saved-plan-card-p-card')).toBeInTheDocument();
+    expect(view.getByTestId('saved-plan-card-p-pix')).toBeInTheDocument();
+    expect(view.queryByRole('button', { name: 'Login' })).toBeNull();
+  });
+
+  it('finds a plan by title, ignoring case and accents, and opens the suites on the way', () => {
+    const view = setup({ suites, plans, onOpenCase });
+    search(view, 'CARTAO');
+    expect(view.getByTestId('saved-plan-card-p-card')).toBeInTheDocument();
+    expect(view.queryByTestId('saved-plan-card-p-pix')).toBeNull();
+    expect(view.queryByTestId('saved-plan-card-p-sso')).toBeNull();
+  });
+
+  it('finds a test case and lists only the cases that matched', () => {
+    const view = setup({ suites, plans, onOpenCase });
+    search(view, 'recusar');
+    expect(view.getByTestId('tree-case-p-card-1')).toBeInTheDocument();
+    expect(view.queryByTestId('tree-case-p-card-0')).toBeNull();
+    fireEvent.click(view.getByTestId('tree-case-p-card-1'));
+    expect(onOpenCase).toHaveBeenCalledWith(plans[0], 1);
+  });
+
+  it('says nothing matched, and a clear button or Escape brings the tree back', () => {
+    const view = setup({ suites, plans, onOpenCase });
+    search(view, 'zzz');
+    expect(view.getByText('No suite, plan or test case matches "zzz".')).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: 'Clear search' }));
+    expect(view.getByRole('button', { name: 'Login' })).toBeInTheDocument();
+    search(view, 'pix');
+    fireEvent.keyDown(view.getByTestId('test-suite-tree-search'), { key: 'Escape' });
+    expect(view.getByRole('button', { name: 'Login' })).toBeInTheDocument();
+  });
+});

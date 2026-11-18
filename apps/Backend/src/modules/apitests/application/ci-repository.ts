@@ -33,7 +33,11 @@ export interface CiRepositoryGateway {
     repositories: readonly CiRepository[];
     warnings: readonly {
       readonly provider: CiProvider;
-      readonly code: 'CREDENTIALS_MISSING' | 'NOT_CONFIGURED' | 'PROVIDER_UNAVAILABLE';
+      readonly code:
+        | 'CREDENTIALS_MISSING'
+        | 'CREDENTIALS_UNREADABLE'
+        | 'NOT_CONFIGURED'
+        | 'PROVIDER_UNAVAILABLE';
     }[];
   }>;
   listBranches(

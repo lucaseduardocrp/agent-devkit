@@ -1,9 +1,23 @@
-import { fireEvent, render, waitFor, within } from '@testing-library/react';
-import { exportFormatSelect } from './helpers/export-format';
+import { fireEvent, render, type RenderResult, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestPlansView } from '../src/features/testplans/TestPlansView.js';
 import { ApiClient } from '../src/lib/api-client.js';
 import type { SavedTestPlanDto, TestSuiteDto } from '../src/lib/api-client.js';
+
+/** The export format lives in the CSV settings dialog: open it before choosing a format. */
+function openCsvSettings(ui: Pick<RenderResult, 'getByTestId'>) {
+  fireEvent.click(ui.getByTestId('btn-csv-configuration'));
+}
+
+/** Chooses the export format in the CSV settings dialog and closes it again. */
+function chooseExportFormat(
+  ui: Pick<RenderResult, 'getByTestId' | 'getByLabelText' | 'getByRole'>,
+  value: 'azure' | 'standard',
+) {
+  openCsvSettings(ui);
+  fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value } });
+  fireEvent.click(ui.getByRole('button', { name: 'Fechar' }));
+}
 
 const ISO = '2026-09-18T00:00:00.000Z';
 
@@ -122,7 +136,7 @@ afterEach(() => {
 });
 
 describe('TestPlansView tab navigation', () => {
-  it('moves between the saved and create tabs from the header and the tabs', async () => {
+  it('moves between the saved and create panels from the header buttons', async () => {
     const api = client({ plans: [plan()] });
     const ui = view(api);
 
@@ -133,12 +147,11 @@ describe('TestPlansView tab navigation', () => {
 
     fireEvent.click(ui.getByTestId('btn-view-saved-plans'));
     expect(ui.getByTestId('panel-saved-plans')).toBeInTheDocument();
-
-    fireEvent.click(ui.getByTestId('tab-create-test-plan'));
-    expect(ui.getByTestId('panel-create-plan')).toBeInTheDocument();
-
-    fireEvent.click(ui.getByTestId('tab-saved-test-plans'));
-    expect(ui.getByTestId('panel-saved-plans')).toBeInTheDocument();
+    // The tab strip is gone: the header buttons are the only way between the two panels.
+    expect(ui.queryByTestId('tab-saved-test-plans')).not.toBeInTheDocument();
+    expect(ui.queryByTestId('tab-create-test-plan')).not.toBeInTheDocument();
+    // The saved plans total sits in the card header, next to its title.
+    expect(ui.getByTestId('test-suite-tree-count')).toHaveTextContent('1');
   });
 
   it('retries loading the saved plans after a failure', async () => {
@@ -427,7 +440,7 @@ describe('TestPlansView suite export', () => {
     const ui = view(api);
 
     await ui.findByTestId('test-suite-tree');
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
+    chooseExportFormat(ui, 'standard');
     fireEvent.click(ui.getByRole('button', { name: 'Ações: Regression' }));
     fireEvent.click(ui.getByRole('button', { name: 'Exportar suite (.zip)' }));
 
@@ -458,7 +471,7 @@ describe('TestPlansView suite export', () => {
     const ui = view(api);
 
     await ui.findByTestId('test-suite-tree');
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
+    chooseExportFormat(ui, 'standard');
     fireEvent.click(ui.getByRole('button', { name: 'Ações: Regression' }));
     fireEvent.click(ui.getByRole('button', { name: 'Exportar suite (.zip)' }));
 
@@ -471,7 +484,7 @@ describe('TestPlansView suite export', () => {
     const ui = view(api);
 
     await ui.findByTestId('test-suite-tree');
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
+    chooseExportFormat(ui, 'standard');
     fireEvent.click(ui.getByRole('button', { name: 'Ações: Regression' }));
     fireEvent.click(ui.getByRole('button', { name: 'Exportar suite (.zip)' }));
 
@@ -523,13 +536,14 @@ describe('TestPlansView export settings', () => {
     const ui = view(api);
 
     await ui.findByTestId('panel-saved-plans');
-    fireEvent.change(exportFormatSelect(ui), {
+    openCsvSettings(ui);
+    fireEvent.change(ui.getByLabelText('Formato de exportação'), {
       target: { value: 'standard' },
     });
 
     expect(ui.queryByLabelText('Area Path')).not.toBeInTheDocument();
 
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'azure' } });
+    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'azure' } });
     await waitFor(() => expect(ui.getByLabelText('Area Path')).toBeInTheDocument());
   });
 
@@ -541,10 +555,11 @@ describe('TestPlansView export settings', () => {
     const ui = view(api);
 
     await ui.findByTestId('panel-saved-plans');
-    fireEvent.change(exportFormatSelect(ui), {
+    openCsvSettings(ui);
+    fireEvent.change(ui.getByLabelText('Formato de exportação'), {
       target: { value: 'standard' },
     });
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'azure' } });
+    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'azure' } });
 
     fireEvent.click(await ui.findByRole('button', { name: 'Recarregar opções do Azure' }));
     await waitFor(() => expect(load.mock.calls.length).toBeGreaterThan(1));

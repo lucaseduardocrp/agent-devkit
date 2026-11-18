@@ -1,4 +1,11 @@
 import { ApplicationError } from '../../../shared/errors.js';
+import { explorationCode } from '../domain/e2e-exploration-code.js';
+import {
+  contextRefs,
+  saveExplorationContext,
+  type E2eContextReader,
+  type E2eContextRequest,
+} from './e2e-context.js';
 import type { RequestContext } from '../../../shared/context.js';
 import { encryptSecret } from '../../../shared/encryption.js';
 import { decryptAccessToken, encryptAccessToken, type AccessServiceToken } from './access-token.js';
@@ -9,9 +16,12 @@ import {
   HOOK_INSTRUCTION_FIELDS,
   HOOK_LABELS,
   hookFilePath,
+  MAX_RESULT_NOTE_LENGTH,
   normalizeScriptFolder,
   normalizeLocalBrowserOrigin,
   normalizeTargetUrl,
+  buildRegenerationFeedback,
+  effectiveStepStatus,
   scriptFilePath,
   snapshotKey,
   targetUrl,
@@ -20,22 +30,28 @@ import {
   type E2eCreationStatus,
   type E2eExecutionTarget,
   type E2eReportingTarget,
+  type E2eSavedCaseLink,
   type E2eStepResult,
   type E2eMode,
   type E2ePriority,
-  type E2eRepositoryProvider,
+  type E2eRepositoryLocation,
   type E2eRepositoryRef,
   type E2eScope,
   type E2eScriptKind,
   type E2eHookKind,
   type E2eTestCase,
   type E2eTestStatus,
+  type RegenerationFeedback,
 } from '../domain/e2e.js';
 import {
   buildActionMap,
   explorationLiveKey,
+  MAX_EXPLORATION_CONTEXT,
   MAX_EXPLORATION_DESCRIPTION,
   explorationPageKey,
+  explorationCodeKey,
+  explorationVideoKey,
+  explorationStepKey,
   liveFrameKey,
   liveLabelKey,
   trailImageKey,
@@ -56,14 +72,26 @@ import {
 } from '../domain/e2e-source.js';
 import type { z } from 'zod';
 import type { KnowledgeSearchPort } from '../../knowledge/application/knowledge-search.js';
-import { SOURCE_RESPONSE_FORMAT, sourceDocumentationSchema, sourceRules } from './e2e-author.js';
+import {
+  SOURCE_RESPONSE_FORMAT,
+  sourceDocumentationSchema,
+  sourceRules,
+  type E2eAuthor,
+  type E2eCaseChatMessage,
+  type E2eCaseDraft,
+  type E2eCaseRevision,
+} from './e2e-author.js';
+import { attachmentFileUrl } from '../../shared/attachment.js';
+import { fileOwner, syncItemFilesSafely } from '../../shared/attachment-files.js';
+import { loadImageAttachments } from '../../shared/image-attachment.js';
+import { evidenceSteps, meetsCriteria, toLlmImages } from './e2e-judge.js';
 import { brainContext, searchSourceBrain } from './e2e-brain.js';
 import type { E2eEnvironmentService } from './e2e-environments.js';
 import { ExplorationRecorder, readExploration } from './e2e-exploration.js';
 import type { E2eScriptRepository } from './script-repository.js';
 import type { E2eArtifactStore } from './artifact-store.js';
 import type { E2eSnapshot, E2eVideoTranscoder } from './e2e-runner.js';
-import type { E2eCreationSettings, E2eStore, NewE2eTestCase } from './e2e-store.js';
+import type { E2eCreationSettings, E2eStore, E2eTestChanges, NewE2eTestCase } from './e2e-store.js';
 import {
   describeStep,
   htmlToText,
@@ -92,6 +120,19 @@ export type E2ePlanning = 'server' | 'host';
 export const MAX_SCRIPT_LENGTH = 60_000;
 
 /** A plan written by the MCP host: test cases with their full Playwright specs. */
+/** How the user wants a spec rewritten. */
+export interface E2eRegenerationGuidance {
+  /** Instructions and extra information for the AI; empty clears the ones saved on the test. */
+  readonly instructions?: string;
+  /** Starts from the spec being replaced and what its last run produced. */
+  readonly useLastRun?: boolean;
+  /** How the user decides the test passes; empty clears it. Kept on the test for every run. */
+  readonly successCriteria?: string;
+}
+
+/** What the user decides about the result of a finished test: pass it, fail it, or go back to the run's. */
+export type E2eResultDecision = 'passed' | 'failed' | 'run';
+
 export interface HostPlanInput {
   readonly summary?: string;
   readonly tests: readonly {
@@ -107,6 +148,11 @@ export interface HostPlanInput {
     readonly afterRun?: string | null;
     /** Keeps the test linked to its test management case (as returned by the brief). */
     readonly externalCase?: ExternalTestCase | null;
+    /**
+     * Keeps the test linked to its test case saved in ADK (as returned by the brief); null
+     * unlinks it. Omitted, a plan that keeps the run's tests keeps their links too.
+     */
+    readonly savedCase?: E2eSavedCaseLink | null;
   }[];
 }
 
@@ -128,6 +174,8 @@ export interface SavedCasesInput {
 
 /** A saved test case as the E2E module needs it. */
 export interface SavedCaseForRun {
+  /** The Test Plan that holds the case; the case is only linkable to tests when it is known. */
+  readonly planId?: string;
   readonly caseId: string;
   readonly title: string;
   readonly description: string;
@@ -162,6 +210,9 @@ export interface LinkCaseInput {
   readonly planId?: string;
   readonly suiteId?: string;
 }
+
+/** Where a test case saved in ADK lives: its Test Plan and its stable case id. */
+export type LinkSavedCaseInput = E2eSavedCaseLink;
 
 export interface E2eImportResult {
   readonly imported: number;
@@ -260,9 +311,14 @@ export interface CreateE2eInput {
   readonly savedCases?: SavedCasesInput;
   /** Where results are published; defaults to the source of the imported cases. */
   readonly reporting?: ReportingInput | null;
+  /**
+   * False creates the run and leaves it alone: nothing is explored, planned or executed until
+   * the user asks (see `generate`, `explore` and `rerun`). Defaults to true.
+   */
+  readonly start?: boolean;
   /** Repository, branch and folder where the generated specs are pushed. */
   readonly repository: {
-    readonly provider: E2eRepositoryProvider;
+    readonly provider: E2eRepositoryLocation;
     readonly id: string;
     readonly branch: string;
     readonly path: string;
@@ -289,7 +345,10 @@ export type E2eCreationView = Omit<E2eCreation, 'passwordSecret' | 'accessSecret
   hasAccessServiceToken: boolean;
 };
 export type E2eStepView = Omit<E2eStepResult, 'screenshotKey'> & { hasScreenshot: boolean };
-export type E2eTestSummary = Omit<E2eTestCase, 'logs' | 'videoKey' | 'stepResults'> & {
+export type E2eTestSummary = Omit<
+  E2eTestCase,
+  'logs' | 'videoKey' | 'stepResults' | 'regenerationFeedback'
+> & {
   hasVideo: boolean;
   stepResults: E2eStepView[];
 };
@@ -310,6 +369,12 @@ export interface E2eServiceOptions {
   readonly queue: E2eJobQueue;
   readonly dispatcher: E2eDispatcher;
   readonly artifacts: E2eArtifactStore;
+  /**
+   * Where uploaded files live. The pictures in the instructions of a test are kept here for as
+   * long as the instructions reference them; without it they are left for the cleanup of unsaved
+   * uploads.
+   */
+  readonly attachments?: E2eArtifactStore;
   /** Where specs are pulled from and pushed to; the database never stores their content. */
   readonly scripts: E2eScriptRepository;
   readonly agents: Pick<AgentService, 'getAgent'>;
@@ -323,6 +388,10 @@ export interface E2eServiceOptions {
   readonly environments?: Pick<E2eEnvironmentService, 'find' | 'variables'>;
   /** The Brain: the documentation of the system is written from it. */
   readonly knowledge?: KnowledgeSearchPort;
+  /** Judges a finished test against the user's success criteria without running it again. */
+  readonly author?: Pick<E2eAuthor, 'analyze' | 'reviseCase' | 'adaptScript' | 'fixStep'>;
+  /** Reads the PBIs, issues and Brain documents chosen as context of an exploration. */
+  readonly contextReader?: E2eContextReader;
   /**
    * The API runs on the user's own computer (the desktop app): the browser is always this
    * process's own, so no run waits for a runner or a worker and the choice is not offered.
@@ -349,6 +418,9 @@ function isLoopback(baseUrl: string): boolean {
  * HTTP-facing E2E operations. Work is put on the queue and a dispatcher wakes a worker,
  * so several runs (from any number of users) execute in parallel on separate machines.
  */
+/** A little over the time a running job may go without heartbeats before it counts as abandoned. */
+const ABANDONED_JOB_RECHECK_MS = 130_000;
+
 export class E2eService {
   constructor(private readonly options: E2eServiceOptions) {}
 
@@ -365,6 +437,10 @@ export class E2eService {
         await markInterrupted(this.options.store, creation);
     }
     this.wakeWorker();
+    // A job whose worker died with the previous process is only seen as abandoned once its
+    // heartbeats have been missing for a while, and the worker looks for abandoned jobs only when
+    // it is woken: without this, such a run would stay "in progress" until something else woke it.
+    setTimeout(() => this.wakeWorker(), ABANDONED_JOB_RECHECK_MS).unref();
   }
 
   /**
@@ -382,6 +458,7 @@ export class E2eService {
     const workspaceId = requireWorkspace(context);
     const settings = await this.resolveSettings(workspaceId, input);
     const host = input.planning === 'host';
+    const start = input.start !== false;
     // Fetched before the run exists, so an unreachable platform leaves nothing behind.
     const cases = input.importCases ? await this.fetchCases(workspaceId, input.importCases) : null;
     const saved = input.savedCases
@@ -418,19 +495,20 @@ export class E2eService {
       ),
       locale: resolveLocale(context.locale),
       reporting,
-      ...(host ? { status: 'draft' as const } : {}),
+      ...(host || !start ? { status: 'draft' as const } : {}),
     });
     if (!imported) {
-      await this.enqueue(creation, host ? 'explore' : 'generate', [], context.actorId);
+      if (start) await this.enqueue(creation, host ? 'explore' : 'generate', [], context.actorId);
       return toView(creation);
     }
     const tests = await this.options.store.appendTests(creation, imported);
-    await this.enqueue(
-      creation,
-      host ? 'explore' : 'execute',
-      host ? [] : tests.map((test) => test.id),
-      context.actorId,
-    );
+    if (start)
+      await this.enqueue(
+        creation,
+        host ? 'explore' : 'execute',
+        host ? [] : tests.map((test) => test.id),
+        context.actorId,
+      );
     return toView(creation);
   }
 
@@ -494,7 +572,7 @@ export class E2eService {
   /** Links a test to a test management case (its steps guide the spec), or unlinks it. */
   async linkCase(workspaceId: string, testId: string, input: LinkCaseInput | null) {
     const test = await this.findTest(workspaceId, testId);
-    await this.assertIdle(await this.findCreation(workspaceId, test.creationId));
+    await this.assertIdle(await this.findCreation(workspaceId, test.creationId), test.id);
     const externalCase = input
       ? await (
           await this.resolveProvider(workspaceId, input.provider)
@@ -509,6 +587,94 @@ export class E2eService {
       ...(externalCase ? { steps: externalCase.steps.map(describeStep) } : {}),
     });
     return this.getTest(workspaceId, testId);
+  }
+
+  /**
+   * Links a test to a test case saved in ADK, or unlinks it. From then on the test takes the
+   * case's title, description and steps, and every edit of the case reaches the test.
+   */
+  async linkSavedCase(workspaceId: string, testId: string, input: LinkSavedCaseInput | null) {
+    const test = await this.findTest(workspaceId, testId);
+    await this.assertIdle(await this.findCreation(workspaceId, test.creationId), test.id);
+    if (!input) {
+      await this.options.store.updateTest(workspaceId, testId, { savedCase: null });
+      return this.getTest(workspaceId, testId);
+    }
+    const found = await this.requireSavedCase(workspaceId, input);
+    await this.options.store.updateTest(workspaceId, testId, {
+      savedCase: input,
+      ...savedCaseContent(found),
+    });
+    return this.getTest(workspaceId, testId);
+  }
+
+  /**
+   * Links a whole saved suite (or Test Plan) to a run: each of its cases not yet linked in the
+   * run is added as a test, with no spec until the next run writes it.
+   */
+  async linkSavedCases(
+    workspaceId: string,
+    id: string,
+    input: SavedCasesInput,
+  ): Promise<E2eImportResult> {
+    const creation = await this.findCreation(workspaceId, id);
+    await this.assertIdle(creation);
+    const existing = await this.options.store.listTests(workspaceId, id);
+    const linked = new Set(
+      existing.flatMap((test) => (test.savedCase ? [savedCaseKey(test.savedCase)] : [])),
+    );
+    const saved = await this.resolveSavedCases(workspaceId, input);
+    const fresh = saved.tests.filter(
+      (test) => !test.savedCase || !linked.has(savedCaseKey(test.savedCase)),
+    );
+    if (existing.length + fresh.length > MAX_IMPORTED_CASES)
+      throw new ApplicationError('E2E_TOO_MANY_TESTS', 'Too many tests in one run.', 400, [
+        { max: MAX_IMPORTED_CASES },
+      ]);
+    if (fresh.length) await this.options.store.appendTests(creation, fresh);
+    const updated =
+      !creation.reporting && saved.reporting
+        ? ((await this.options.store.updateCreation(workspaceId, id, {
+            reporting: reportingTarget(saved.reporting),
+          })) as E2eCreation)
+        : creation;
+    return {
+      imported: fresh.length,
+      skipped: saved.tests.length - fresh.length,
+      creation: toView(updated),
+    };
+  }
+
+  /**
+   * A saved Test Plan changed: the tests linked to its cases take the new title, description
+   * and steps, and a test whose case is gone is unlinked.
+   */
+  async syncSavedPlan(
+    workspaceId: string,
+    planId: string,
+    cases: readonly SavedCaseForRun[],
+  ): Promise<void> {
+    const byId = new Map(cases.map((item) => [item.caseId, item]));
+    for (const test of await this.options.store.listLinkedTests(workspaceId, planId)) {
+      const current = byId.get(test.savedCase!.caseId);
+      if (!current) {
+        await this.options.store.updateTest(workspaceId, test.id, { savedCase: null });
+        continue;
+      }
+      const content = savedCaseContent(current);
+      if (
+        content.title !== test.title ||
+        content.description !== test.description ||
+        JSON.stringify(content.steps) !== JSON.stringify(test.steps)
+      )
+        await this.options.store.updateTest(workspaceId, test.id, content);
+    }
+  }
+
+  /** A saved Test Plan was deleted: its linked tests stay, unlinked. */
+  async unlinkSavedPlan(workspaceId: string, planId: string): Promise<void> {
+    for (const test of await this.options.store.listLinkedTests(workspaceId, planId))
+      await this.options.store.updateTest(workspaceId, test.id, { savedCase: null });
   }
 
   /** Chooses (or clears) the platform that receives this run's results. */
@@ -650,6 +816,7 @@ export class E2eService {
         scriptPath: test.scriptPath,
         steps: test.steps,
         externalCase: test.externalCase,
+        savedCase: test.savedCase,
         beforeRunInstructions: test.beforeRunInstructions,
         afterRunInstructions: test.afterRunInstructions,
       })),
@@ -684,12 +851,26 @@ export class E2eService {
     });
     if (rejected.length)
       throw new ApplicationError('E2E_SCRIPT_REJECTED', rejected.join(' | '), 422);
-    const cases = input.tests.map(
-      ({ script: _script, beforeRun: _before, afterRun: _after, ...test }, index) => ({
+    const previous = await this.options.store.listTests(workspaceId, id);
+    // A plan with as many tests as the run has keeps what each position was linked to.
+    const keepLinks = previous.length === input.tests.length;
+    const cases = [];
+    for (const [index, planned] of input.tests.entries()) {
+      const { script: _script, beforeRun: _before, afterRun: _after, ...test } = planned;
+      const savedCase =
+        test.savedCase === undefined
+          ? keepLinks
+            ? (previous[index]!.savedCase ?? null)
+            : null
+          : test.savedCase;
+      if (savedCase && test.savedCase !== undefined)
+        await this.requireSavedCase(workspaceId, savedCase);
+      cases.push({
         ...test,
+        savedCase,
         scriptPath: scriptFilePath(repository.path, { code: testCaseCode(index + 1), ...test }),
-      }),
-    );
+      });
+    }
     for (const [index, test] of cases.entries()) {
       const planned = input.tests[index]!;
       const code = testCaseCode(index + 1);
@@ -712,7 +893,6 @@ export class E2eService {
           );
       }
     }
-    const previous = await this.options.store.listTests(workspaceId, id);
     const tests = await this.options.store.replaceTests(creation, cases);
     for (const test of previous) {
       if (test.videoKey) await this.options.artifacts.removePrefix(test.videoKey);
@@ -796,7 +976,7 @@ export class E2eService {
     return this.options.scripts.listRepositories(workspaceId);
   }
 
-  branches(workspaceId: string, provider: E2eRepositoryProvider, repositoryId: string) {
+  branches(workspaceId: string, provider: E2eRepositoryLocation, repositoryId: string) {
     return this.options.scripts.listBranches(workspaceId, provider, repositoryId);
   }
 
@@ -835,7 +1015,7 @@ export class E2eService {
     const test = await this.findTest(workspaceId, testId);
     const creation = await this.findCreation(workspaceId, test.creationId);
     const repository = requireRepository(creation);
-    await this.assertIdle(creation);
+    await this.assertIdle(creation, test.id);
     const check =
       kind !== 'spec' && !content.trim()
         ? { ok: true, violations: [] }
@@ -868,6 +1048,217 @@ export class E2eService {
     await this.options.store.updateTest(workspaceId, test.id, {
       [HOOK_INSTRUCTION_FIELDS[kind]]: instructions.trim() || null,
     });
+    return this.getTest(workspaceId, testId);
+  }
+
+  /**
+   * Saves how the user decides the test passes. The next spec asserts it, and a failure that
+   * still meets it counts as a pass. Nothing is rewritten or run: the work already done is kept.
+   */
+  async updateSuccessCriteria(workspaceId: string, testId: string, criteria: string) {
+    const test = await this.findTest(workspaceId, testId);
+    await this.options.store.updateTest(workspaceId, test.id, {
+      successCriteria: criteria.trim() || null,
+    });
+    return this.getTest(workspaceId, testId);
+  }
+
+  /**
+   * The user's own decision about a finished test: pass it, fail it, or give the status the run
+   * produced back. Script, video and evidence stay; the next execution decides afresh.
+   */
+  async setResult(workspaceId: string, testId: string, decision: E2eResultDecision, note?: string) {
+    const test = await this.findTest(workspaceId, testId);
+    assertReviewable(test);
+    const resultNote = note?.trim().slice(0, MAX_RESULT_NOTE_LENGTH) || null;
+    await this.options.store.updateTest(
+      workspaceId,
+      test.id,
+      decision === 'run'
+        ? {
+            status: ranStatus(test),
+            resultSource: 'run',
+            resultNote: null,
+            // Giving the run's result back also drops what the user decided step by step.
+            stepResults: test.stepResults.map(withoutManualVerdict),
+          }
+        : { status: decision, resultSource: 'manual', resultNote },
+    );
+    if (decision !== 'run')
+      await this.adaptScriptToDecisions(workspaceId, test, {
+        result: { decided: decision, note: resultNote },
+      });
+    return this.getTest(workspaceId, testId);
+  }
+
+  /**
+   * Rewrites the spec of a finished test so that it agrees with what the user decided about it
+   * (the test or its steps marked as passed or failed): it asserts what the user accepts or
+   * rejects and carries no expected result, step or check beyond that. It is best effort: the
+   * decision itself is already saved, so a script that cannot be adapted stays as it was.
+   */
+  private async adaptScriptToDecisions(
+    workspaceId: string,
+    before: E2eTestCase,
+    decisions: { result?: { decided: 'passed' | 'failed'; note: string | null } },
+  ): Promise<void> {
+    const { author, scripts } = this.options;
+    if (!author?.adaptScript || !before.scriptPath) return;
+    try {
+      const test = await this.findTest(workspaceId, before.id);
+      const creation = await this.findCreation(workspaceId, test.creationId);
+      const repository = requireRepository(creation);
+      const steps = test.stepResults.flatMap((step) =>
+        step.manualStatus
+          ? [
+              {
+                position: step.position,
+                title: step.title,
+                decided: step.manualStatus,
+                ran: step.status,
+                note: step.manualNote ?? null,
+                error: step.error,
+              },
+            ]
+          : [],
+      );
+      const current = await scripts.readFile(workspaceId, repository, before.scriptPath);
+      if (!current?.trim()) return;
+      const specPath = before.scriptPath;
+      const [beforeRun, afterRun] = await Promise.all(
+        HOOK_KINDS.map(async (kind) => {
+          const hook = await scripts.readFile(
+            workspaceId,
+            repository,
+            hookFilePath(specPath, kind),
+          );
+          return hook?.trim() ? hook : null;
+        }),
+      );
+      const adapted = await author.adaptScript({
+        creation,
+        test,
+        script: current,
+        steps,
+        result: decisions.result ?? null,
+        hooks: { beforeRun: beforeRun ?? null, afterRun: afterRun ?? null },
+      });
+      if (!adapted.trim() || adapted.trim() === current.trim()) return;
+      // pushScript checks the new script and refuses one the guard rejects.
+      await this.pushScript(workspaceId, test.id, adapted);
+    } catch (error) {
+      console.error('[E2eService] Could not adapt the script to the decisions of the user:', error);
+    }
+  }
+
+  /**
+   * The user's own decision about one step of a finished test: pass it, fail it, or give the
+   * status the run produced back. The test passes when no step counts as failed any more. Script,
+   * video and evidence stay; the next execution decides afresh.
+   */
+  async setStepResult(
+    workspaceId: string,
+    testId: string,
+    position: number,
+    decision: E2eResultDecision,
+    note?: string,
+  ) {
+    const test = await this.findTest(workspaceId, testId);
+    assertReviewable(test);
+    if (!test.stepResults.some((step) => step.position === position))
+      throw new ApplicationError('E2E_STEP_NOT_FOUND', 'The test has no such step.', 404);
+    const stepResults = test.stepResults.map((step) => {
+      if (step.position !== position) return step;
+      const ran = withoutManualVerdict(step);
+      return decision === 'run'
+        ? ran
+        : {
+            ...ran,
+            manualStatus: decision,
+            manualNote: note?.trim().slice(0, MAX_RESULT_NOTE_LENGTH) || null,
+          };
+    });
+    const changes: E2eTestChanges = { stepResults };
+    if (stepResults.some((step) => step.manualStatus)) {
+      // An error outside the steps (setup, a crash) is still there when every step passes.
+      const unexplained =
+        Boolean(test.error) && !stepResults.some((step) => step.status === 'failed');
+      changes.status =
+        unexplained || stepResults.some((step) => effectiveStepStatus(step) === 'failed')
+          ? 'failed'
+          : 'passed';
+      changes.resultSource = 'manual';
+      changes.resultNote = null;
+    } else if (test.resultSource === 'manual') {
+      changes.status = ranStatus(test);
+      changes.resultSource = 'run';
+      changes.resultNote = null;
+    }
+    await this.options.store.updateTest(workspaceId, test.id, changes);
+    if (decision !== 'run') await this.adaptScriptToDecisions(workspaceId, test, {});
+    return this.getTest(workspaceId, testId);
+  }
+
+  /**
+   * Judges the last execution of a test again against its success criteria, from what it left
+   * (steps, screenshots, output), with no new run. A failure the evidence excuses becomes a pass;
+   * a pass the criteria had given that the evidence no longer supports goes back to the run's.
+   */
+  async reevaluate(workspaceId: string, testId: string, locale?: string) {
+    const { author, artifacts, scripts } = this.options;
+    if (!author)
+      throw new ApplicationError(
+        'E2E_REVIEW_UNAVAILABLE',
+        'The AI review of results is not available.',
+        503,
+      );
+    const test = await this.findTest(workspaceId, testId);
+    if (!test.successCriteria?.trim())
+      throw new ApplicationError(
+        'E2E_SUCCESS_CRITERIA_REQUIRED',
+        'Write the success criteria before reviewing the result.',
+        409,
+      );
+    const reviewable =
+      test.lastRunAt !== null &&
+      (test.status === 'failed' || (test.status === 'passed' && test.resultSource !== 'run'));
+    if (!reviewable)
+      throw new ApplicationError(
+        'E2E_RESULT_NOT_REVIEWABLE',
+        'Only a failed test, or one passed by criteria or by hand, can be reviewed.',
+        409,
+      );
+    const creation = await this.findCreation(workspaceId, test.creationId);
+    const script =
+      test.scriptPath && creation.repository
+        ? ((await scripts
+            .readFile(workspaceId, creation.repository, test.scriptPath)
+            .catch(() => null)) ?? '')
+        : '';
+    const pictures = await Promise.all(
+      evidenceSteps(test.stepResults).map(async (step) =>
+        step.screenshotKey ? await artifacts.get(step.screenshotKey).catch(() => null) : null,
+      ),
+    );
+    const analysis = await author.analyze({
+      creation: locale ? { ...creation, locale: resolveLocale(locale) } : creation,
+      test,
+      script,
+      error: test.error ?? '',
+      logs: test.logs ?? '',
+      steps: test.stepResults,
+      images: toLlmImages(pictures),
+    });
+    const changes: E2eTestChanges = { analysis: analysis.summary, verdict: analysis.verdict };
+    if (meetsCriteria(test, analysis)) {
+      changes.status = 'passed';
+      changes.resultSource = 'criteria';
+      changes.resultNote = null;
+    } else if (test.resultSource === 'criteria') {
+      changes.status = ranStatus(test);
+      changes.resultSource = 'run';
+    }
+    await this.options.store.updateTest(workspaceId, test.id, changes);
     return this.getTest(workspaceId, testId);
   }
 
@@ -966,7 +1357,8 @@ export class E2eService {
   async getTest(workspaceId: string, testId: string) {
     const test = await this.findTest(workspaceId, testId);
     const creation = await this.findCreation(workspaceId, test.creationId);
-    const { videoKey, ...rest } = test;
+    // The feedback of a rewrite (the previous spec and run output) is internal.
+    const { videoKey, regenerationFeedback: _feedback, ...rest } = test;
     return {
       ...rest,
       stepResults: test.stepResults.map(toStepView),
@@ -978,6 +1370,7 @@ export class E2eService {
         baseUrl: creation.baseUrl,
         localOrigin: creation.localOrigin ?? null,
         path: creation.path,
+        environmentId: creation.environmentId ?? null,
         status: creation.status,
       },
     };
@@ -1075,17 +1468,44 @@ export class E2eService {
    * The optional description says what to explore (the whole site, one feature, a bug…): the
    * agent follows it and it is kept with the exploration's script, which only ever goes to the
    * database. The agent explores with the context of the run's own tests.
+   * `agentId` picks the agent that decides each step, with its own instructions, skills and
+   * model; without it the agent of the run explores.
    */
   async explore(
     workspaceId: string,
     id: string,
     actorId?: string,
-    options: { description?: string; source?: boolean } = {},
+    options: {
+      description?: string;
+      source?: boolean;
+      /** PBIs, issues and Brain documents that give the agent more to go on. */
+      context?: readonly E2eContextRequest[];
+      /** The agent that explores, when not the run's own. */
+      agentId?: string;
+    } = {},
   ): Promise<E2eExploration> {
     const { description, source = false } = options;
     const creation = await this.findCreation(workspaceId, id);
     await this.assertIdle(creation);
+    // Checked now, so an agent that is gone fails the request instead of the worker.
+    const agent = options.agentId
+      ? await this.options.agents.getAgent(workspaceId, options.agentId)
+      : null;
     await this.options.artifacts.removePrefix(snapshotKey(creation));
+    // The text is read now, with the permissions of the request, and kept for the worker.
+    const documents =
+      options.context?.length && this.options.contextReader
+        ? await this.options.contextReader.read(
+            {
+              requestId: `e2e-context-${creation.id}`,
+              ownerId: creation.ownerId,
+              workspaceId,
+              actorId: actorId ?? creation.actorId,
+            },
+            options.context.slice(0, MAX_EXPLORATION_CONTEXT),
+          )
+        : [];
+    await saveExplorationContext(this.options.artifacts, creation, documents);
     // Shown as started right away, before a worker picks the job up. The worker reads the
     // description back from this state.
     await ExplorationRecorder.start(
@@ -1093,7 +1513,12 @@ export class E2eService {
       creation,
       Boolean(creation.username && creation.passwordSecret),
       Date.now,
-      { description: description?.slice(0, MAX_EXPLORATION_DESCRIPTION), source },
+      {
+        description: description?.slice(0, MAX_EXPLORATION_DESCRIPTION),
+        source,
+        context: contextRefs(documents),
+        ...(agent ? { agent: { id: agent.id, name: agent.name } } : {}),
+      },
     );
     await this.enqueue(creation, 'explore', [], actorId);
     return (await readExploration(this.options.artifacts, creation)) as E2eExploration;
@@ -1301,11 +1726,72 @@ export class E2eService {
       throw new ApplicationError('E2E_EXPLORATION_NOT_FOUND', 'Exploration script not found.', 404);
   }
 
-  /** JPEG of a page the exploration captured, or the latest frame of the agent's browser. */
-  async explorationImage(workspaceId: string, id: string, page: number | 'live'): Promise<Buffer> {
+  /**
+   * The Playwright code of the last exploration: the one the user saved, or else the code made
+   * from what the agent did. Only a finished exploration has code.
+   */
+  async explorationCode(
+    workspaceId: string,
+    id: string,
+  ): Promise<{ readonly code: string; readonly edited: boolean }> {
+    const creation = await this.findCreation(workspaceId, id);
+    const saved = await this.options.artifacts.get(explorationCodeKey(creation));
+    if (saved) return { code: saved.toString('utf8'), edited: true };
+    const state = await this.finishedExploration(workspaceId, id);
+    return { code: explorationCode(state, creation.name), edited: false };
+  }
+
+  /** Keeps the code the user edited; an empty code goes back to the one made from the log. */
+  async saveExplorationCode(workspaceId: string, id: string, code: string) {
+    const creation = await this.findCreation(workspaceId, id);
+    await this.finishedExploration(workspaceId, id);
+    if (code.trim())
+      await this.options.artifacts.put(explorationCodeKey(creation), Buffer.from(code));
+    else await this.options.artifacts.removePrefix(explorationCodeKey(creation));
+    return this.explorationCode(workspaceId, id);
+  }
+
+  private async finishedExploration(workspaceId: string, id: string): Promise<E2eExploration> {
+    const state = await this.exploration(workspaceId, id);
+    if (!state || state.status === 'signing_in' || state.status === 'exploring')
+      throw new ApplicationError(
+        'E2E_EXPLORATION_NOT_READY',
+        'The exploration has no code until it finishes.',
+        409,
+      );
+    return state;
+  }
+
+  /** The recording of one browser of the last exploration. */
+  async explorationVideo(
+    workspaceId: string,
+    id: string,
+    worker: number,
+  ): Promise<{ content: Buffer; mimeType: 'video/mp4' | 'video/webm' }> {
+    const creation = await this.findCreation(workspaceId, id);
+    const state = await readExploration(this.options.artifacts, creation);
+    const video = state?.videos?.find((item) => item.worker === worker);
+    const content = video
+      ? await this.options.artifacts.get(explorationVideoKey(creation, worker, video.mimeType))
+      : null;
+    if (!video || !content)
+      throw new ApplicationError('E2E_VIDEO_NOT_FOUND', 'No video for this exploration.', 404);
+    return { content, mimeType: video.mimeType };
+  }
+
+  /** JPEG of a page the exploration captured, of one of its actions, or the latest frame of the agent's browser. */
+  async explorationImage(
+    workspaceId: string,
+    id: string,
+    page: number | 'live' | { readonly step: number },
+  ): Promise<Buffer> {
     const creation = await this.findCreation(workspaceId, id);
     return this.evidence(
-      page === 'live' ? explorationLiveKey(creation) : explorationPageKey(creation, page),
+      page === 'live'
+        ? explorationLiveKey(creation)
+        : typeof page === 'object'
+          ? explorationStepKey(creation, page.step)
+          : explorationPageKey(creation, page),
     );
   }
 
@@ -1370,26 +1856,248 @@ export class E2eService {
     return this.options.environments.find(workspaceId, id);
   }
 
+  /**
+   * Writes the tests of a run that has none: the agent plans them from the PRD or the Brain, or,
+   * with `savedCases`, they are the test cases saved in ADK (Test Plans), which are added to the
+   * run and automated. The application is only read, never explored by the agent: that is asked
+   * for on its own.
+   */
+  async generate(
+    workspaceId: string,
+    id: string,
+    input: {
+      readonly savedCases?: SavedCasesInput;
+      /** Planning from this document instead of the one the run was created with. */
+      readonly prd?: string;
+      readonly prdFileNames?: readonly string[];
+    } = {},
+    actorId?: string,
+  ): Promise<E2eCreationView> {
+    const creation = await this.findCreation(workspaceId, id);
+    await this.assertIdle(creation);
+    if (!input.savedCases) {
+      // Planning again would replace the tests the user already has.
+      if ((await this.options.store.listTests(workspaceId, id)).length)
+        throw new ApplicationError('E2E_TESTS_EXIST', 'This run already has tests.', 409);
+      if (!input.prd) requireTestSource(creation);
+      const target = input.prd
+        ? ((await this.options.store.updateCreation(workspaceId, id, {
+            prd: input.prd,
+            prdFileNames: [...(input.prdFileNames ?? [])],
+            // A document written now is the source, not the Brain; its summary is rebuilt from it.
+            useBrain: false,
+            prdSummary: null,
+          })) as E2eCreation)
+        : creation;
+      return this.requeue(target, 'generate', [], actorId);
+    }
+    const saved = await this.resolveSavedCases(workspaceId, input.savedCases);
+    const tests = await this.options.store.appendTests(creation, saved.tests);
+    const target =
+      !creation.reporting && saved.reporting
+        ? ((await this.options.store.updateCreation(workspaceId, id, {
+            reporting: reportingTarget(saved.reporting),
+          })) as E2eCreation)
+        : creation;
+    return this.requeue(
+      target,
+      'execute',
+      tests.map((test) => test.id),
+      actorId,
+    );
+  }
+
   /** `actorId` is who started it: a local run's browser work goes to that user's runner. */
-  async rerun(workspaceId: string, id: string, actorId?: string): Promise<E2eCreationView> {
+  async rerun(
+    workspaceId: string,
+    id: string,
+    actorId?: string,
+    locale?: string,
+  ): Promise<E2eCreationView> {
     const creation = await this.findCreation(workspaceId, id);
     await this.assertIdle(creation);
     const tests = await this.options.store.listTests(workspaceId, id);
     // A run that never produced tests (planning failed) starts over from the plan.
-    if (!tests.length) return this.requeue(creation, 'generate', [], actorId);
-    return this.rerunTests(creation, tests, false, actorId);
+    if (!tests.length) {
+      requireTestSource(creation);
+      return this.requeue(creation, 'generate', [], actorId, locale);
+    }
+    return this.rerunTests(creation, tests, false, actorId, locale);
   }
 
+  /**
+   * Runs one test again. With `regenerate` its spec is rewritten and `guidance` tells the AI how:
+   * the instructions are kept on the test for every later rewrite, and `useLastRun` hands it the
+   * spec being replaced with what its last run produced (error, analysis, steps, output).
+   * `environmentId` picks the saved environment the test runs with from now on (another account,
+   * for instance); null goes back to the run's, and omitting it keeps what the test has.
+   * `locale` is the language of the person asking: the report of this execution is written in it.
+   */
   async rerunTest(
     workspaceId: string,
     testId: string,
     regenerate = false,
     actorId?: string,
+    guidance: E2eRegenerationGuidance = {},
+    environmentId?: string | null,
+    locale?: string,
   ): Promise<E2eCreationView> {
     const test = await this.findTest(workspaceId, testId);
     const creation = await this.findCreation(workspaceId, test.creationId);
-    await this.assertIdle(creation);
-    return this.rerunTests(creation, [test], regenerate, actorId);
+    await this.assertIdle(creation, test.id);
+    if (environmentId !== undefined) {
+      // Checked before anything changes, so an unknown environment leaves the test as it was.
+      const environment = environmentId
+        ? await this.findEnvironment(workspaceId, environmentId)
+        : null;
+      await this.options.store.updateTest(workspaceId, test.id, {
+        environmentId: environment?.id ?? null,
+      });
+    }
+    if (guidance.successCriteria !== undefined)
+      await this.options.store.updateTest(workspaceId, test.id, {
+        successCriteria: guidance.successCriteria.trim() || null,
+      });
+    // A step fix that never got to run (the AI failed) must not come back with a plain rerun.
+    if (!regenerate && test.regenerationFeedback)
+      await this.options.store.updateTest(workspaceId, test.id, { regenerationFeedback: null });
+    if (regenerate) {
+      const changes: E2eTestChanges = {};
+      if (guidance.instructions !== undefined)
+        changes.scriptInstructions = guidance.instructions.trim() || null;
+      changes.regenerationFeedback = guidance.useLastRun
+        ? await this.lastRunFeedback(creation, test)
+        : null;
+      await this.options.store.updateTest(workspaceId, test.id, changes);
+      // The pictures of the new instructions are kept; those they no longer show are removed.
+      if (guidance.instructions !== undefined)
+        await syncItemFilesSafely(
+          this.options.attachments,
+          workspaceId,
+          fileOwner('e2e-test', test.id),
+          test.scriptInstructions,
+          changes.scriptInstructions,
+        );
+    }
+    return this.rerunTests(creation, [test], regenerate, actorId, locale);
+  }
+
+  /**
+   * Fixes one failed step of a test: the AI rewrites only that step of its spec, from what the
+   * user said about it (`instructions`, with images when they want) and what the last run
+   * produced, and the test runs again. Every other step, the hooks and the instructions of the
+   * test stay as they are. Images of the instructions are read when the job starts, so they stay
+   * pending uploads (the sweep removes them an hour later) instead of belonging to the test.
+   */
+  async fixTestStep(
+    workspaceId: string,
+    testId: string,
+    position: number,
+    instructions: string,
+    actorId?: string,
+    locale?: string,
+  ): Promise<E2eCreationView> {
+    if (!this.options.author?.fixStep)
+      throw new ApplicationError(
+        'E2E_STEP_FIX_UNAVAILABLE',
+        'Fixing a step with AI is not available.',
+        503,
+      );
+    const test = await this.findTest(workspaceId, testId);
+    const creation = await this.findCreation(workspaceId, test.creationId);
+    await this.assertIdle(creation, test.id);
+    const step = test.stepResults.find((item) => item.position === position);
+    if (!step) throw new ApplicationError('E2E_STEP_NOT_FOUND', 'The test has no such step.', 404);
+    const feedback = await this.readRunFeedback(creation, test);
+    if (!feedback)
+      throw new ApplicationError(
+        'E2E_STEP_FIX_NO_SCRIPT',
+        'The test has no script to fix yet; rewrite it instead.',
+        409,
+      );
+    const fix: RegenerationFeedback = {
+      ...feedback,
+      step: { position, title: step.title, instructions: instructions.trim() },
+    };
+    await this.options.store.updateTest(workspaceId, test.id, {
+      regenerationFeedback: JSON.stringify(fix),
+    });
+    // The spec stays linked: the executor rewrites the step in it before running it.
+    return this.rerunTests(creation, [test], false, actorId, locale);
+  }
+
+  /**
+   * One turn of "Fix with AI": the user talks to the AI (with images, when they want) about what
+   * the test does wrong, and the AI answers and rewrites the test case to match. Nothing is saved
+   * and nothing runs here: the user applies the case and then rewrites the spec from it.
+   * `testCase` is the case as the user has it open, which may differ from the saved one.
+   */
+  async reviseTestCase(
+    workspaceId: string,
+    testId: string,
+    input: {
+      readonly messages: readonly E2eCaseChatMessage[];
+      readonly testCase: E2eCaseDraft;
+      /** Ids of the images uploaded as attachments in this conversation; the AI looks at them all. */
+      readonly imageIds?: readonly string[];
+    },
+    locale?: string,
+  ): Promise<E2eCaseRevision> {
+    const { author, artifacts, scripts } = this.options;
+    if (!author?.reviseCase)
+      throw new ApplicationError(
+        'E2E_CASE_CHAT_UNAVAILABLE',
+        'Fixing a test case with AI is not available.',
+        503,
+      );
+    const test = await this.findTest(workspaceId, testId);
+    const creation = await this.findCreation(workspaceId, test.creationId);
+    const script =
+      test.scriptPath && creation.repository
+        ? ((await scripts
+            .readFile(workspaceId, creation.repository, test.scriptPath)
+            .catch(() => null)) ?? '')
+        : '';
+    const images = await loadImageAttachments(
+      artifacts,
+      workspaceId,
+      (input.imageIds ?? []).map((id) => ({
+        id,
+        name: 'image',
+        kind: 'image' as const,
+        scope: 'e2e' as const,
+        source: 'adk' as const,
+        url: attachmentFileUrl(id),
+      })),
+    );
+    return author.reviseCase({
+      creation: locale ? { ...creation, locale: resolveLocale(locale) } : creation,
+      test,
+      testCase: input.testCase,
+      messages: input.messages,
+      script,
+      lastRun: test.lastRunAt ? buildRegenerationFeedback(test, script).problem : null,
+      images,
+    });
+  }
+
+  /** The spec a test has now and what its last run produced, as stored text; null without a spec. */
+  private async lastRunFeedback(creation: E2eCreation, test: E2eTestCase): Promise<string | null> {
+    const feedback = await this.readRunFeedback(creation, test);
+    return feedback ? JSON.stringify(feedback) : null;
+  }
+
+  private async readRunFeedback(
+    creation: E2eCreation,
+    test: E2eTestCase,
+  ): Promise<RegenerationFeedback | null> {
+    if (!test.scriptPath) return null;
+    const script = await this.options.scripts.readFile(
+      creation.workspaceId,
+      requireRepository(creation),
+      test.scriptPath,
+    );
+    return script?.trim() ? buildRegenerationFeedback(test, script) : null;
   }
 
   /** Stops a run; the worker executing it notices on its next heartbeat. */
@@ -1407,9 +2115,19 @@ export class E2eService {
 
   async delete(workspaceId: string, id: string): Promise<void> {
     await this.findCreation(workspaceId, id);
+    const tests = await this.options.store.listTests(workspaceId, id);
     await this.options.queue.cancel(workspaceId, id);
     await this.options.artifacts.removePrefix(`${workspaceId}/${id}`);
     await this.options.store.deleteCreation(workspaceId, id);
+    // The pictures of the instructions of its tests go away with them.
+    for (const test of tests)
+      await syncItemFilesSafely(
+        this.options.attachments,
+        workspaceId,
+        fileOwner('e2e-test', test.id),
+        test.scriptInstructions,
+        null,
+      );
   }
 
   private async rerunTests(
@@ -1417,10 +2135,14 @@ export class E2eService {
     tests: readonly E2eTestCase[],
     regenerate: boolean,
     actorId: string | undefined,
+    locale?: string,
   ): Promise<E2eCreationView> {
     for (const test of tests)
       await this.options.store.updateTest(creation.workspaceId, test.id, {
         status: 'pending',
+        // The new execution decides afresh: neither the criteria nor the user's verdict outlive it.
+        resultSource: 'run',
+        resultNote: null,
         error: null,
         analysis: null,
         verdict: null,
@@ -1433,6 +2155,7 @@ export class E2eService {
       'execute',
       tests.map((test) => test.id),
       actorId,
+      locale,
     );
   }
 
@@ -1441,11 +2164,14 @@ export class E2eService {
     kind: E2eJobKind,
     testIds: string[],
     actorId?: string,
+    locale?: string,
   ): Promise<E2eCreationView> {
     const queued = (await this.options.store.updateCreation(creation.workspaceId, creation.id, {
       status: 'queued',
       error: null,
       finishedAt: null,
+      // The AI analysis and the errors of this execution follow the language the person uses now.
+      ...(locale ? { locale: resolveLocale(locale) } : {}),
     })) as E2eCreation;
     await this.enqueue(queued, kind, testIds, actorId);
     return toView(queued);
@@ -1476,8 +2202,18 @@ export class E2eService {
       .catch((error: unknown) => console.error('[E2eService] Could not wake a worker:', error));
   }
 
-  private async assertIdle(creation: E2eCreation): Promise<void> {
-    if (await this.options.queue.hasActive(creation.workspaceId, creation.id))
+  /**
+   * Refuses while the run is working. With `testId` only that test's own execution (or one that
+   * takes the whole run) counts: another test running never keeps this one from being changed.
+   */
+  private async assertIdle(creation: E2eCreation, testId?: string): Promise<void> {
+    if (
+      await this.options.queue.hasActive(
+        creation.workspaceId,
+        creation.id,
+        testId === undefined ? {} : { testId },
+      )
+    )
       throw new ApplicationError('E2E_ALREADY_RUNNING', 'Run already in progress.', 409);
   }
 
@@ -1531,6 +2267,25 @@ export class E2eService {
     workspaceId: string,
     input: CreateE2eInput['repository'],
   ): Promise<E2eRepositoryRef> {
+    if (input.provider === 'local') {
+      // A folder of the computer running ADK: only where the app can read it (desktop).
+      const { scripts } = this.options;
+      if (!scripts.resolveFolder)
+        throw new ApplicationError(
+          'E2E_LOCAL_FOLDER_UNAVAILABLE',
+          'Local folders are only available in the ADK desktop app.',
+          409,
+          [{ field: 'repository.provider' }],
+        );
+      const folder = await scripts.resolveFolder(input.id);
+      return {
+        provider: 'local',
+        id: folder.id,
+        name: folder.name,
+        branch: input.branch.trim() || folder.defaultBranch,
+        path: normalizeScriptFolder(input.path),
+      };
+    }
     const { repositories } = await this.options.scripts.listRepositories(workspaceId);
     const repository = repositories.find(
       (item) => item.provider === input.provider && item.id === input.id,
@@ -1621,13 +2376,7 @@ export class E2eService {
     workspaceId: string,
     input: SavedCasesInput,
   ): Promise<{ tests: NewE2eTestCase[]; reporting: ReportingInput | null }> {
-    if (!this.options.savedCases)
-      throw new ApplicationError(
-        'E2E_SAVED_CASES_UNAVAILABLE',
-        'Saved test cases are not available.',
-        501,
-      );
-    const cases = await this.options.savedCases.listSavedCases(workspaceId, input);
+    const cases = await this.requireSavedCases().listSavedCases(workspaceId, input);
     if (!cases.length)
       throw new ApplicationError('E2E_SAVED_CASES_NOT_FOUND', 'No saved test case was found.', 404);
     if (cases.length > MAX_IMPORTED_CASES)
@@ -1661,7 +2410,7 @@ export class E2eService {
         : undefined;
       if (!external) return testFromSavedCase(item);
       linked.push(external);
-      return testFromCase(external);
+      return { ...testFromCase(external), ...savedCaseLink(item) };
     });
     const first = linked[0];
     const same = <K extends 'provider' | 'planId' | 'suiteId'>(key: K) =>
@@ -1678,6 +2427,29 @@ export class E2eService {
             }
           : null,
     };
+  }
+
+  private async requireSavedCase(
+    workspaceId: string,
+    link: E2eSavedCaseLink,
+  ): Promise<SavedCaseForRun> {
+    const [found] = await this.requireSavedCases().listSavedCases(workspaceId, {
+      planId: link.planId,
+      caseIds: [link.caseId],
+    });
+    if (!found)
+      throw new ApplicationError('E2E_SAVED_CASES_NOT_FOUND', 'No saved test case was found.', 404);
+    return found;
+  }
+
+  private requireSavedCases(): SavedCaseReader {
+    if (!this.options.savedCases)
+      throw new ApplicationError(
+        'E2E_SAVED_CASES_UNAVAILABLE',
+        'Saved test cases are not available.',
+        501,
+      );
+    return this.options.savedCases;
   }
 
   private async findCreation(workspaceId: string, id: string): Promise<E2eCreation> {
@@ -1699,6 +2471,20 @@ function requireWorkspace(context: RequestContext): string {
   return context.workspaceId;
 }
 
+/**
+ * A run is saved without a product document, so planning from what it holds needs one: without a
+ * PRD or the Brain the AI would invent the tests.
+ */
+function requireTestSource(creation: Pick<E2eCreation, 'prd' | 'useBrain'>): void {
+  if (!creation.prd.trim() && !creation.useBrain)
+    throw new ApplicationError(
+      'E2E_PRD_REQUIRED',
+      'A product document is required to plan the tests: attach one when generating them.',
+      400,
+      [{ field: 'prd' }],
+    );
+}
+
 function sameLocation(current: E2eRepositoryRef | null, next: E2eRepositoryRef): boolean {
   return (
     current?.provider === next.provider &&
@@ -1718,7 +2504,7 @@ function toView(creation: E2eCreation): E2eCreationView {
 }
 
 function toSummary(test: E2eTestCase): E2eTestSummary {
-  const { logs: _logs, videoKey, ...rest } = test;
+  const { logs: _logs, videoKey, regenerationFeedback: _feedback, ...rest } = test;
   return { ...rest, stepResults: test.stepResults.map(toStepView), hasVideo: Boolean(videoKey) };
 }
 
@@ -1759,14 +2545,35 @@ function testFromCase(item: ExternalTestCase): NewE2eTestCase {
 
 /** A spec-less test for a test case saved in ADK; its steps guide the spec author. */
 function testFromSavedCase(item: SavedCaseForRun): NewE2eTestCase {
+  return {
+    ...savedCaseContent(item),
+    priority: 'medium',
+    externalCase: null,
+    ...savedCaseLink(item),
+  };
+}
+
+/** Title, description and steps a test takes from the saved case it is linked to. */
+function savedCaseContent(item: SavedCaseForRun): {
+  title: string;
+  description: string;
+  steps: string[];
+} {
   const description = htmlToText(item.description).slice(0, 2_000);
   return {
     title: item.title.slice(0, 200),
     description: description || `Automates the saved test case "${item.title}".`,
     steps: item.steps.map(describeStep),
-    priority: 'medium',
-    externalCase: null,
   };
+}
+
+/** The link a test keeps to its saved case; absent when the reader did not say which plan holds it. */
+function savedCaseLink(item: SavedCaseForRun): { savedCase?: E2eSavedCaseLink } {
+  return item.planId ? { savedCase: { planId: item.planId, caseId: item.caseId } } : {};
+}
+
+function savedCaseKey(link: E2eSavedCaseLink): string {
+  return `${link.planId}:${link.caseId}`;
 }
 
 function locationKey(location: {
@@ -1787,4 +2594,31 @@ export function specTitle(content: string, path: string): string {
       .trim()
       .slice(0, 200) || fallback
   );
+}
+
+/** What the run itself produced for a finished test, ignoring what the user or the criteria decided. */
+function ranStatus(
+  test: Pick<E2eTestCase, 'error' | 'stepResults'>,
+): Extract<E2eTestStatus, 'passed' | 'failed'> {
+  return test.error || test.stepResults.some((step) => step.status === 'failed')
+    ? 'failed'
+    : 'passed';
+}
+
+/** A test that never ran (or ended in an error of the platform) has no result to overrule. */
+function assertReviewable(test: Pick<E2eTestCase, 'status' | 'lastRunAt'>): void {
+  if (!['passed', 'failed'].includes(test.status) || !test.lastRunAt)
+    throw new ApplicationError(
+      'E2E_RESULT_NOT_REVIEWABLE',
+      'The test has no finished result to review.',
+      409,
+    );
+}
+
+/** The step as the run left it, without what the user decided about it. */
+function withoutManualVerdict(step: E2eStepResult): E2eStepResult {
+  const ran = { ...step };
+  delete ran.manualStatus;
+  delete ran.manualNote;
+  return ran;
 }

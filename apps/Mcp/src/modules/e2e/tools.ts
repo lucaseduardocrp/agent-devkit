@@ -5,6 +5,7 @@ import { defineTool, json } from '../../core/tool.js';
 import { UNTRUSTED_CONTENT_RULE, id, untrusted } from '../shared.js';
 import {
   caseSelection,
+  savedCaseReference,
   QUEUE_NOTICE,
   caseReference,
   describeStep,
@@ -47,8 +48,10 @@ const environmentInput = {
     .describe('Custom variables exposed to the scripts.'),
 };
 const provider = z
-  .enum(['github', 'azure_devops'])
-  .describe('Where the Playwright scripts live: github or azure_devops.');
+  .enum(['github', 'azure_devops', 'local'])
+  .describe(
+    'Where the Playwright scripts live: github, azure_devops or local (a project folder on the computer running the ADK desktop app; the repository id is then its absolute path and the specs are written there, uncommitted).',
+  );
 /** The backend adds `warnings` to a local run that starts while no runner of the user is online. */
 const RUNNER_NOTICE =
   'When the answer has warnings with code NO_LOCAL_RUNNER, no `devkit runner` is connected: the run is queued and waits up to five minutes. Tell the user to start it (devkit login and devkit e2e setup once, then keep devkit runner open) instead of reporting the run as started.';
@@ -173,7 +176,9 @@ const runSettings = {
   repository: z
     .object({
       provider,
-      id: id('Repository id from e2e_list_repositories.'),
+      id: id(
+        'Repository id from e2e_list_repositories, or the absolute folder path with provider local.',
+      ),
       branch: z.string().trim().min(1).max(250).describe('Branch from e2e_list_branches.'),
       path: z
         .string()
@@ -182,7 +187,9 @@ const runSettings = {
         .default('tests/e2e')
         .describe('Folder for the generated specs.'),
     })
-    .describe('Where the generated Playwright scripts are committed.'),
+    .describe(
+      'Where the generated Playwright scripts are committed (or written, with provider local).',
+    ),
 };
 
 interface BriefDto {
@@ -208,6 +215,7 @@ const HOST_RULES = [
   'Base locators on the snapshot (labels, placeholders, button texts) and keep every spec independent.',
   'When a case needs data or configuration prepared first (its preconditions), write its beforeRun following rules.beforeRun; when it creates or changes data, write its afterRun following rules.afterRun to remove it. Both are committed next to the spec, run around the test on every execution, and can be read or changed later with e2e_get_script and e2e_update_script (kind beforeRun or afterRun).',
   'Existing tests with an externalCase automate a case kept on a test management platform (Azure Test Plans, TestRail, Xray); its steps are listed in "steps". Plan exactly those tests (one spec per case, no extra cases), write exactly one top-level await test.step(...) per listed step, in the same order and named as rules.script says, assert the expected result inside it, and send the same externalCase back for that test in e2e_save_plan. Each top-level step becomes the step result and screenshot published to the platform.',
+  'Existing tests with a savedCase automate a test case saved in ADK and follow it: keep exactly those tests, in order. e2e_save_plan keeps their savedCase when you save as many tests as the run has; send the same savedCase back to be explicit (null unlinks).',
   'After e2e_save_plan poll e2e_get until the run finishes. With reporting.autoPublish the results are then published to the platform automatically; otherwise call e2e_publish_run. Poll e2e_get until lastReport.status is no longer "publishing".',
 ];
 
@@ -645,6 +653,12 @@ export const e2eModule: McpModule = {
                 .describe(
                   'After Run module (rules.afterRun): removes what the case and its Before Run created, even when they fail. Omit when nothing is left behind.',
                 ),
+              savedCase: savedCaseReference
+                .nullable()
+                .optional()
+                .describe(
+                  'The savedCase of this test from e2e_prepare existingTests: keeps it linked to that ADK test case. Omitted, it keeps the link of the test in the same position when the plan has as many tests as the run; null unlinks it.',
+                ),
               externalCase: caseReference
                 .nullable()
                 .optional()
@@ -748,7 +762,7 @@ export const e2eModule: McpModule = {
       name: 'e2e_run_test',
       openWorld: true,
       title: 'Run one E2E test',
-      description: `Runs a single test case again. With regenerate the workspace LLM rewrites its Playwright script first (needs an API key in ADK; otherwise fix the spec yourself with e2e_update_script). Specs missing from the repository are also rewritten by the workspace LLM. ${QUEUE_NOTICE}`,
+      description: `Runs a single test case again. With regenerate the workspace LLM rewrites its Playwright script first (needs an API key in ADK; otherwise fix the spec yourself with e2e_update_script). Specs missing from the repository are also rewritten by the workspace LLM. With environmentId the test runs, now and on later runs, with that saved environment (its address, test account and variables) instead of its run's: use it for cases that need another user. ${QUEUE_NOTICE}`,
       toolset: 'e2e',
       access: 'write',
       routes: ['POST /e2e/tests/:id/run'],
@@ -758,13 +772,19 @@ export const e2eModule: McpModule = {
           .boolean()
           .default(false)
           .describe('Rewrite the script with the agent before running.'),
+        environmentId: environmentId
+          .nullable()
+          .optional()
+          .describe(
+            "Saved environment this test runs with (from e2e_list_environments). null makes it inherit its run's environment again; omit to keep what it has.",
+          ),
       },
-      run: async ({ testId: value, regenerate }, { api }) =>
+      run: async ({ testId: value, regenerate, environmentId: target }, { api }) =>
         json(
           await api.request({
             method: 'POST',
             path: `${testPath(value)}/run`,
-            body: { regenerate },
+            body: { regenerate, ...(target === undefined ? {} : { environmentId: target }) },
           }),
         ),
     }),

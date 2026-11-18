@@ -16,12 +16,18 @@ import {
 } from '../src/modules/agents/domain/agent-workflow.js';
 import type { PbiStore } from '../src/modules/pbi/pbi-store.js';
 import type { E2eArtifactStore } from '../src/modules/e2e/application/artifact-store.js';
+import { loadDocumentAttachments } from '../src/modules/shared/document-attachment.js';
 import { loadImageAttachments } from '../src/modules/shared/image-attachment.js';
 import { fakeRunAgents } from './helpers/fake-run-agents.js';
 
 vi.mock('../src/modules/shared/image-attachment.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/modules/shared/image-attachment.js')>()),
   loadImageAttachments: vi.fn(async () => []),
+}));
+
+vi.mock('../src/modules/shared/document-attachment.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/modules/shared/document-attachment.js')>()),
+  loadDocumentAttachments: vi.fn(async () => []),
 }));
 
 const workspaceId = 'workspace-a';
@@ -113,6 +119,7 @@ function setup(
 afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(loadImageAttachments).mockReset().mockResolvedValue([]);
+  vi.mocked(loadDocumentAttachments).mockReset().mockResolvedValue([]);
 });
 
 describe('RunService step workflows', () => {
@@ -1008,6 +1015,46 @@ describe('RunService prompts with attachments', () => {
     );
   });
 
+  it('sends the documents linked in the issue, its PBI item and their children to the agent', async () => {
+    const FILE = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const files = [{ name: 'spec.pdf', mimeType: 'application/pdf', data: 'JVBERi0=' }];
+    vi.mocked(loadDocumentAttachments).mockResolvedValue(files);
+    const pbiItems = pbi(
+      [
+        {
+          id: 'c1',
+          parentId: 'root',
+          title: 'C1',
+          description: `[c](/attachments/files/${FILE(3)})`,
+        },
+      ],
+      {
+        id: 'root',
+        title: 'Epic',
+        description: `[r](/attachments/files/${FILE(2)})`,
+        attachments: [{ ...image('doc-1', 'pbi'), kind: 'document' as const }],
+      },
+    );
+    const { createIssue, runs, agents, waitFor } = setup({
+      imageStore: {} as E2eArtifactStore,
+      pbiItems,
+      workflow: { steps: [step('a')], finalReview: false },
+    });
+    const issue = await createIssue('Docs', {
+      pbiItemId: 'root',
+      description: `[i](/attachments/files/${FILE(1)})`,
+    });
+    const run = await runs.create(issue.id, context);
+    await waitFor(run.id, 'succeeded');
+    expect(agents.executeWorkflowStep.mock.calls[0]?.[5]).toMatchObject({ files });
+    const loaded = vi.mocked(loadDocumentAttachments).mock.calls[0]?.[2] as unknown as {
+      id: string;
+    }[];
+    expect(loaded.map((attachment) => attachment.id)).toEqual(
+      expect.arrayContaining([FILE(1), FILE(2), FILE(3), 'doc-1']),
+    );
+  });
+
   it('sends no images when the issue vanished or links to a missing PBI item', async () => {
     const pbiItems = { get: vi.fn(async () => null), list: vi.fn() } as unknown as PbiStore;
     const { createIssue, runs, issues, store, agents, waitFor } = setup({
@@ -1069,6 +1116,21 @@ describe('RunService runs without a workflow state', () => {
       outputTokens: 4,
     });
     expect((await issues.get(workspaceId, issue.id))?.status).toBe('in_review');
+  });
+
+  it('executes the agent directly with the documents of the issue', async () => {
+    const files = [{ name: 'spec.pdf', mimeType: 'application/pdf', data: 'JVBERi0=' }];
+    vi.mocked(loadDocumentAttachments).mockResolvedValue(files);
+    const { runs, store, agents, createIssue, waitFor } = setup({
+      imageStore: {} as E2eArtifactStore,
+    });
+    agents.executeAgent.mockResolvedValue({ result: 'Read it', provider: 'OpenAI' });
+    const issue = await createIssue();
+    const run = (await store.claim({ ...base, issueId: issue.id }))!;
+    await runs.recover();
+    await waitFor(run.id, 'succeeded');
+    expect(agents.executeAgent.mock.calls[0]?.[2]).toMatchObject({ files });
+    expect(agents.executeAgent.mock.calls[0]?.[2]).not.toHaveProperty('images');
   });
 
   it('publishes the answer of a comment request as a comment', async () => {

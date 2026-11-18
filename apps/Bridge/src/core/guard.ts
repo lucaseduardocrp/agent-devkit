@@ -53,6 +53,37 @@ const SECRET_SHAPES: readonly RegExp[] = [
 ];
 const BEARER = /(\bBearer\s+)[A-Za-z0-9._~+/=-]{20,}/gi;
 
+/**
+ * Masks secrets in text that arrives in pieces. A secret can be split across two pieces, so the
+ * last characters are held back until more text shows whether they finish one: nothing is sent
+ * that a later piece could still turn into part of a secret.
+ */
+export function createStreamRedactor(secrets: readonly string[]): {
+  push(text: string): string;
+  flush(): string;
+} {
+  const hold = Math.min(16_384, Math.max(256, ...secrets.map((secret) => secret.length + 16)));
+  let raw = '';
+  let sent = 0;
+  return {
+    push(text) {
+      raw += text;
+      const safe = redactSecrets(raw, secrets).text;
+      const upTo = safe.length - hold;
+      if (upTo <= sent) return '';
+      const out = safe.slice(sent, upTo);
+      sent = upTo;
+      return out;
+    },
+    flush() {
+      const safe = redactSecrets(raw, secrets).text;
+      const out = safe.slice(sent);
+      sent = safe.length;
+      return out;
+    },
+  };
+}
+
 /** Values shorter than this are not masked by exact match: they would hide ordinary words. */
 const MIN_SECRET_LENGTH = 8;
 

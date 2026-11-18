@@ -2,18 +2,23 @@ import type { E2eCreation } from '../domain/e2e.js';
 import {
   explorationLiveKey,
   explorationPageKey,
+  explorationStepKey,
+  explorationVideoKey,
+  MAX_EXPLORATION_STEP_SHOTS,
   explorationPrefix,
   explorationStateKey,
   type E2eExploration,
   type E2eExplorationLogEntry,
   type E2eExplorationPage,
   type E2eExplorationStatus,
+  type E2eExplorationVideo,
   type NewE2eExplorationScript,
 } from '../domain/e2e-insight.js';
 import type { E2eArtifactStore } from './artifact-store.js';
-import type { E2eExploreEvent, E2ePageSnapshot } from './e2e-runner.js';
+import type { E2eExploreEvent, E2ePageSnapshot, E2eVideoTranscoder } from './e2e-runner.js';
+import type { E2eExplorationAgentRef, E2eExplorationContextRef } from '../domain/e2e-insight.js';
 
-const MAX_LOG = 200;
+const MAX_LOG = 400;
 const MAX_PAGES = 60;
 /** Frames closer than this are dropped: the page that follows the exploration polls slower. */
 const FRAME_INTERVAL_MS = 600;
@@ -40,17 +45,27 @@ export async function readExploration(
   }
 }
 
-function describePage(index: number, page: E2ePageSnapshot, hasScreenshot: boolean) {
+function describePage(
+  index: number,
+  page: E2ePageSnapshot,
+  hasScreenshot: boolean,
+  flow?: string,
+) {
+  const screen = page.headings[0] || page.title || page.url;
+  // The dialog open over the screen is what the capture shows, so it is part of the name.
+  const name = page.dialog && page.dialog !== screen ? `${screen} · ${page.dialog}` : screen;
+  const summary = [...new Set([page.title, page.dialog, page.tab, ...page.headings.slice(0, 4)])]
+    .filter(Boolean)
+    .join(' · ');
   return {
     index,
     url: page.url,
-    title: page.headings[0] || page.title || page.url,
-    summary: [...new Set([page.title, ...page.headings.slice(0, 4)])]
-      .filter(Boolean)
-      .join(' · ')
-      .slice(0, 300),
+    // The evidence of a flow is called by the flow; the screen it shows leads the summary.
+    title: flow ?? name,
+    summary: (flow ? `${name} · ${summary}` : summary).slice(0, 300),
     elements: page.buttons.slice(0, 8),
     hasScreenshot,
+    ...(flow ? { flow } : {}),
   } satisfies E2eExplorationPage;
 }
 
@@ -66,9 +81,11 @@ export class ExplorationRecorder {
   private finishedAt: number | null = null;
   private error: string | null = null;
   private hasLiveFrame = false;
+  private stepShots = 0;
   private lastFrameAt = 0;
   private readonly pages: E2eExplorationPage[] = [];
   private readonly log: E2eExplorationLogEntry[] = [];
+  private readonly videos: E2eExplorationVideo[] = [];
   private savedTo: string | null = null;
   private saveError: string | null = null;
   private pending: Promise<void> = Promise.resolve();
@@ -81,6 +98,9 @@ export class ExplorationRecorder {
     private readonly description: string | null,
     private readonly keep: ExplorationKeeper | null,
     private readonly source: boolean,
+    private readonly context: readonly E2eExplorationContextRef[],
+    private readonly transcoder: E2eVideoTranscoder | null,
+    private readonly agent: E2eExplorationAgentRef | null,
   ) {
     this.startedAt = now();
     this.status = signsIn ? 'signing_in' : 'exploring';
@@ -100,6 +120,12 @@ export class ExplorationRecorder {
       readonly keep?: ExplorationKeeper | null;
       /** The exploration replaces the Source of the workspace. */
       readonly source?: boolean;
+      /** The PBIs, issues and Brain documents the agent explores with. */
+      readonly context?: readonly E2eExplorationContextRef[];
+      /** Converts the recordings to MP4, which every browser plays. */
+      readonly transcoder?: E2eVideoTranscoder | null;
+      /** The agent the user chose to explore; the run's own agent when omitted. */
+      readonly agent?: E2eExplorationAgentRef | null;
     } = {},
   ): Promise<ExplorationRecorder> {
     await artifacts.removePrefix(explorationPrefix(creation));
@@ -111,6 +137,9 @@ export class ExplorationRecorder {
       options.description?.trim() || null,
       options.keep ?? null,
       options.source ?? false,
+      options.context ?? [],
+      options.transcoder ?? null,
+      options.agent ?? null,
     );
     await recorder.save();
     return recorder;
@@ -179,25 +208,62 @@ export class ExplorationRecorder {
       await this.artifacts.put(explorationLiveKey(this.creation), event.image);
       if (this.hasLiveFrame) return;
       this.hasLiveFrame = true;
+    } else if (event.kind === 'video') {
+      await this.keepVideo(event.worker, event.video);
     } else if (event.kind === 'phase') {
       this.status = event.phase;
     } else if (event.kind === 'log') {
       if (event.action === 'sign_in') this.signedInMs = this.now() - this.startedAt;
-      if (this.log.length < MAX_LOG)
+      if (this.log.length < MAX_LOG) {
+        // The picture of the action, found later by the position of the action in the log.
+        const kept =
+          event.screenshot && this.stepShots < MAX_EXPLORATION_STEP_SHOTS
+            ? await this.keepStepShot(this.log.length + 1, event.screenshot)
+            : false;
         this.log.push({
           atMs: this.now() - this.startedAt,
           action: event.action,
           target: event.target,
           result: event.result,
+          ...(event.reason ? { reason: event.reason } : {}),
+          ...(kept ? { hasScreenshot: true } : {}),
+          ...(event.url ? { url: event.url } : {}),
+          ...(event.worker ? { worker: event.worker } : {}),
         });
+      }
     } else {
       if (this.pages.length >= MAX_PAGES) return;
       const index = this.pages.length + 1;
       if (event.screenshot)
         await this.artifacts.put(explorationPageKey(this.creation, index), event.screenshot);
-      this.pages.push(describePage(index, event.page, Boolean(event.screenshot)));
+      this.pages.push(describePage(index, event.page, Boolean(event.screenshot), event.flow));
     }
     await this.save();
+  }
+
+  /** A recording that cannot be stored only costs the video: the exploration goes on. */
+  private async keepVideo(worker: number, video: Uint8Array): Promise<void> {
+    try {
+      const mp4 = await this.transcoder?.toMp4(video);
+      const mimeType = mp4 ? 'video/mp4' : 'video/webm';
+      await this.artifacts.put(explorationVideoKey(this.creation, worker, mimeType), mp4 ?? video);
+      this.videos.push({ worker, mimeType });
+      this.videos.sort((a, b) => a.worker - b.worker);
+    } catch (error) {
+      console.error('[E2eExploration] Could not keep a video:', error);
+    }
+  }
+
+  /** False when the picture could not be stored: the step is then a line of the log only. */
+  private async keepStepShot(index: number, image: Uint8Array): Promise<boolean> {
+    try {
+      await this.artifacts.put(explorationStepKey(this.creation, index), image);
+      this.stepShots += 1;
+      return true;
+    } catch (error) {
+      console.error('[E2eExploration] Could not keep a step picture:', error);
+      return false;
+    }
   }
 
   private async save(): Promise<void> {
@@ -205,6 +271,8 @@ export class ExplorationRecorder {
       status: this.status,
       description: this.description,
       ...(this.source ? { source: true } : {}),
+      ...(this.context.length ? { context: this.context } : {}),
+      ...(this.agent ? { agent: this.agent } : {}),
       savedTo: this.savedTo,
       saveError: this.saveError,
       startedAt: new Date(this.startedAt).toISOString(),
@@ -215,6 +283,7 @@ export class ExplorationRecorder {
       pages: this.pages,
       log: this.log,
       hasLiveFrame: this.hasLiveFrame,
+      ...(this.videos.length ? { videos: this.videos } : {}),
     };
     await this.artifacts.put(
       explorationStateKey(this.creation),

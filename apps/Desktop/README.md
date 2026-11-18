@@ -121,6 +121,11 @@ lives apart from the installed app's, in `Agent DevKit Dev` in the user's app da
 window or press Ctrl+C to stop everything. Changes to `apps/Desktop/src` itself need a new
 `npm run dev:live`.
 
+The files (test videos and screenshots, attachments) are read from the R2 bucket set in
+`apps/Backend/.env` (`E2E_R2_*`, `ATTACHMENTS_R2_PREFIX`); only those keys are taken from it. Without
+them the API keeps the files in its database, where what R2 holds is not found. The installed app
+does not read that file.
+
 Screens and endpoints belong in `apps/Frontend` and `apps/Backend`, where they serve the desktop,
 Docker and Railway installs alike. The web app knows it runs in the desktop app when
 `window.adkDesktop` exists; anything native (menus, file dialogs) goes through the preload script

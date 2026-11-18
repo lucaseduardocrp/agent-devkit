@@ -137,6 +137,16 @@ describe('SearchableSelect infinite scroll', () => {
     expect(screen.queryByText('Nothing')).not.toBeInTheDocument();
   });
 
+  it('draws skeleton rows, not a spinner, while the next page loads', () => {
+    render(<Single count={10} hasMore loadingMore />);
+    open();
+    const loading = screen.getByTestId('select-loading');
+    expect(within(loading).getAllByTestId('skeleton').length).toBeGreaterThan(0);
+    expect(loading.querySelector('.ti-loader-2')).toBeNull();
+    // The options already loaded stay in view above the placeholders.
+    expect(shown('Pick')).toHaveLength(10);
+  });
+
   it('asks an empty source for its first page', () => {
     const onLoadMore = vi.fn();
     render(<Single count={0} hasMore onLoadMore={onLoadMore} />);
@@ -207,6 +217,7 @@ describe('MultiSelect infinite scroll', () => {
       <Multi count={20} hasMore loadingMore onLoadMore={onLoadMore} loadingMessage="More…" />,
     );
     expect(screen.getByRole('status')).toHaveTextContent('More…');
+    expect(within(screen.getByTestId('select-loading')).getAllByTestId('skeleton').length).toBe(2);
   });
 
   it('goes back to the first page on a new search', () => {

@@ -161,7 +161,7 @@ describe('PublishTestSuiteModal destinations and publishing', () => {
     fireEvent.focus(
       await within(dialog).findByRole('combobox', { name: 'Work items vinculados (opcional)' }),
     );
-    expect(within(dialog).getByRole('option', { name: /#P1/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /#P1/ })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Publicar suite' }));
     // A refusal that is not an Error falls back to the default message.
     expect(await within(dialog).findByText('Falha ao publicar a suite de testes.')).toBeTruthy();

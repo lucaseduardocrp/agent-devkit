@@ -352,6 +352,54 @@ describe('LocalRunnerAgent', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('claims tasks in several browsers at once when asked to', async () => {
+    let claims = 0;
+    let active = 0;
+    let peak = 0;
+    const { api } = fakeApi({
+      'POST /e2e/runner/claim': () => {
+        claims += 1;
+        return { task: claims <= 3 ? runTask() : null };
+      },
+    });
+    const local = browser();
+    local.run.mockImplementation(async () => {
+      peak = Math.max(peak, ++active);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      active--;
+      return { status: 'passed', durationMs: 1, error: null, logs: '', video: null, steps: [] };
+    });
+    const { agent } = agentWith(api, local);
+    let finished = 0;
+    await agent.serve({
+      parallel: 3,
+      waitSeconds: 1,
+      done: () => Promise.resolve(++finished >= 3),
+    });
+    expect(peak).toBe(3);
+    expect(local.run).toHaveBeenCalledTimes(3);
+  });
+
+  it('runs one browser at a time unless more are requested', async () => {
+    let claims = 0;
+    let active = 0;
+    let peak = 0;
+    const { api } = fakeApi({
+      'POST /e2e/runner/claim': () => ({ task: ++claims <= 2 ? runTask() : null }),
+    });
+    const local = browser();
+    local.run.mockImplementation(async () => {
+      peak = Math.max(peak, ++active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+      return { status: 'passed', durationMs: 1, error: null, logs: '', video: null, steps: [] };
+    });
+    const { agent } = agentWith(api, local);
+    let finished = 0;
+    await agent.serve({ done: () => Promise.resolve(++finished >= 2) });
+    expect(peak).toBe(1);
+  });
+
   it('waits between retries until the signal stops the loop', async () => {
     const stop = new AbortController();
     const { api } = fakeApi({
@@ -465,7 +513,7 @@ describe('devkit e2e run', () => {
       calls.some((call) => call.path === '/e2e/tests/t2/script' && call.method === 'PUT'),
     ).toBe(false);
     expect(serve).toHaveBeenCalledWith(
-      expect.objectContaining({ creationId: 'c1', waitSeconds: 5 }),
+      expect.objectContaining({ creationId: 'c1', waitSeconds: 5, parallel: 3 }),
     );
     expect(summary).toMatchObject({ passed: 1, failed: 1 });
     expect(lines).toEqual([

@@ -1,9 +1,16 @@
-import { fireEvent, render, waitFor } from '@testing-library/react';
-import { exportFormatSelect } from './helpers/export-format';
+import { fireEvent, render, type RenderResult, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestPlansView } from '../src/features/testplans/TestPlansView.js';
+import { pickOption } from './helpers/pick-option.js';
 import { ApiClient } from '../src/lib/api-client.js';
 import type { SavedTestPlanDto, TestSuiteDto } from '../src/lib/api-client.js';
+import type { CustomAgentDto } from '../src/features/agents/agent-types.js';
+
+/** The export format lives in the CSV settings dialog: open it before choosing a format. */ function openCsvSettings(
+  ui: Pick<RenderResult, 'getByTestId'>,
+) {
+  fireEvent.click(ui.getByTestId('btn-csv-configuration'));
+}
 
 const ISO = '2026-09-18T00:00:00.000Z';
 
@@ -103,7 +110,7 @@ describe('TestPlansView case editor', () => {
     fireEvent.change(ui.getByTestId('input-edit-test-title'), {
       target: { value: 'Pay with Pix' },
     });
-    fireEvent.input(ui.getByTestId('input-edit-test-scenario'), {
+    fireEvent.input(ui.getByTestId('input-edit-test-scenario-formatted'), {
       target: { innerHTML: '<p>Pay using a Pix key</p>' },
     });
     fireEvent.click(ui.getByTestId('btn-save-test-case-modal'));
@@ -127,17 +134,19 @@ describe('TestPlansView case editor', () => {
     const ui = await openEditor(client());
     const execCommand = document.execCommand as unknown as ReturnType<typeof vi.fn>;
 
-    for (const label of ['Negrito', 'Itálico', 'Sublinhado', 'Lista']) {
-      const button = ui.queryByRole('button', { name: label });
-      if (!button) continue;
-      fireEvent.mouseDown(button);
-      fireEvent.click(button);
+    // The description is edited with the same Markdown editor the Brain uses.
+    for (const testId of ['editor-bold', 'editor-italic', 'editor-ul']) {
+      fireEvent.mouseDown(ui.getByTestId(testId));
+      fireEvent.click(ui.getByTestId(testId));
     }
-    fireEvent.mouseDown(ui.getByRole('button', { name: 'Título de seção' }));
-    fireEvent.click(ui.getByRole('button', { name: 'Título de seção' }));
+    fireEvent.click(ui.getByTestId('editor-style'));
+    fireEvent.click(ui.getByTestId('editor-heading-3'));
 
-    expect(execCommand).toHaveBeenCalledWith('bold', false);
+    expect(execCommand).toHaveBeenCalledWith('bold', false, undefined);
+    expect(execCommand).toHaveBeenCalledWith('italic', false, undefined);
+    expect(execCommand).toHaveBeenCalledWith('insertUnorderedList', false, undefined);
     expect(execCommand).toHaveBeenCalledWith('formatBlock', false, 'h3');
+    expect(ui.getByTestId('editor-mode-code')).toBeInTheDocument();
   });
 
   it('adds and removes a step', async () => {
@@ -189,7 +198,7 @@ describe('TestPlansView saved plan editing', () => {
 
     fireEvent.click(await ui.findByRole('button', { name: 'Abrir Test Plan Checkout' }));
     fireEvent.change(ui.getByLabelText('Título do Test Plan'), { target: { value: 'Pix flow' } });
-    fireEvent.change(ui.getByLabelText('Test suite'), { target: { value: 'suite-1' } });
+    await pickOption(ui.getByRole('combobox', { name: 'Test suite' }), 'Regression');
     fireEvent.click(ui.getByTestId('btn-save-plan-changes'));
 
     await waitFor(() =>
@@ -219,9 +228,47 @@ describe('TestPlansView saved plan editing', () => {
     const ui = view(client());
 
     fireEvent.click(await ui.findByTestId('btn-new-test-plan'));
-    fireEvent.change(ui.getByLabelText('Test suite'), { target: { value: 'suite-1' } });
+    await pickOption(ui.getByRole('combobox', { name: 'Test suite' }), 'Regression');
 
-    expect((ui.getByLabelText('Test suite') as HTMLSelectElement).value).toBe('suite-1');
+    expect((ui.getByRole('combobox', { name: 'Test suite' }) as HTMLInputElement).value).toBe(
+      'Regression',
+    );
+  });
+
+  it('filters the suites by what is typed in the suite field', async () => {
+    const api = client();
+    vi.spyOn(api, 'getTestSuites').mockResolvedValue([
+      SUITE,
+      { ...SUITE, id: 'suite-2', name: 'Smoke' },
+    ]);
+    const ui = view(api);
+
+    fireEvent.click(await ui.findByTestId('btn-new-test-plan'));
+    const field = ui.getByRole('combobox', { name: 'Test suite' });
+    fireEvent.focus(field);
+    expect(await screen.findAllByRole('option')).toHaveLength(2);
+    fireEvent.change(field, { target: { value: 'smo' } });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1));
+    expect(screen.getByRole('option', { name: 'Smoke' })).toBeInTheDocument();
+    fireEvent.change(field, { target: { value: 'zzz' } });
+    expect(await screen.findByText('Nenhum resultado encontrado.')).toBeInTheDocument();
+  });
+
+  it('goes back to the default agent after choosing another one', async () => {
+    const api = client();
+    vi.spyOn(api, 'getAgents').mockResolvedValue([
+      { id: 'agent-1', name: 'QA Writer', role: 'QA' } as CustomAgentDto,
+    ]);
+    const ui = view(api);
+
+    fireEvent.click(await ui.findByTestId('btn-new-test-plan'));
+    const field = ui.getByRole('combobox', {
+      name: 'Selecionar agente de IA para geração de testes',
+    });
+    await pickOption(field, 'QA Writer (QA)');
+    expect((field as HTMLInputElement).value).toBe('QA Writer (QA)');
+    await pickOption(field, /Test Specialist|Especialista/);
+    expect((field as HTMLInputElement).value).toMatch(/Test Specialist|Especialista/);
   });
 });
 
@@ -246,7 +293,7 @@ describe('TestPlansView failure fallbacks', () => {
     const ui = view(api);
 
     fireEvent.click(await ui.findByRole('button', { name: 'Abrir Test Plan Checkout' }));
-    fireEvent.change(ui.getByLabelText('Test suite'), { target: { value: 'suite-1' } });
+    await pickOption(ui.getByRole('combobox', { name: 'Test suite' }), 'Regression');
     fireEvent.click(ui.getByTestId('btn-save-plan-changes'));
 
     expect(await ui.findByText('Falha ao salvar alterações do plano.')).toBeInTheDocument();
@@ -322,8 +369,9 @@ describe('TestPlansView Azure export fallbacks', () => {
     const ui = view(api);
 
     await ui.findByTestId('panel-saved-plans');
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'azure' } });
+    openCsvSettings(ui);
+    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
+    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'azure' } });
 
     await waitFor(() =>
       expect((ui.getByLabelText('Area Path') as HTMLSelectElement).disabled).toBe(true),
@@ -334,8 +382,9 @@ describe('TestPlansView Azure export fallbacks', () => {
   it('clears the Azure options when no client is wired', async () => {
     const ui = render(<TestPlansView initialTab="saved" />);
 
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'standard' } });
-    fireEvent.change(exportFormatSelect(ui), { target: { value: 'azure' } });
+    openCsvSettings(ui);
+    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'standard' } });
+    fireEvent.change(ui.getByLabelText('Formato de exportação'), { target: { value: 'azure' } });
 
     await waitFor(() =>
       expect((ui.getByLabelText('Assigned To') as HTMLSelectElement).disabled).toBe(true),

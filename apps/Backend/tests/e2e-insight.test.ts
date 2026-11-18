@@ -20,6 +20,8 @@ import {
   buildActionMap,
   explorationLiveKey,
   explorationPageKey,
+  explorationStepKey,
+  MAX_EXPLORATION_STEP_SHOTS,
   explorationStateKey,
   liveFrameKey,
   liveLabelKey,
@@ -323,6 +325,68 @@ describe('exploration recorder', () => {
     ...overrides,
   });
 
+  it('keeps a picture of each action, up to a limit, and tells where and by whom it was done', async () => {
+    const artifacts = new InMemoryE2eArtifactStore();
+    const recorder = await ExplorationRecorder.start(artifacts, creation, false, () => 1_000);
+    recorder.onProgress({
+      kind: 'log',
+      action: 'click',
+      target: 'Files',
+      result: 'Files',
+      screenshot: Buffer.from('shot-1'),
+      url: 'http://app/files',
+      worker: 2,
+    });
+    // An action without a picture is only a line of the log.
+    recorder.onProgress({ kind: 'log', action: 'scroll', target: 'down', result: null });
+    await vi.waitFor(async () =>
+      expect((await readExploration(artifacts, creation))!.log).toHaveLength(2),
+    );
+    // A picture the store cannot keep does not stop the exploration either.
+    const put = vi.spyOn(artifacts, 'put').mockRejectedValueOnce(new Error('disk full'));
+    const failing = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    recorder.onProgress({
+      kind: 'log',
+      action: 'click',
+      target: 'Reports',
+      result: null,
+      screenshot: Buffer.from('lost'),
+    });
+    await vi.waitFor(async () =>
+      expect((await readExploration(artifacts, creation))!.log).toHaveLength(3),
+    );
+    put.mockRestore();
+    failing.mockRestore();
+    const state = (await readExploration(artifacts, creation))!;
+    expect(state.log[0]).toMatchObject({
+      hasScreenshot: true,
+      url: 'http://app/files',
+      worker: 2,
+    });
+    expect(state.log[1]).not.toHaveProperty('hasScreenshot');
+    expect(state.log[2]).not.toHaveProperty('hasScreenshot');
+    // The picture is found by the position of the action in the log.
+    expect((await artifacts.get(explorationStepKey(creation, 1)))!.toString()).toBe('shot-1');
+
+    for (let index = 0; index < MAX_EXPLORATION_STEP_SHOTS + 5; index += 1)
+      recorder.onProgress({
+        kind: 'log',
+        action: 'click',
+        target: `B${index}`,
+        result: null,
+        screenshot: Buffer.from('x'),
+      });
+    await vi.waitFor(async () =>
+      expect((await readExploration(artifacts, creation))!.log).toHaveLength(
+        3 + MAX_EXPLORATION_STEP_SHOTS + 5,
+      ),
+    );
+    const full = (await readExploration(artifacts, creation))!;
+    expect(full.log.filter((entry) => entry.hasScreenshot)).toHaveLength(
+      MAX_EXPLORATION_STEP_SHOTS,
+    );
+  });
+
   it('records phases, the log, pages and the live frame as the agent reports them', async () => {
     const artifacts = new InMemoryE2eArtifactStore();
     await artifacts.put(explorationPageKey(creation, 9), Buffer.from('from an older exploration'));
@@ -347,6 +411,14 @@ describe('exploration recorder', () => {
       action: 'sign_in',
       target: 'qa@example.com',
       result: 'Home',
+    });
+    // What the AI agent does carries the reason it gave.
+    recorder.onProgress({
+      kind: 'log',
+      action: 'click',
+      target: 'Files',
+      result: 'Files',
+      reason: 'Open the files area',
     });
     recorder.onProgress({ kind: 'phase', phase: 'exploring' });
     recorder.onProgress({
@@ -377,6 +449,13 @@ describe('exploration recorder', () => {
     expect(live).toMatchObject({ status: 'exploring', signedInMs: 700, hasLiveFrame: true });
     expect(live.log).toEqual([
       { atMs: 700, action: 'sign_in', target: 'qa@example.com', result: 'Home' },
+      {
+        atMs: 700,
+        action: 'click',
+        target: 'Files',
+        result: 'Files',
+        reason: 'Open the files area',
+      },
     ]);
     expect(live.pages).toEqual([
       {
@@ -419,7 +498,7 @@ describe('exploration recorder', () => {
         page: snapshot({ url: `http://app/${index}` }),
         screenshot: null,
       });
-    for (let index = 0; index < 202; index++)
+    for (let index = 0; index < 402; index++)
       recorder.onProgress({
         kind: 'log',
         action: 'click',
@@ -434,7 +513,7 @@ describe('exploration recorder', () => {
       signedInMs: null,
     });
     expect(state.pages).toHaveLength(60);
-    expect(state.log).toHaveLength(200);
+    expect(state.log).toHaveLength(400);
   });
 
   it('keeps the script of every finished exploration in the store, with its description', async () => {

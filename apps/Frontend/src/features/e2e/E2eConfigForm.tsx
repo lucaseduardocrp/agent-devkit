@@ -20,6 +20,7 @@ import { SkeletonCard } from '../../components/ui/skeleton.js';
 import { Textarea } from '../../components/ui/textarea.js';
 import type { CustomAgentDto } from '../agents/agent-types.js';
 import {
+  MAX_RUN_INSTRUCTIONS_LENGTH,
   isQuickTunnelUrl,
   suggestedScriptFolder,
   type E2eCreationDetail,
@@ -100,8 +101,8 @@ type FieldError =
   | 'agentId'
   | 'baseUrl'
   | 'localOrigin'
-  | 'prd'
   | 'diff'
+  | 'instructions'
   | 'repository'
   | 'cases'
   | 'saved';
@@ -389,9 +390,7 @@ export function E2eConfigForm({
     }));
     setErrors((current) => {
       const next = new Set(current);
-      next.delete(key === 'files' || key === 'prdText' ? 'prd' : (key as FieldError));
-      // Switching the source changes which of the two is required.
-      if (key === 'source') next.delete('prd');
+      next.delete(key as FieldError);
       return next;
     });
   };
@@ -450,11 +449,6 @@ export function E2eConfigForm({
         ...read,
       ],
     }));
-    setErrors((current) => {
-      const next = new Set(current);
-      next.delete('prd');
-      return next;
-    });
   };
 
   const onPrdChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -497,10 +491,10 @@ export function E2eConfigForm({
       (!isLocalBrowserOrigin(form.localOrigin) || form.mode !== 'frontend')
     )
       next.add('localOrigin');
-    if (form.source === 'prd' && form.knowledge === 'prd' && !prdContent().trim()) next.add('prd');
     if (form.source === 'cases' && form.cases.caseIds.length === 0) next.add('cases');
     if (form.source === 'saved' && !savedSelectionReady(form.saved)) next.add('saved');
     if (form.scope === 'diff' && !form.diff.trim()) next.add('diff');
+    if (form.instructions.trim().length > MAX_RUN_INSTRUCTIONS_LENGTH) next.add('instructions');
     if (!form.repository.provider || !form.repository.id || !form.repository.branch)
       next.add('repository');
     return next;
@@ -519,6 +513,8 @@ export function E2eConfigForm({
       : [...(editing?.prdFileNames ?? []), ...form.files.map((file) => file.name)];
     try {
       const input: E2eCreationInput = {
+        // A new run is only saved: exploring and writing its tests happen when the user asks.
+        ...(editing ? {} : { start: false }),
         name: form.name.trim(),
         agentId: form.agentId,
         mode: form.mode,
@@ -972,7 +968,11 @@ export function E2eConfigForm({
       )}
 
       {form.source === 'prd' && (
-        <Section title={t('e2e.knowledgeTitle')} hint={t('e2e.knowledgeHint')} required>
+        <Section
+          title={t('e2e.knowledgeTitle')}
+          badge={t('e2e.optional')}
+          hint={t('e2e.knowledgeHint')}
+        >
           <div
             role="tablist"
             aria-label={t('e2e.knowledgeTitle')}
@@ -1026,7 +1026,7 @@ export function E2eConfigForm({
       )}
 
       {form.source === 'prd' && form.knowledge === 'prd' && (
-        <Section title={t('e2e.prdTitle')} hint={t('e2e.prdHint')} required>
+        <Section title={t('e2e.prdTitle')} badge={t('e2e.optional')} hint={t('e2e.prdHint')}>
           <div
             onDragOver={(event) => {
               event.preventDefault();
@@ -1041,7 +1041,6 @@ export function E2eConfigForm({
               className={cn(
                 'flex h-auto w-full flex-col gap-2 rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--surface-2)] py-8 font-normal',
                 dragging && 'border-[var(--fill-accent)]',
-                errors.has('prd') && 'border-red-500/60',
               )}
               onClick={() => prdInput.current?.click()}
             >
@@ -1108,7 +1107,6 @@ export function E2eConfigForm({
               rows={6}
             />
           </Row>
-          {fieldError('prd', 'e2e.validationPrd')}
         </Section>
       )}
 
@@ -1119,7 +1117,21 @@ export function E2eConfigForm({
           onChange={(event) => update('instructions', event.target.value)}
           placeholder={t('e2e.instructionsPlaceholder')}
           rows={3}
+          className={cn(errors.has('instructions') && 'border-red-500/60')}
         />
+        <p
+          className={cn(
+            'mt-1.5 text-right text-xs',
+            form.instructions.trim().length > MAX_RUN_INSTRUCTIONS_LENGTH
+              ? 'text-red-400'
+              : 'text-[var(--text-muted)]',
+          )}
+          data-testid="e2e-instructions-count"
+        >
+          {form.instructions.trim().length.toLocaleString()} /{' '}
+          {MAX_RUN_INSTRUCTIONS_LENGTH.toLocaleString()}
+        </p>
+        {fieldError('instructions', 'e2e.validationInstructions')}
       </Section>
 
       {submitError && (

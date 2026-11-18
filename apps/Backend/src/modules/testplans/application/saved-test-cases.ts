@@ -1,6 +1,11 @@
+import { normalizeTestCaseDescription } from '../domain/test-case-description.js';
 import { ApplicationError } from '../../../shared/errors.js';
 import type { TestStep } from '../domain/test-plan.js';
-import { listAllSavedTestPlans, type SavedTestPlanStore } from './saved-test-plans.js';
+import {
+  listAllSavedTestPlans,
+  type SavedTestPlan,
+  type SavedTestPlanStore,
+} from './saved-test-plans.js';
 import type { TestSuiteStore } from './test-suites.js';
 
 /** Test cases saved in ADK chosen by suite (with its child suites), Test Plan and/or case id. */
@@ -58,24 +63,38 @@ export class SavedTestCaseReader {
         { field: 'suiteId' },
       ]);
     const wanted = selection.caseIds?.length ? new Set(selection.caseIds) : null;
-    return plans.flatMap((plan) =>
-      plan.plans.flatMap((testCase) => {
-        const caseId = testCase.metadata?.['caseId'];
-        if (typeof caseId !== 'string' || (wanted && !wanted.has(caseId))) return [];
-        return [
-          {
-            planId: plan.id,
-            planTitle: plan.title,
-            caseId,
-            title: testCase.title,
-            description: testCase.description,
-            steps: testCase.steps,
-            remote: remoteOf(testCase.metadata),
-          },
-        ];
-      }),
-    );
+    return plans.flatMap((plan) => savedCasesOf(plan, wanted));
   }
+}
+
+/** The cases of a Test Plan that have an id, restricted to `wanted` when it is given. */
+export function savedCasesOf(
+  plan: SavedTestPlan,
+  wanted: ReadonlySet<string> | null = null,
+): SavedTestCase[] {
+  return plan.plans.flatMap((testCase) => {
+    const caseId = testCase.metadata?.['caseId'];
+    if (typeof caseId !== 'string' || (wanted && !wanted.has(caseId))) return [];
+    return [
+      {
+        planId: plan.id,
+        planTitle: plan.title,
+        caseId,
+        title: testCase.title,
+        // Plans written before descriptions were normalized may still hold structured sections.
+        description:
+          typeof testCase.description === 'string'
+            ? testCase.description
+            : normalizeTestCaseDescription(
+                testCase.description,
+                'pt-BR',
+                testCase.steps.map((step) => step.action),
+              ),
+        steps: testCase.steps,
+        remote: remoteOf(testCase.metadata),
+      },
+    ];
+  });
 }
 
 function descendants(

@@ -56,7 +56,8 @@ function configOf(
   if (!selection.provider || !selection.id || !selection.branch || !path) return undefined;
   return {
     repository: {
-      provider: selection.provider,
+      // Local folders are only offered to E2E runs, never to a CI pipeline.
+      provider: selection.provider as 'github' | 'azure_devops',
       id: selection.id,
       name: selection.name || selection.id,
       branch: selection.branch,

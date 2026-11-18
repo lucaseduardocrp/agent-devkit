@@ -338,6 +338,18 @@ function defaultResponse(request: ApiRequest): unknown {
     'PUT /e2e/tests/t1/external-case': {
       test: { id: 't1', steps: ['Open'], externalCase: fixtures.externalCase, stepResults: [] },
     },
+    'POST /e2e/creations/c1/saved-cases': {
+      result: { imported: 2, skipped: 0, creation: { id: 'c1', prd: 'Pay with card.', tests: [] } },
+    },
+    'PUT /e2e/tests/t1/saved-case': {
+      test: {
+        id: 't1',
+        steps: ['Open'],
+        externalCase: null,
+        savedCase: { planId: 'p1', caseId: 'k1' },
+        stepResults: [],
+      },
+    },
     'PUT /e2e/creations/c1/reporting': {
       creation: { id: 'c1', prd: 'Pay with card.', reporting: { provider: 'testrail' } },
     },

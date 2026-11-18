@@ -283,7 +283,7 @@ describe('PublishTestSuiteModal field values', () => {
 describe('PublishTestSuiteModal suite kind', () => {
   const choose = async (dialog: HTMLElement, label: string, option: string) => {
     fireEvent.focus(await within(dialog).findByRole('combobox', { name: label }));
-    fireEvent.click(within(dialog).getByRole('option', { name: new RegExp(option) }));
+    fireEvent.click(screen.getByRole('option', { name: new RegExp(option) }));
   };
 
   it('explains each field in a tooltip next to its label', async () => {
@@ -333,16 +333,13 @@ describe('PublishTestSuiteModal suite kind', () => {
     // Only the items of the chosen provider's board are offered.
     fireEvent.focus(await within(dialog).findByRole('combobox', { name: 'Work items vinculados' }));
     expect(
-      within(within(dialog).getByRole('listbox'))
+      within(screen.getByRole('listbox'))
         .getAllByRole('option')
         .map((option) => option.textContent),
     ).toEqual(['#50059 · CoresProduct Backlog Item · New', '#60 · Ajustar APITask · New']);
-    fireEvent.click(within(dialog).getByRole('option', { name: /#50059/ }));
-    fireEvent.click(within(dialog).getByRole('option', { name: /#60/ }));
-    expect(within(dialog).getByRole('option', { name: /#60/ })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    fireEvent.click(screen.getByRole('option', { name: /#50059/ }));
+    fireEvent.click(screen.getByRole('option', { name: /#60/ }));
+    expect(screen.getByRole('option', { name: /#60/ })).toHaveAttribute('aria-selected', 'true');
     expect(publish).toHaveProperty('disabled', false);
     // A chosen item can be removed from its chip.
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remover #60 · Ajustar API' }));

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient, ApiClientError } from '../src/lib/api-client.js';
-import type { AgentRunEvent } from '../src/features/issues/issue-types.js';
+import type { AgentRunEvent, InboxEvent } from '../src/features/issues/issue-types.js';
 
 const encoder = new TextEncoder();
 
@@ -83,5 +83,49 @@ describe('ApiClient.streamRunEvents', () => {
     await expect(
       client.streamRunEvents(handlers(), new AbortController().signal),
     ).rejects.toThrow();
+  });
+});
+
+describe('ApiClient.streamInboxEvents', () => {
+  it('opens the inbox stream and reports ready and the issues that moved', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        stream([
+          'retry: 3000\n\nevent: ready\ndata: {}\n\n',
+          'event: inbox\ndata: {"issueId":"a"}\n\n',
+          'event: run\ndata: {"issueId":"not-for-the-inbox"}\n\n',
+          'event: inbox\ndata: broken\n\nevent: inbox\ndata: {"issueId":"b"}\n\n',
+        ]),
+      );
+    const client = new ApiClient({ fetcher, baseUrl: 'http://adk.test', token: 'secret' });
+    client.setWorkspaceId('ws-1');
+    const given = { onReady: vi.fn(), onRun: vi.fn<(event: InboxEvent) => void>() };
+    const controller = new AbortController();
+
+    await client.streamInboxEvents(given, controller.signal);
+
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe('http://adk.test/inbox/stream');
+    expect(init.signal).toBe(controller.signal);
+    expect(init.headers).toMatchObject({
+      accept: 'text/event-stream',
+      authorization: 'Bearer secret',
+      'x-workspace-id': 'ws-1',
+    });
+    expect(given.onReady).toHaveBeenCalledOnce();
+    expect(given.onRun.mock.calls.map(([event]) => event.issueId)).toEqual(['a', 'b']);
+  });
+
+  it('rejects when the server refuses the stream', async () => {
+    const refused = {
+      ok: false,
+      status: 403,
+      json: async () => ({ message: 'No access to issues.' }),
+    } as Response;
+    const client = new ApiClient({ fetcher: vi.fn().mockResolvedValue(refused) });
+    await expect(
+      client.streamInboxEvents({ onReady: vi.fn(), onRun: vi.fn() }, new AbortController().signal),
+    ).rejects.toBeInstanceOf(ApiClientError);
   });
 });

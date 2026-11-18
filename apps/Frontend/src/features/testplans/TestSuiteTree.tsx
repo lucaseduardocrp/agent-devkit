@@ -13,6 +13,56 @@ export interface AutomateSelection {
   readonly planId?: string;
   readonly caseIds?: readonly string[];
 }
+/** Lowercase and accent-free, so "avaliacao" finds "Avaliação". */
+const fold = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLocaleLowerCase();
+
+/** What a search leaves in the tree: the suites and plans to show, and the cases that matched. */
+interface TreeMatches {
+  readonly suites: ReadonlySet<string>;
+  readonly plans: ReadonlySet<string>;
+  /** Indexes of the cases whose title matched, per plan. */
+  readonly cases: ReadonlyMap<string, readonly number[]>;
+}
+
+/**
+ * A suite stays when its name matches (then everything inside it stays too), or when a plan, a
+ * case or a suite below it matches. A plan stays when its title or one of its cases matches.
+ */
+function searchTree(
+  needle: string,
+  roots: readonly TestSuiteDto[],
+  byParent: ReadonlyMap<string | undefined, readonly TestSuiteDto[]>,
+  plansBySuite: ReadonlyMap<string | undefined, readonly SavedTestPlanDto[]>,
+): TreeMatches {
+  const suites = new Set<string>();
+  const plans = new Set<string>();
+  const cases = new Map<string, readonly number[]>();
+  const visit = (suite: TestSuiteDto, inherited: boolean): boolean => {
+    const all = inherited || fold(suite.name).includes(needle);
+    let any = false;
+    for (const plan of plansBySuite.get(suite.id) ?? []) {
+      const hits: number[] = [];
+      plan.plans.forEach((testCase, index) => {
+        if (fold(testCase.title).includes(needle)) hits.push(index);
+      });
+      if (all || hits.length || fold(plan.title).includes(needle)) {
+        plans.add(plan.id);
+        cases.set(plan.id, hits);
+        any = true;
+      }
+    }
+    for (const child of byParent.get(suite.id) ?? []) if (visit(child, all)) any = true;
+    if (all || any) suites.add(suite.id);
+    return all || any;
+  };
+  for (const root of roots) visit(root, false);
+  return { suites, plans, cases };
+}
+
 /** Provider of a Test Plan imported from a test management platform. */
 function importedProvider(plan: SavedTestPlanDto): string | null {
   if (plan.sourceType !== 'test_management' || !plan.sourceId) return null;
@@ -42,6 +92,8 @@ interface TestSuiteTreeProps {
   readonly pushingSuiteId?: string | null;
   readonly isLoading?: boolean;
   readonly isCreating?: boolean;
+  /** Total of saved Test Plans, shown as a badge next to the card title. */
+  readonly totalCount?: number;
   readonly requestCreate?: boolean;
   readonly onCreateRequestHandled?: () => void;
 }
@@ -64,6 +116,7 @@ export function TestSuiteTree({
   pushingSuiteId,
   isLoading = false,
   isCreating = false,
+  totalCount,
   requestCreate = false,
   onCreateRequestHandled,
 }: TestSuiteTreeProps) {
@@ -74,12 +127,25 @@ export function TestSuiteTree({
   const [editing, setEditing] = useState<{ id?: string; parentId?: string; name: string } | null>(
     null,
   );
+  const [query, setQuery] = useState('');
   const byParent = useMemo(() => {
     const value = new Map<string | undefined, TestSuiteDto[]>();
     for (const suite of suites)
       value.set(suite.parentId, [...(value.get(suite.parentId) ?? []), suite]);
     return value;
   }, [suites]);
+  const plansBySuite = useMemo(() => {
+    const value = new Map<string | undefined, SavedTestPlanDto[]>();
+    for (const plan of plans)
+      value.set(plan.suiteId ?? undefined, [...(value.get(plan.suiteId ?? undefined) ?? []), plan]);
+    return value;
+  }, [plans]);
+  const needle = fold(query.trim());
+  const matches = useMemo(
+    () =>
+      needle ? searchTree(needle, byParent.get(undefined) ?? [], byParent, plansBySuite) : null,
+    [needle, byParent, plansBySuite],
+  );
   useEffect(() => {
     if (!requestCreate) return;
     setEditing({ name: '' });
@@ -100,8 +166,11 @@ export function TestSuiteTree({
   const toggle = (id: string) => setExpanded((current) => flip(current, id));
   const renderBranch = (parentId: string | undefined, depth: number) =>
     (byParent.get(parentId) ?? []).map((suite) => {
-      const suitePlans = plans.filter((plan) => plan.suiteId === suite.id);
-      const open = expanded.has(suite.id);
+      if (matches && !matches.suites.has(suite.id)) return null;
+      const allPlans = plansBySuite.get(suite.id) ?? [];
+      const suitePlans = matches ? allPlans.filter((plan) => matches.plans.has(plan.id)) : allPlans;
+      // A search opens every branch that holds a result.
+      const open = Boolean(matches) || expanded.has(suite.id);
       return (
         <div key={suite.id} className="space-y-1">
           <div
@@ -121,7 +190,7 @@ export function TestSuiteTree({
             </Button>
             <i className={`ti ${open ? 'ti-folder-open' : 'ti-folder'} text-muted`} />
             <span className="min-w-0 flex-1 truncate text-sm font-medium">{suite.name}</span>
-            <span className="mr-1 text-xs text-muted">{suitePlans.length}</span>
+            <span className="mr-1 text-xs text-muted">{allPlans.length}</span>
             <ActionsMenu label={`${t('common.actions')}: ${suite.name}`}>
               {onAutomate && (
                 <Button
@@ -216,7 +285,8 @@ export function TestSuiteTree({
               {renderBranch(suite.id, depth + 1)}
               {suitePlans.map((plan) => {
                 const provider = importedProvider(plan);
-                const casesOpen = openPlans.has(plan.id);
+                const hits = matches?.cases.get(plan.id) ?? [];
+                const casesOpen = openPlans.has(plan.id) || hits.length > 0;
                 return (
                   <div key={plan.id}>
                     <div
@@ -302,26 +372,29 @@ export function TestSuiteTree({
                     </div>
                     {onOpenCase && casesOpen && (
                       <ul aria-label={plan.title}>
-                        {plan.plans.map((testCase, index) => (
-                          <li key={index}>
-                            <button
-                              type="button"
-                              className="flex w-full items-center gap-2 rounded py-1.5 pr-2 text-left text-sm hover:bg-surface-2"
-                              style={{ paddingLeft: `${(depth + 2) * 16 + 40}px` }}
-                              onClick={() => onOpenCase(plan, index)}
-                              aria-label={c.openCase.replace('{title}', testCase.title)}
-                              data-testid={`tree-case-${plan.id}-${index}`}
-                            >
-                              <span className="w-12 shrink-0 font-mono text-[11px] text-muted">
-                                {`CT-${String(index + 1).padStart(2, '0')}`}
-                              </span>
-                              <span className="min-w-0 flex-1 truncate">{testCase.title}</span>
-                              <span className="shrink-0 text-[11px] text-muted">
-                                {c.steps.replace('{count}', String(testCase.steps.length))}
-                              </span>
-                            </button>
-                          </li>
-                        ))}
+                        {plan.plans.map((testCase, index) =>
+                          // Searching a case lists the cases that matched, not the whole plan.
+                          hits.length && !hits.includes(index) ? null : (
+                            <li key={index}>
+                              <button
+                                type="button"
+                                className="flex w-full items-center gap-2 rounded py-1.5 pr-2 text-left text-sm hover:bg-surface-2"
+                                style={{ paddingLeft: `${(depth + 2) * 16 + 40}px` }}
+                                onClick={() => onOpenCase(plan, index)}
+                                aria-label={c.openCase.replace('{title}', testCase.title)}
+                                data-testid={`tree-case-${plan.id}-${index}`}
+                              >
+                                <span className="w-12 shrink-0 font-mono text-[11px] text-muted">
+                                  {`CT-${String(index + 1).padStart(2, '0')}`}
+                                </span>
+                                <span className="min-w-0 flex-1 truncate">{testCase.title}</span>
+                                <span className="shrink-0 text-[11px] text-muted">
+                                  {c.steps.replace('{count}', String(testCase.steps.length))}
+                                </span>
+                              </button>
+                            </li>
+                          ),
+                        )}
                       </ul>
                     )}
                   </div>
@@ -339,7 +412,17 @@ export function TestSuiteTree({
       data-testid="test-suite-tree"
     >
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-sm font-semibold">{t('runtime.savedTestPlans')}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold">{t('runtime.savedTestPlans')}</span>
+          {totalCount !== undefined && (
+            <span
+              className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-xs text-[var(--text-muted)]"
+              data-testid="test-suite-tree-count"
+            >
+              {totalCount}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1">
           {onImport && (
             <Button
@@ -368,6 +451,33 @@ export function TestSuiteTree({
           )}
         </div>
       </div>
+      {!isLoading && (suites.length > 0 || plans.length > 0) && (
+        <div className="mb-2 flex items-center gap-2">
+          <Input
+            type="search"
+            value={query}
+            aria-label={c.searchLabel}
+            placeholder={c.searchPlaceholder}
+            leftIcon={<i className="ti ti-search" aria-hidden="true" />}
+            data-testid="test-suite-tree-search"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setQuery('');
+            }}
+          />
+          {query && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label={c.clearSearch}
+              onClick={() => setQuery('')}
+            >
+              <i className="ti ti-x" aria-hidden="true" />
+            </Button>
+          )}
+        </div>
+      )}
       {isLoading ? (
         <div
           className="space-y-2 py-2"
@@ -384,6 +494,11 @@ export function TestSuiteTree({
         plans.length === 0 && (
           <p className="p-6 text-center text-sm text-muted">{t('runtime.noSavedTestPlan')}</p>
         )
+      )}
+      {matches && matches.suites.size === 0 && !isLoading && (
+        <p className="p-6 text-center text-sm text-muted" role="status">
+          {c.noResults.replace('{query}', query.trim())}
+        </p>
       )}
       {renderBranch(undefined, 0)}
       {editing && (

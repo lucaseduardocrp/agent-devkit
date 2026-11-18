@@ -10,10 +10,16 @@ export function HelpTooltip({
   children,
   label,
   className,
+  align = 'start',
+  size = 'sm',
 }: {
   readonly children: ReactNode;
   /** Accessible name of the icon; defaults to "More information". */
   readonly label?: string;
+  /** `end` opens the tooltip to the left of the icon, for icons near the right edge. */
+  readonly align?: 'start' | 'end';
+  /** `md` is a slightly larger icon, for headings and rows of regular text. */
+  readonly size?: 'sm' | 'md';
   readonly className?: string;
 }) {
   const { t } = useI18n();
@@ -29,7 +35,10 @@ export function HelpTooltip({
         type="button"
         aria-label={label ?? t('common.moreInfo')}
         aria-describedby={id}
-        className="inline-flex size-4 items-center justify-center rounded-full text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)] focus-visible:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--bg-accent)]"
+        className={cn(
+          'inline-flex items-center justify-center rounded-full text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)] focus-visible:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--bg-accent)]',
+          size === 'md' ? 'size-5' : 'size-4',
+        )}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onKeyDown={(event) => {
@@ -38,14 +47,18 @@ export function HelpTooltip({
         // A click (or tap) only opens it: there is nothing to submit.
         onClick={() => setOpen(true)}
       >
-        <i className="ti ti-help-circle text-sm" aria-hidden="true" />
+        <i
+          className={cn('ti ti-help-circle', size === 'md' ? 'text-base' : 'text-sm')}
+          aria-hidden="true"
+        />
       </button>
       <span
         id={id}
         role="tooltip"
         className={cn(
           // Opens to the right of the icon: labels sit on the left of forms and dialogs.
-          'absolute -left-2 top-full z-30 mt-1.5 w-max max-w-72 rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs font-normal leading-snug text-[var(--text-secondary)] shadow-lg',
+          'absolute top-full z-30 mt-1.5 w-max max-w-72 rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs font-normal leading-snug text-[var(--text-secondary)] shadow-lg',
+          align === 'end' ? '-right-2' : '-left-2',
           !open && 'sr-only',
         )}
       >

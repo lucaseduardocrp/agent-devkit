@@ -436,6 +436,28 @@ describe('ApiClient', () => {
       });
     });
 
+    it('sends the PBIs, issues and Brain documents picked as context, and nothing when none', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const client = new ApiClient({
+        fetcher: async (_input, init) => {
+          bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return jsonResponse({ plans: [], csv: '' }, true, 200);
+        },
+      });
+      const context = [
+        { kind: 'pbi', id: 'p1' },
+        { kind: 'brain', id: 'src:page' },
+      ] as const;
+
+      await client.generateTestPlan('Prompt', { context });
+      await client.generateTestPlan('Prompt', { context: [] });
+      await client.generateTestPlan('Prompt');
+
+      expect(bodies[0]).toEqual({ prompt: 'Prompt', context });
+      expect(bodies[1]).toEqual({ prompt: 'Prompt' });
+      expect(bodies[2]).toEqual({ prompt: 'Prompt' });
+    });
+
     it('throws error when server returns error status', async () => {
       const client = new ApiClient({
         fetcher: async () => jsonResponse({ message: 'Internal error' }, false, 500),
@@ -925,6 +947,28 @@ describe('ApiClient', () => {
       await expect(client.getKnowledgeDocuments()).rejects.toMatchObject({
         status: 500,
       });
+    });
+
+    it('searchKnowledgeDocuments asks for a page of titles and reports its failure', async () => {
+      const page = { documents: [{ id: 'd1', title: 'Billing' }], total: 1 };
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(jsonResponse(page))
+        .mockResolvedValueOnce(jsonResponse(page))
+        .mockResolvedValueOnce(jsonResponse({}, false, 500));
+      const client = new ApiClient({ fetcher });
+
+      await expect(
+        client.searchKnowledgeDocuments({ q: '  bill ', page: 2, pageSize: 25 }),
+      ).resolves.toEqual(page);
+      expect(String(fetcher.mock.calls[0]![0])).toContain(
+        '/knowledge/documents?page=2&pageSize=25&q=bill',
+      );
+      await client.searchKnowledgeDocuments({ q: '   ', page: 1, pageSize: 10 });
+      expect(String(fetcher.mock.calls[1]![0])).not.toContain('q=');
+      await expect(
+        client.searchKnowledgeDocuments({ q: '', page: 1, pageSize: 10 }),
+      ).rejects.toMatchObject({ status: 500 });
     });
 
     it('manages user-defined knowledge correlations', async () => {

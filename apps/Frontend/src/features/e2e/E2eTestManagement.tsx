@@ -407,7 +407,7 @@ export function E2eReportingDialog({
   onOpenIntegrations,
 }: {
   readonly apiClient: ApiClient;
-  readonly creation: E2eCreationSummary;
+  readonly creation: Pick<E2eCreationSummary, 'id' | 'name' | 'reporting'>;
   readonly onClose: () => void;
   readonly onSaved: () => void;
   readonly onOpenIntegrations?: () => void;
@@ -510,7 +510,7 @@ export function E2eImportCasesDialog({
   onOpenIntegrations,
 }: {
   readonly apiClient: ApiClient;
-  readonly creation: E2eCreationSummary;
+  readonly creation: Pick<E2eCreationSummary, 'id' | 'name' | 'reporting'>;
   readonly onClose: () => void;
   readonly onImported: (result: E2eImportResult) => void;
   readonly onOpenIntegrations?: () => void;

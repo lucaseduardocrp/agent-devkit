@@ -1,10 +1,16 @@
 import type { E2eMode } from '../domain/e2e-mode.js';
+import type { ExploreTest } from './e2e-explore-share.js';
 import type { AccessServiceToken } from './access-routing.js';
 
 export interface E2ePageSnapshot {
   readonly url: string;
   readonly title: string;
+  /** Visible headings, the ones that name the screen first (see `collectPageSnapshot`). */
   readonly headings: readonly string[];
+  /** Title of the dialog open over the screen, if any: the same route can show many states. */
+  readonly dialog?: string;
+  /** The selected tab, if any. */
+  readonly tab?: string;
   readonly buttons: readonly string[];
   readonly links: readonly { readonly text: string; readonly href: string }[];
   readonly fields: readonly string[];
@@ -150,18 +156,128 @@ export type E2eExploreEvent =
   | { readonly kind: 'phase'; readonly phase: 'signing_in' | 'exploring' }
   | {
       readonly kind: 'log';
-      readonly action: 'navigate' | 'sign_in' | 'click';
+      /** A `note` explains a decision of the agent: its target is a code of `EXPLORE_NOTES`. */
+      readonly action:
+        'navigate' | 'sign_in' | 'click' | 'type' | 'select' | 'press' | 'scroll' | 'note';
       readonly target: string;
       /** Name of the page the action led to. */
       readonly result: string | null;
+      /** Why the AI agent did it, in its own words; only its actions have one. */
+      readonly reason?: string;
+      /** JPEG of the screen once the action was done, with the cursor and the caption of the step. */
+      readonly screenshot?: Uint8Array;
+      /** The address the browser was on after the action. */
+      readonly url?: string;
+      /** Which browser did it, when several explore at once (1-based). */
+      readonly worker?: number;
     }
   | {
       readonly kind: 'page';
       readonly page: E2ePageSnapshot;
       /** JPEG of the page. */
       readonly screenshot: Uint8Array | null;
+      /** The flow of the agent's plan this screen is the evidence of, when it is one. */
+      readonly flow?: string;
     }
-  | { readonly kind: 'frame'; readonly image: Uint8Array };
+  | { readonly kind: 'frame'; readonly image: Uint8Array }
+  /** The recording of a browser, sent once it is closed at the end of the exploration. */
+  | { readonly kind: 'video'; readonly worker: number; readonly video: Uint8Array };
+
+/** A control the AI agent can use: what a person would see of it on the screen. */
+export interface E2eAgentElement {
+  /** Number the agent names the control by; valid for this observation only. */
+  readonly id: number;
+  readonly role: string;
+  readonly label: string;
+  /** Input type, for fields. */
+  readonly type?: string;
+  /** What a field holds now (never a password). */
+  readonly value?: string;
+  readonly href?: string;
+  readonly checked?: boolean;
+  /** Choices of a drop-down list (the first ones). */
+  readonly options?: readonly string[];
+}
+
+/** How far the AI agent is in the flows it set out to walk through. */
+export interface E2eAgentPlanItem {
+  readonly flow: string;
+  readonly status: 'pending' | 'done' | 'blocked';
+}
+
+/** What the AI agent sees before each step of its exploration. */
+export interface E2eAgentObservation {
+  readonly step: number;
+  readonly maxSteps: number;
+  readonly page: E2ePageSnapshot;
+  /** The text on the screen, cut short. */
+  readonly text: string;
+  readonly elements: readonly E2eAgentElement[];
+  /** What the agent did so far, one line per step. */
+  readonly history: readonly string[];
+  /** Names of the screens it has reached. */
+  readonly screens: readonly string[];
+  /** The flows the agent planned to walk through, as it last updated them. */
+  readonly plan: readonly E2eAgentPlanItem[];
+  /**
+   * Set when several browsers explore the site at once: which one this agent drives and the
+   * parts of the navigation that are its own. `screens` then lists what all of them reached.
+   */
+  readonly assignment?: E2eAgentAssignment;
+  /** The other explorers' plans and screens, as they are now; set with `assignment`. */
+  readonly others?: readonly E2eAgentPeer[];
+}
+
+/** The piece of a parallel exploration an agent covers now; it gets another when it is done. */
+export interface E2eAgentAssignment {
+  /** 1-based number of this explorer. */
+  readonly worker: number;
+  readonly workers: number;
+  /** Menu items, tabs and links to walk through now. */
+  readonly areas: readonly string[];
+  /** Codes of the tests whose flows to walk through now. */
+  readonly tests: readonly string[];
+  /** How many pieces this explorer has taken so far, this one included. */
+  readonly round: number;
+  /** The areas every explorer started with. */
+  readonly shares: readonly (readonly string[])[];
+}
+
+/** What another explorer of a parallel exploration is doing right now. */
+export interface E2eAgentPeer {
+  readonly worker: number;
+  /** The flows it planned to walk through. */
+  readonly flows: readonly string[];
+  /** The screen it is on. */
+  readonly screen: string;
+}
+
+/** What the AI agent decides to do next; `reason` says why, for whoever follows the log. */
+export type E2eAgentAction = (
+  | { readonly kind: 'click'; readonly element: number }
+  | {
+      readonly kind: 'type';
+      readonly element: number;
+      readonly value: string;
+      /** Press Enter after typing (search boxes, filters). */
+      readonly submit?: boolean;
+    }
+  | { readonly kind: 'select'; readonly element: number; readonly option: string }
+  | { readonly kind: 'press'; readonly key: string }
+  | { readonly kind: 'scroll'; readonly direction: 'down' | 'up' }
+  | { readonly kind: 'goto'; readonly url: string }
+  | { readonly kind: 'finish' }
+) & {
+  readonly reason: string;
+  /** The agent's updated list of flows; absent when it did not change it. */
+  readonly plan?: readonly E2eAgentPlanItem[];
+};
+
+/** Decides the next step of an exploration from what the browser shows. Rejects when it cannot. */
+export type E2eExploreAgent = (
+  observation: E2eAgentObservation,
+  signal?: AbortSignal,
+) => Promise<E2eAgentAction>;
 
 const FOCUS_STOPWORDS = new Set(
   (
@@ -205,6 +321,16 @@ export interface E2eExploreInput {
    * Used for the Source of a workspace, which is meant to hold every flow the agent can reach.
    */
   thorough?: boolean;
+  /**
+   * An AI agent that decides each step like a person exploring the site for the tests. Without it,
+   * or when it fails, the exploration clicks through the navigation by itself.
+   */
+  agent?: E2eExploreAgent;
+  /**
+   * The tests of the run, which the browsers of a parallel exploration share out between them
+   * (see `E2eAgentAssignment.tests`). Without them, the browsers share out the areas only.
+   */
+  tests?: readonly ExploreTest[];
   /** Follows the exploration of a UI; events arrive in order. */
   onProgress?: (event: E2eExploreEvent) => void;
 }

@@ -5,6 +5,7 @@ import {
   databaseUrl,
   mcpEnvironment,
   mcpUrl,
+  storageEnvironment,
 } from '../src/main/env.js';
 import type { DesktopSettings } from '../src/main/settings.js';
 
@@ -36,6 +37,7 @@ describe('desktop environment', () => {
       INTEGRATION_ENCRYPTION_KEY: 'k'.repeat(64),
       ADK_HOST_ACCESS: 'true',
       ADK_HOST_ALIAS: 'localhost',
+      ADK_LLM_CLI: 'true',
     });
     expect(env).not.toHaveProperty('REDIS_URL');
     expect(env).not.toHaveProperty('E2E_WORKER_URL');
@@ -48,6 +50,27 @@ describe('desktop environment', () => {
       frontendUrl: 'http://localhost:5173',
     });
     expect(env['FRONTEND_URL']).toBe('http://localhost:5173');
+  });
+
+  it('takes only the R2 settings from a .env and hands them to the API', () => {
+    const text = [
+      'DATABASE_URL=postgresql://remote/db',
+      'PORT=3000',
+      'E2E_R2_URL=https://acct.r2.cloudflarestorage.com/bucket',
+      "E2E_R2_ACCESS_KEY_ID='key'",
+      'E2E_R2_SECRET_ACCESS_KEY=secret',
+      'ATTACHMENTS_R2_PREFIX=',
+    ].join('\n');
+    const storage = storageEnvironment(text);
+    expect(storage).toEqual({
+      E2E_R2_URL: 'https://acct.r2.cloudflarestorage.com/bucket',
+      E2E_R2_ACCESS_KEY_ID: 'key',
+      E2E_R2_SECRET_ACCESS_KEY: 'secret',
+    });
+    const env = backendEnvironment(settings, { browsersPath: '/b', dataDir: '/d', storage });
+    expect(env['E2E_R2_URL']).toBe(storage['E2E_R2_URL']);
+    expect(env['PORT']).toBe('3001');
+    expect(storageEnvironment('')).toEqual({});
   });
 
   it('points the MCP server at the local API with OAuth sign-in', () => {

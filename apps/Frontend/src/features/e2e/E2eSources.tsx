@@ -9,7 +9,7 @@ import { EnvironmentDialog } from './E2eEnvironments.js';
 import { Select } from '../../components/ui/select.js';
 import { Skeleton, SkeletonButton, SkeletonInput } from '../../components/ui/skeleton.js';
 import { E2eImage } from './E2eImage.js';
-import { EXPLORATION_ACTION_LABELS } from './E2eExploration.js';
+import { EXPLORATION_ACTION_LABELS, explorationTarget } from './E2eExploration.js';
 import { E2eRunMap } from './E2eRunMap.js';
 import { E2eSourceOverview } from './E2eSourceOverview.js';
 import type { TranslationKey } from '../../lib/i18n/types.js';
@@ -35,6 +35,11 @@ const FLOW_ICONS: Record<E2eSourceFlow['action'], string> = {
   navigate: 'ti-link',
   sign_in: 'ti-login-2',
   click: 'ti-pointer',
+  type: 'ti-forms',
+  select: 'ti-list-check',
+  scroll: 'ti-arrows-vertical',
+  press: 'ti-keyboard',
+  note: 'ti-info-circle',
 };
 
 /** The page while it loads: the same header, tabs, map and flow list it will show. */
@@ -109,7 +114,6 @@ export function E2eSources({ apiClient, isReadOnly = false, onExplore }: E2eSour
   const [agentId, setAgentId] = useState('');
   const [target, setTarget] = useState<Target>('auto');
   const [starting, setStarting] = useState(false);
-  const [documenting, setDocumenting] = useState(false);
   const [addingEnvironment, setAddingEnvironment] = useState(false);
   /** Null until a tab is picked: the documentation when there is one, else the map. */
   const [picked, setTab] = useState<Tab | null>(null);
@@ -183,19 +187,6 @@ export function E2eSources({ apiClient, isReadOnly = false, onExplore }: E2eSour
     }
   };
 
-  const documentSource = async () => {
-    setDocumenting(true);
-    setActionError(null);
-    try {
-      await apiClient.documentE2eSource();
-      await load();
-    } catch (reason) {
-      setActionError(reason instanceof Error ? reason.message : t('e2e.actionFailed'));
-    } finally {
-      setDocumenting(false);
-    }
-  };
-
   if (!data)
     return (
       <div className="flex flex-col gap-4" data-testid="e2e-sources">
@@ -214,6 +205,13 @@ export function E2eSources({ apiClient, isReadOnly = false, onExplore }: E2eSour
 
   const { state, environments, agents } = data;
   const closeEnvironment = () => setAddingEnvironment(false);
+  // What the update did (and does now) can be watched on the page of the exploration.
+  const runsButton = state.anchorId ? (
+    <Button variant="outline" onClick={() => onExplore(state.anchorId as string)}>
+      <i className="ti ti-history" aria-hidden="true" />
+      {t('e2e.sourcesRuns')}
+    </Button>
+  ) : null;
   const labelOf = (flow: E2eSourceFlow) =>
     `${t(EXPLORATION_ACTION_LABELS[flow.action])} ${flow.target}`;
   const paths = source?.map.tests ?? [];
@@ -304,26 +302,21 @@ export function E2eSources({ apiClient, isReadOnly = false, onExplore }: E2eSour
               <i className="ti ti-plus" aria-hidden="true" />
               {t('e2e.envAdd')}
             </Button>
-            {source && (
-              <Button
-                variant="outline"
-                isLoading={documenting}
-                disabled={busy}
-                onClick={() => void documentSource()}
-              >
-                <i className="ti ti-file-text" aria-hidden="true" />
-                {t('e2e.sourcesDocument')}
-              </Button>
-            )}
+            {runsButton}
             <Button
               isLoading={starting}
               disabled={busy || !environmentId || !agentId}
               onClick={() => void explore()}
             >
-              <i className="ti ti-compass" aria-hidden="true" />
-              {t(source ? 'e2e.sourcesUpdate' : 'e2e.sourcesExplore')}
+              <i className="ti ti-refresh" aria-hidden="true" />
+              {t('e2e.sourcesUpdate')}
             </Button>
           </div>
+        </div>
+      )}
+      {isReadOnly && runsButton && (
+        <div className="flex" data-testid="e2e-sources-runs">
+          {runsButton}
         </div>
       )}
       {!isReadOnly && agents.length === 0 && <Hint>{t('e2e.sourcesNoAgents')}</Hint>}
@@ -375,6 +368,19 @@ export function E2eSources({ apiClient, isReadOnly = false, onExplore }: E2eSour
             <E2eSourceOverview
               documentation={source.documentation}
               error={source.documentationError}
+              {...(!isReadOnly && source.documentation
+                ? {
+                    onSaveOverview: async (overview: string) => {
+                      const { areas, brainDocuments } = source.documentation!;
+                      await apiClient.saveE2eSourceDocumentation({
+                        overview,
+                        areas,
+                        brainDocuments,
+                      });
+                      await load();
+                    },
+                  }
+                : {})}
             />
           ) : tab === 'map' ? (
             <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
@@ -531,10 +537,15 @@ export function E2eSources({ apiClient, isReadOnly = false, onExplore }: E2eSour
                         <strong className="font-semibold">
                           {t(EXPLORATION_ACTION_LABELS[entry.action])}
                         </strong>{' '}
-                        {entry.target}
+                        {explorationTarget(entry, t)}
                         {entry.result && (
                           <span className="block text-xs text-[var(--text-secondary)]">
                             {t('e2e.exploreLogResult', { result: entry.result })}
+                          </span>
+                        )}
+                        {entry.reason && (
+                          <span className="block text-xs italic text-[var(--text-muted)]">
+                            {entry.reason}
                           </span>
                         )}
                       </span>

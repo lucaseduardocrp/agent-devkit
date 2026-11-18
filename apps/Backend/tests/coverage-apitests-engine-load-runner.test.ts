@@ -99,7 +99,6 @@ describe('runLoad', () => {
       ),
     );
     const metrics = [
-      'min',
       'avg',
       'p50',
       'p90',
@@ -115,7 +114,8 @@ describe('runLoad', () => {
     // one of the declared LOAD_METRICS.
     const thresholds = metrics.map((metric, index) => ({
       metric,
-      operator: operators[index % operators.length]!,
+      // Offset by one: each metric keeps the operator it had when 'min' (no longer a threshold) led the list.
+      operator: operators[(index + 1) % operators.length]!,
       value: 1,
     })) as unknown as LoadThreshold[];
     const summary = await finish(
@@ -127,7 +127,6 @@ describe('runLoad', () => {
     );
     expect(summary.thresholds.map((item) => item.metric)).toEqual([...metrics]);
     expect(summary.thresholds.map((item) => item.passed)).toEqual([
-      true, // min lt 1: min is 0 (clamped negative)
       false, // avg lte 1
       true, // p50 gt 1
       true, // p90 gte 1

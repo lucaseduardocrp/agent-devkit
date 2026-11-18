@@ -367,9 +367,8 @@ const authParams = (entries: Record<string, string | boolean | number | undefine
 function authTo(auth: RequestAuth | undefined): Json | undefined {
   if (!auth || auth.type === 'inherit') return undefined;
   switch (auth.type) {
-    case 'none':
     // Postman has no WSSE auth: there the header needs a pre-request script.
-    // falls through
+    case 'none':
     case 'wsse':
       return { type: 'noauth' };
     case 'bearer':

@@ -51,6 +51,7 @@ describe('BrainView external documents', () => {
     fireEvent.click(await view.findByTestId(`tree-item-${externalDoc.id}`));
     fireEvent.click(view.getByTestId('btn-copy-document'));
     expect((view.getByTestId('input-document-title') as HTMLInputElement).value).toBe('External');
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     expect((view.getByTestId('textarea-document-content') as HTMLTextAreaElement).value).toBe('');
   });
 
@@ -87,6 +88,7 @@ describe('BrainView assistants', () => {
     } as ExecuteAgentResponse);
     const view = render(<BrainView apiClient={client} initialDocuments={[appDoc]} />);
     fireEvent.click(view.getByTestId('btn-create-document'));
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     fireEvent.change(view.getByTestId('textarea-document-content'), {
       target: { value: 'Intro', selectionStart: 0 },
     });
@@ -100,10 +102,10 @@ describe('BrainView assistants', () => {
     fireEvent.click(within(sidebar).getByRole('button', { name: 'Ações' }));
     const insert = await within(sidebar).findByRole('button', { name: 'Inserir no documento' });
 
-    fireEvent.click(view.getByTestId('btn-toggle-edit-preview'));
-    expect(view.getByTestId('editor-preview-container')).toBeInTheDocument();
+    fireEvent.click(view.getByTestId('editor-mode-formatted'));
+    expect(view.getByTestId('markdown-editor-formatted')).toBeInTheDocument();
     fireEvent.click(insert);
-    fireEvent.click(view.getByTestId('btn-toggle-edit-preview'));
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     expect((view.getByTestId('textarea-document-content') as HTMLTextAreaElement).value).toBe(
       'Intro\n\nGenerated text',
     );

@@ -38,6 +38,50 @@ function Pick({
 }
 
 describe('MultiSelect', () => {
+  it('floats its list from the body, under the field or above it when there is no room below', () => {
+    const rect = (top: number, bottom: number) =>
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        left: 40,
+        width: 300,
+        top,
+        bottom,
+        right: 340,
+        height: bottom - top,
+        x: 40,
+        y: top,
+        toJSON: () => ({}),
+      });
+    const spy = rect(100, 140);
+    render(<Pick />);
+    fireEvent.focus(screen.getByRole('combobox', { name: 'Letras' }));
+    const list = screen.getByRole('listbox');
+    // Not inside the field: a box that scrolls around the field cannot cut it.
+    expect(list.parentElement).toBe(document.body);
+    expect(list.style.top).toBe('144px');
+    expect(list.style.left).toBe('40px');
+    expect(list.style.width).toBe('300px');
+    // It follows the field when something scrolls.
+    spy.mockReturnValue({
+      ...spy.getMockImplementation?.()?.call(null),
+      left: 60,
+      width: 300,
+      top: 120,
+      bottom: 160,
+    } as DOMRect);
+    fireEvent.scroll(window);
+    expect(screen.getByRole('listbox').style.top).toBe('164px');
+    spy.mockRestore();
+
+    // Near the bottom of the window, with more room above, it opens upwards.
+    const low = rect(window.innerHeight - 50, window.innerHeight - 10);
+    fireEvent.blur(screen.getByRole('combobox', { name: 'Letras' }));
+    fireEvent.focus(screen.getByRole('combobox', { name: 'Letras' }));
+    const up = screen.getByRole('listbox');
+    expect(up.style.bottom).toBe('54px');
+    expect(up.style.top).toBe('');
+    low.mockRestore();
+  });
+
   it('picks and removes options with the mouse and shows picked ones as chips', () => {
     const onChange = vi.fn();
     render(<Pick onChange={onChange} id="letters" />);

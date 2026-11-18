@@ -8,10 +8,15 @@ import {
   clearExploreMark,
   collectPageSnapshot,
   findSignInForm,
+  inspectSignIn,
+  isRendered,
+  moveExploreCursor,
+  pressExploreCursor,
   matchesFocus,
   nextExploreTarget,
   pageKey,
   pageName,
+  withoutSharedHeadings,
   readTrail,
   watchLive,
   type PlaywrightModule,
@@ -49,31 +54,51 @@ interface FakeOptions {
   mouse?: boolean;
   keyboard?: boolean;
   url?: (() => string) | false;
+  /** Whether the page already shows something; false keeps it on its loading screen. */
+  rendered?: boolean;
+  /** The sign-in form is still shown after the account was submitted. */
+  formStays?: boolean;
+  /** Typed text that never reaches a field (a page that shifts under the cursor). */
+  dropTyping?: boolean;
 }
 
 function fakeBrowser(options: FakeOptions) {
   const targets = [...(options.targets ?? [])];
   const calls: string[] = [];
+  const fields = { user: '', password: '' };
+  let focused: 'user' | 'password' | null = null;
+  let formReads = 0;
   const page = {
     goto: vi.fn(async (target: string) => {
       calls.push(`goto:${target}`);
     }),
     waitForLoadState: vi.fn().mockRejectedValue(new Error('still loading')),
-    evaluate: vi.fn(async (fn: unknown) => {
+    evaluate: vi.fn(async (fn: unknown, arg?: unknown) => {
       if (fn === collectPageSnapshot) {
         const next = options.snapshots.shift();
         if (next instanceof Error || !next) throw next ?? new Error('no page');
         return next;
       }
+      if (fn === isRendered) return options.rendered ?? true;
       if (fn === findSignInForm) {
         if (options.form instanceof Error) throw options.form;
-        return options.form ?? null;
+        formReads += 1;
+        return formReads === 1 || options.formStays ? (options.form ?? null) : null;
+      }
+      if (fn === inspectSignIn) {
+        if (arg) {
+          focused = arg as 'user' | 'password';
+          fields[focused] = '';
+          calls.push(`focus:${arg}`);
+        }
+        return { focused: Boolean(arg), user: fields.user, passwordLength: fields.password.length };
       }
       if (fn === nextExploreTarget) {
         const next = targets.shift();
         if (next instanceof Error) throw next;
         return next ?? null;
       }
+      if (fn === moveExploreCursor || fn === pressExploreCursor) return undefined;
       expect(fn).toBe(clearExploreMark);
       return undefined;
     }),
@@ -98,6 +123,7 @@ function fakeBrowser(options: FakeOptions) {
           keyboard: {
             type: vi.fn(async (text: string) => {
               calls.push(`type:${text}`);
+              if (focused && !options.dropTyping) fields[focused] += text;
             }),
             press: vi.fn(async (key: string) => {
               calls.push(`press:${key}`);
@@ -140,7 +166,7 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
       },
     });
     const events: E2eExploreEvent[] = [];
-    const runner = new PlaywrightE2eRunner({ loadPlaywright, settleMs: 1 });
+    const runner = new PlaywrightE2eRunner({ loadPlaywright, settleMs: 1, glideMs: 0 });
 
     const snapshot = await runner.explore({
       mode: 'frontend',
@@ -161,9 +187,9 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
     ]);
     expect(calls).toEqual([
       `goto:${ORIGIN}/`,
-      'click:1',
+      'focus:user',
       'type:qa@example.com',
-      'click:3',
+      'focus:password',
       'type:pw-secret',
       'press:Enter',
       `goto:${ORIGIN}/about`,
@@ -184,6 +210,8 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
       ['click', 'Issues', 'Issues'],
       ['click', 'Broken', null],
       ['click', 'Docs', 'Home'],
+      // Nothing is left to click: the log says why the exploration ended.
+      ['note', 'stopped_no_targets:3', null],
     ]);
     expect(events.filter((event) => event.kind === 'phase').map((event) => event.phase)).toEqual([
       'signing_in',
@@ -199,7 +227,7 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
       targets: [target('Docs')],
       url: () => 'https://elsewhere.test/docs',
     });
-    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0 }).explore({
+    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0, glideMs: 0 }).explore({
       mode: 'frontend',
       url: `${ORIGIN}/`,
     });
@@ -216,7 +244,11 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
       targets: [target('Only')],
     });
     const events: E2eExploreEvent[] = [];
-    const snapshot = await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0 }).explore({
+    const snapshot = await new PlaywrightE2eRunner({
+      loadPlaywright,
+      settleMs: 0,
+      glideMs: 0,
+    }).explore({
       mode: 'frontend',
       url: `${ORIGIN}/`,
       credentials: account,
@@ -224,7 +256,7 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
     });
     expect(calls).toEqual([
       `goto:${ORIGIN}/`,
-      'click:3',
+      'focus:password',
       'type:pw-secret',
       'press:Enter',
       'click:10',
@@ -238,7 +270,90 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
       events.filter((event) => event.kind === 'page').every((e) => e.screenshot === null),
     ).toBe(true);
     // The click landed nowhere readable: the log says so.
-    expect(events.at(-1)).toMatchObject({ kind: 'log', action: 'click', result: null });
+    expect(
+      events.filter((event) => event.kind === 'log' && event.action === 'click').at(-1),
+    ).toMatchObject({ result: null });
+  });
+
+  it.each([
+    ['the site asks for an account the run does not have', { username: null, password: null }, {}],
+    ['a test account finds no sign-in form', account, { form: null }],
+  ])('explains in the log why it stays signed out when %s', async (_name, credentials, fake) => {
+    const { loadPlaywright } = fakeBrowser({
+      snapshots: [snap('Public')],
+      form: { user: null, password: { x: 3, y: 4 } },
+      ...fake,
+    });
+    const events: E2eExploreEvent[] = [];
+    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0, glideMs: 0 }).explore({
+      mode: 'frontend',
+      url: `${ORIGIN}/`,
+      credentials,
+      onProgress: (event) => events.push(event),
+    });
+    const codes = events.flatMap((event) =>
+      event.kind === 'log' && event.action === 'note' ? [event.target] : [],
+    );
+    expect(codes).toEqual([
+      credentials.username ? 'sign_in_no_form' : 'sign_in_no_account',
+      'stopped_no_targets:0',
+    ]);
+  });
+
+  it('tells when the sign-in form is still open after the account was submitted', async () => {
+    const { loadPlaywright } = fakeBrowser({
+      snapshots: [snap('Sign in'), snap('Sign in'), snap('Sign in')],
+      form: { user: { x: 1, y: 2 }, password: { x: 3, y: 4 } },
+      formStays: true,
+    });
+    const events: E2eExploreEvent[] = [];
+    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0, glideMs: 0 }).explore({
+      mode: 'frontend',
+      url: `${ORIGIN}/`,
+      credentials: account,
+      onProgress: (event) => events.push(event),
+    });
+    const codes = events.flatMap((event) =>
+      event.kind === 'log' && event.action === 'note' ? [event.target] : [],
+    );
+    expect(codes).toContain('sign_in_failed');
+  });
+
+  it('types the account again when a field did not keep what was typed', async () => {
+    const { calls, loadPlaywright } = fakeBrowser({
+      snapshots: [snap('Sign in'), snap('Home'), snap('Home')],
+      form: { user: { x: 1, y: 2 }, password: { x: 3, y: 4 } },
+      dropTyping: true,
+    });
+    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0, glideMs: 0 }).explore({
+      mode: 'frontend',
+      url: `${ORIGIN}/`,
+      credentials: account,
+    });
+    // Three attempts, each checked, before the form is submitted anyway.
+    expect(calls.filter((call) => call === 'type:pw-secret')).toHaveLength(3);
+    expect(calls.filter((call) => call === 'press:Enter')).toHaveLength(1);
+  });
+
+  it('tells when the page never leaves its loading screen', async () => {
+    const { loadPlaywright } = fakeBrowser({ snapshots: [snap('Loading')], rendered: false });
+    const events: E2eExploreEvent[] = [];
+    await new PlaywrightE2eRunner({
+      loadPlaywright,
+      settleMs: 0,
+      glideMs: 0,
+      renderWaitMs: 1,
+    }).explore({
+      mode: 'frontend',
+      url: `${ORIGIN}/`,
+      onProgress: (event) => events.push(event),
+    });
+    expect(
+      events.some(
+        (event) =>
+          event.kind === 'log' && event.action === 'note' && event.target === 'not_rendered',
+      ),
+    ).toBe(true);
   });
 
   it.each([
@@ -254,7 +369,11 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
       form: { user: null, password: { x: 3, y: 4 } },
       ...fake,
     });
-    const snapshot = await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0 }).explore({
+    const snapshot = await new PlaywrightE2eRunner({
+      loadPlaywright,
+      settleMs: 0,
+      glideMs: 0,
+    }).explore({
       mode: 'frontend',
       url: `${ORIGIN}/`,
       ...input,
@@ -274,7 +393,7 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
       targets: [target('One'), target('Two')],
       screenshot: () => Promise.reject(new Error('no frame')),
     });
-    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0, ...limits }).explore({
+    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0, glideMs: 0, ...limits }).explore({
       mode: 'frontend',
       url: `${ORIGIN}/`,
       signal,
@@ -287,7 +406,7 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
       snapshots: [snap('Home')],
       targets: [new Error('context destroyed')],
     });
-    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0 }).explore({
+    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0, glideMs: 0 }).explore({
       mode: 'frontend',
       url: `${ORIGIN}/`,
     });
@@ -301,6 +420,31 @@ describe('exploring a UI by signing in and clicking through it (fake browser)', 
     expect(pageKey(snap('T', { url: `${ORIGIN}/a#top`, headings: ['A', 'B', 'C'] }))).toBe(
       `${ORIGIN}/a|T|A|B`,
     );
+  });
+
+  it('tells a dialog or a tab over the same route from the route itself', () => {
+    const plain = snap('Planning', { headings: ['Planning'] });
+    const withDialog = { ...plain, dialog: 'Legend' };
+    const withTab = { ...plain, tab: 'Rules' };
+    expect(pageName(withDialog)).toBe('Planning · Legend');
+    expect(pageName({ ...plain, dialog: 'Planning' })).toBe('Planning');
+    expect(new Set([pageKey(plain), pageKey(withDialog), pageKey(withTab)]).size).toBe(3);
+  });
+
+  it('does not name a screen by a heading that every screen shows', () => {
+    const frame = 'Settings';
+    const home = snap('Home', { headings: [frame, 'Dashboard'] });
+    const plan = snap('Plan', { headings: [frame, 'Planning'] });
+    const docs = snap('Docs', { headings: [frame, 'Documents'] });
+    // Too few screens to know which heading is the frame's.
+    expect(withoutSharedHeadings(plan, [home])).toBe(plan);
+    expect(withoutSharedHeadings(docs, [home, plan]).headings).toEqual([
+      'Documents',
+      frame,
+    ]);
+    // A screen with only shared headings keeps them.
+    const only = snap('Only', { headings: [frame] });
+    expect(withoutSharedHeadings(only, [home, plan])).toBe(only);
   });
 });
 
@@ -525,7 +669,7 @@ describe('exploring with a focus (fake browser)', () => {
         { ...target('More', 14), matched: false },
       ],
     });
-    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0 }).explore({
+    await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0, glideMs: 0 }).explore({
       mode: 'frontend',
       url: `${ORIGIN}/`,
       focus: 'The billing screens',
@@ -552,6 +696,7 @@ describe('exploring with a focus (fake browser)', () => {
       await new PlaywrightE2eRunner({
         loadPlaywright,
         settleMs: 0,
+        glideMs: 0,
         maxPages: 3,
         exploreSteps: 2,
         explorePages: 5,
@@ -574,7 +719,7 @@ describe('exploring with a focus (fake browser)', () => {
         snapshots: [snap('Home', { links: [`${ORIGIN}/a`, `${ORIGIN}/b`] }), snap('A'), snap('B')],
         targets: [target('One')],
       });
-      await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0 }).explore({
+      await new PlaywrightE2eRunner({ loadPlaywright, settleMs: 0, glideMs: 0 }).explore({
         mode: 'frontend',
         url: `${ORIGIN}/`,
         ...(focus === undefined ? {} : { focus }),

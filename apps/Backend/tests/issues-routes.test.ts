@@ -272,6 +272,73 @@ describe('issues, inbox and dashboard routes', () => {
     ).toHaveLength(0);
   });
 
+  it('counts CLI and API-key usage next to MCP and prices adapter names with the company rate', async () => {
+    const usageStore = new InMemoryUsageStore();
+    const app = createApp({
+      usageStore,
+      requestContextResolver: () => ({
+        requestId: 'usage-source-test',
+        ownerId: 'workspace-a',
+        workspaceId: 'workspace-a',
+        actorId: 'user-a',
+        memberRole: 'ADMIN',
+      }),
+    });
+    await request(app)
+      .put('/costs/rates')
+      .send({
+        provider: 'anthropic',
+        model: 'claude-sonnet-5-5',
+        inputUsdPerMillion: 3,
+        outputUsdPerMillion: 15,
+      })
+      .expect(200);
+    const cli = await request(app)
+      .post('/costs/usage')
+      .send({
+        tool: 'development_claude',
+        provider: 'anthropic',
+        model: 'claude-sonnet-5-5',
+        inputTokens: 1000,
+        outputTokens: 100,
+        source: 'cli',
+      })
+      .expect(201);
+    expect(cli.body.event).toMatchObject({ source: 'cli', costMicros: 4500 });
+    // What a Claude API key records is the adapter's own name.
+    await usageStore.record({
+      workspaceId: 'workspace-a',
+      actorId: null,
+      source: 'api',
+      tool: 'spec_chat',
+      provider: 'claude',
+      model: 'claude-sonnet-5-5',
+      inputTokens: 1000,
+      outputTokens: 100,
+      estimated: false,
+      costMicros: null,
+    });
+    await request(app)
+      .post('/costs/usage')
+      .send({ tool: 'brain_search', inputTokens: 10, outputTokens: 0 })
+      .expect(201);
+    await request(app)
+      .post('/costs/usage')
+      .send({ tool: 'x', inputTokens: 1, outputTokens: 1, source: 'sms' })
+      .expect(400);
+
+    const costs = await request(app).get('/costs').expect(200);
+    expect(costs.body.monthSpendMicros).toBe(9000);
+    expect(costs.body.mcpUsage.bySource).toHaveLength(3);
+    expect(costs.body.mcpUsage.bySource).toEqual(
+      expect.arrayContaining([
+        { source: 'cli', calls: 1, totalTokens: 1100, spendMicros: 4500 },
+        { source: 'api', calls: 1, totalTokens: 1100, spendMicros: 4500 },
+        { source: 'mcp', calls: 1, totalTokens: 10, spendMicros: 0 },
+      ]),
+    );
+  });
+
   it('records MCP token usage, prices it with the rate table and reports it with the costs', async () => {
     const usageStore = new InMemoryUsageStore();
     const app = createApp({

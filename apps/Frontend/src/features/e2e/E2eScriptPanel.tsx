@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { ApiClient } from '../../lib/api-client.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import { Button } from '../../components/ui/button.js';
@@ -9,21 +9,29 @@ import { RICH_TEXT } from '../shared/rich-text.js';
 import { sanitizeRichText } from '../testplans/test-case-fields.js';
 import type { TranslationKey } from '../../lib/i18n/types.js';
 import { RenderedCode } from '../brain/RenderedCode.js';
-import { E2ePlannedSteps, E2eSection } from './E2ePlannedSteps.js';
+import { E2ePlannedSteps } from './E2ePlannedSteps.js';
 import { hookStepTexts, type E2eMode, type E2eScript, type E2eScriptKind } from './e2e-types.js';
 
 type HookKind = Exclude<E2eScriptKind, 'spec'>;
 const hookTexts: Record<
   HookKind,
-  { hint: TranslationKey; empty: TranslationKey; steps: TranslationKey; icon: string }
+  {
+    title: TranslationKey;
+    hint: TranslationKey;
+    empty: TranslationKey;
+    steps: TranslationKey;
+    icon: string;
+  }
 > = {
   beforeRun: {
+    title: 'e2e.beforeRun',
     hint: 'e2e.beforeRunHint',
     empty: 'e2e.noBeforeRun',
     steps: 'e2e.beforeRunSteps',
     icon: 'ti-database-plus',
   },
   afterRun: {
+    title: 'e2e.afterRun',
     hint: 'e2e.afterRunHint',
     empty: 'e2e.noAfterRun',
     steps: 'e2e.afterRunSteps',
@@ -59,6 +67,30 @@ export default async function ${kind}(${fixtures}) {
   });
 }
 `;
+}
+
+/** A titled card of the hook tabs; `action` sits on the right of its title. */
+function HookCard({
+  icon,
+  title,
+  action,
+  children,
+}: {
+  readonly icon: string;
+  readonly title: string;
+  readonly action?: ReactNode;
+  readonly children: ReactNode;
+}) {
+  return (
+    <section className="min-w-0 rounded-lg border border-[var(--border)] bg-[var(--surface-0)]">
+      <header className="flex min-h-12 flex-wrap items-center gap-2 border-b border-[var(--border)] px-4 py-2">
+        <i className={`ti ${icon} text-[var(--text-accent)]`} aria-hidden="true" />
+        <h3 className="text-sm font-semibold text-[var(--text-primary)]">{title}</h3>
+        {action && <div className="ml-auto flex items-center gap-2">{action}</div>}
+      </header>
+      <div className="px-4 py-3">{children}</div>
+    </section>
+  );
 }
 
 /**
@@ -106,34 +138,39 @@ function E2eHookInstructions({
   };
 
   return (
-    <E2eSection icon="ti-notes" title={t('e2e.hookInstructions')}>
-      <p className="mb-2 text-xs text-[var(--text-secondary)]">{t('e2e.hookInstructionsHint')}</p>
+    <HookCard
+      icon="ti-notes"
+      title={t('e2e.hookInstructions')}
+      action={
+        !isReadOnly &&
+        draft === null && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setDraft(saved)}
+            data-testid={`e2e-${kind}-instructions-edit`}
+          >
+            <i className="ti ti-pencil" aria-hidden="true" />
+            {t('e2e.editHookInstructions')}
+          </Button>
+        )
+      }
+    >
+      <p className="mb-3 text-xs text-[var(--text-secondary)]">{t('e2e.hookInstructionsHint')}</p>
       {draft === null ? (
-        <div className="flex flex-col gap-2">
-          {saved.trim() ? (
-            <div
-              className={`[overflow-wrap:anywhere] ${RICH_TEXT}`}
-              data-testid={`e2e-${kind}-instructions`}
-              dangerouslySetInnerHTML={{ __html: sanitizeRichText(saved) }}
-            />
-          ) : (
-            <p className="text-sm text-[var(--text-muted)]">{t('e2e.noHookInstructions')}</p>
-          )}
-          {!isReadOnly && (
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-fit"
-              onClick={() => setDraft(saved)}
-              data-testid={`e2e-${kind}-instructions-edit`}
-            >
-              <i className="ti ti-pencil" aria-hidden="true" />
-              {t('e2e.editHookInstructions')}
-            </Button>
-          )}
-        </div>
+        saved.trim() ? (
+          <div
+            className={`[overflow-wrap:anywhere] ${RICH_TEXT}`}
+            data-testid={`e2e-${kind}-instructions`}
+            dangerouslySetInnerHTML={{ __html: sanitizeRichText(saved) }}
+          />
+        ) : (
+          <p className="rounded-md border border-dashed border-[var(--border)] px-3 py-3 text-sm text-[var(--text-muted)]">
+            {t('e2e.noHookInstructions')}
+          </p>
+        )
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-3">
           <RichTextEditor
             initialHtml={saved}
             onChange={setDraft}
@@ -142,7 +179,7 @@ function E2eHookInstructions({
             className="min-h-32"
             data-testid={`e2e-${kind}-instructions-editor`}
           />
-          <div className="flex gap-2">
+          <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setDraft(null)} disabled={saving}>
               {t('e2e.cancel')}
             </Button>
@@ -158,7 +195,7 @@ function E2eHookInstructions({
           {error}
         </p>
       )}
-    </E2eSection>
+    </HookCard>
   );
 }
 
@@ -236,92 +273,86 @@ export function E2eScriptPanel({
   // While editing, the steps follow the draft, so the list shows what will be pushed.
   const hookContent = draft?.value ?? script?.content ?? '';
   const hookSteps = hook ? hookStepTexts(hookContent) : [];
+  const missing = script !== null && !script.content?.trim() && !draft;
+  const changed = draft !== null && draft.value !== draft.original;
 
-  return (
-    <div className="flex flex-col gap-3" data-testid="e2e-script-panel" data-kind={kind}>
-      {hook && <p className="text-xs text-[var(--text-secondary)]">{t(hook.hint)}</p>}
-      {hook && (
-        <E2eHookInstructions
-          apiClient={apiClient}
-          testId={testId}
-          kind={kind as HookKind}
-          initial={instructions ?? ''}
-          isReadOnly={isReadOnly}
-        />
-      )}
-      {hook && hookContent.trim() && (
-        <E2eSection icon={hook.icon} title={t(hook.steps)}>
-          {hookSteps.length > 0 ? (
-            <E2ePlannedSteps steps={hookSteps} data-testid={`e2e-${kind}-steps`} />
-          ) : (
-            <p className="text-xs text-[var(--text-muted)]">{t('e2e.hookNoSteps')}</p>
-          )}
-        </E2eSection>
-      )}
-      <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
-        <i className="ti ti-git-branch" aria-hidden="true" />
-        {script ? (
-          <span className="min-w-0 truncate font-mono">
-            {script.repository.name}@{script.repository.branch}/{script.path}
-          </span>
-        ) : (
-          <Skeleton className="h-4 w-64" />
-        )}
-        {script?.url && (
-          <a
-            href={script.url}
-            target="_blank"
-            rel="noreferrer"
-            className="text-[var(--text-accent)] underline-offset-4 hover:underline"
-          >
-            {t('e2e.openInRepository')}
-          </a>
-        )}
-        <div className="ml-auto flex gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => void pull()}
-            disabled={busy !== null}
-            isLoading={busy === 'pull'}
-          >
-            <i className="ti ti-download" aria-hidden="true" />
-            {t('e2e.pull')}
+  const toolbar = (
+    <>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => void pull()}
+        disabled={busy !== null}
+        isLoading={busy === 'pull'}
+      >
+        <i className="ti ti-download" aria-hidden="true" />
+        {t('e2e.pull')}
+      </Button>
+      {!isReadOnly && draft && (
+        <>
+          <Button variant="ghost" size="sm" onClick={() => setDraft(null)} disabled={busy !== null}>
+            {t('e2e.cancel')}
           </Button>
-          {!isReadOnly && draft && (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setDraft(null)}
-                disabled={busy !== null}
-              >
-                {t('e2e.cancel')}
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => void push(draft.value)}
-                disabled={busy !== null || disabled || draft.value === draft.original}
-                isLoading={busy === 'push'}
-              >
-                <i className="ti ti-upload" aria-hidden="true" />
-                {t('e2e.push')}
-              </Button>
-            </>
-          )}
-          {!isReadOnly && !draft && script && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => startEditing(script)}
-              disabled={busy !== null}
-            >
-              <i className="ti ti-pencil" aria-hidden="true" />
-              {t('e2e.editScript')}
-            </Button>
-          )}
-        </div>
-      </div>
+          <Button
+            size="sm"
+            onClick={() => void push(draft.value)}
+            disabled={busy !== null || disabled || !changed}
+            isLoading={busy === 'push'}
+          >
+            <i className="ti ti-upload" aria-hidden="true" />
+            {t('e2e.push')}
+          </Button>
+        </>
+      )}
+      {!isReadOnly && !draft && script && (
+        <Button
+          variant={missing && hook ? 'default' : 'secondary'}
+          size="sm"
+          onClick={() => startEditing(script)}
+          disabled={busy !== null}
+        >
+          <i className="ti ti-pencil" aria-hidden="true" />
+          {t('e2e.editScript')}
+        </Button>
+      )}
+    </>
+  );
+
+  const file = (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-secondary)]">
+      <i className="ti ti-git-branch" aria-hidden="true" />
+      {script ? (
+        <span className="min-w-0 truncate font-mono">
+          {script.repository.name}@{script.repository.branch}/{script.path}
+        </span>
+      ) : (
+        <Skeleton className="h-4 w-64" />
+      )}
+      {script?.url && (
+        <a
+          href={script.url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[var(--text-accent)] underline-offset-4 hover:underline"
+        >
+          {t('e2e.openInRepository')}
+        </a>
+      )}
+      {hook && missing && (
+        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+          {t('e2e.hookMissing')}
+        </span>
+      )}
+      {changed && (
+        <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-300">
+          {t('e2e.hookUnsaved')}
+        </span>
+      )}
+    </div>
+  );
+
+  const body = (
+    <>
       {error && (
         <p className="text-sm text-red-400" role="alert">
           {error}
@@ -329,27 +360,87 @@ export function E2eScriptPanel({
       )}
       {notice && <p className="text-sm text-emerald-400">{notice}</p>}
       {draft ? (
-        <Textarea
-          aria-label={t(
-            kind === 'beforeRun'
-              ? 'e2e.beforeRun'
-              : kind === 'afterRun'
-                ? 'e2e.afterRun'
-                : 'e2e.code',
-          )}
-          value={draft.value}
-          onChange={(event) => setDraft({ ...draft, value: event.target.value })}
-          spellCheck={false}
-          rows={18}
-          className="font-mono text-xs"
-        />
+        <div className="flex flex-col gap-2">
+          {hook && <p className="text-xs text-[var(--text-secondary)]">{t('e2e.hookEditing')}</p>}
+          <Textarea
+            aria-label={t(
+              kind === 'beforeRun'
+                ? 'e2e.beforeRun'
+                : kind === 'afterRun'
+                  ? 'e2e.afterRun'
+                  : 'e2e.code',
+            )}
+            value={draft.value}
+            onChange={(event) => setDraft({ ...draft, value: event.target.value })}
+            spellCheck={false}
+            rows={18}
+            className="font-mono text-xs"
+          />
+        </div>
       ) : script?.content?.trim() ? (
         <RenderedCode code={script.content} language="typescript" />
       ) : script ? (
-        <p className="rounded-md bg-[var(--surface-0)] px-4 py-8 text-center text-sm text-[var(--text-muted)]">
-          {t(hook ? hook.empty : 'e2e.noScript')}
-        </p>
+        <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-[var(--border)] px-4 py-10 text-center">
+          <i
+            className={`ti ${hook ? hook.icon : 'ti-code'} text-3xl text-[var(--text-muted)]`}
+            aria-hidden="true"
+          />
+          <p className="text-sm text-[var(--text-muted)]">
+            {t(hook ? hook.empty : 'e2e.noScript')}
+          </p>
+          {hook && !isReadOnly && (
+            <Button size="sm" onClick={() => startEditing(script)} disabled={busy !== null}>
+              <i className="ti ti-pencil" aria-hidden="true" />
+              {t('e2e.hookWrite')}
+            </Button>
+          )}
+        </div>
       ) : null}
+    </>
+  );
+
+  if (!hook)
+    return (
+      <div className="flex flex-col gap-3" data-testid="e2e-script-panel" data-kind={kind}>
+        <div className="flex flex-wrap items-center gap-2">
+          {file}
+          <div className="ml-auto flex gap-2">{toolbar}</div>
+        </div>
+        {body}
+      </div>
+    );
+
+  return (
+    <div className="flex flex-col gap-4" data-testid="e2e-script-panel" data-kind={kind}>
+      <div className="flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-2)] text-lg text-[var(--text-accent)]">
+          <i className={`ti ${hook.icon}`} aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t(hook.title)}</h2>
+          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">{t(hook.hint)}</p>
+        </div>
+      </div>
+      <E2eHookInstructions
+        apiClient={apiClient}
+        testId={testId}
+        kind={kind as HookKind}
+        initial={instructions ?? ''}
+        isReadOnly={isReadOnly}
+      />
+      {hookContent.trim() && (
+        <HookCard icon={hook.icon} title={t(hook.steps)}>
+          {hookSteps.length > 0 ? (
+            <E2ePlannedSteps steps={hookSteps} data-testid={`e2e-${kind}-steps`} />
+          ) : (
+            <p className="text-xs text-[var(--text-muted)]">{t('e2e.hookNoSteps')}</p>
+          )}
+        </HookCard>
+      )}
+      <HookCard icon="ti-file-code" title={t('e2e.code')} action={toolbar}>
+        <div className="mb-3">{file}</div>
+        <div className="flex flex-col gap-3">{body}</div>
+      </HookCard>
     </div>
   );
 }

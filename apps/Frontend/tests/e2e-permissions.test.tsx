@@ -18,6 +18,7 @@ const TEST: E2eTestDetail = {
   priority: 'high',
   beforeRunInstructions: null,
   afterRunInstructions: null,
+  scriptInstructions: null,
   scriptPath: 'tests/e2e/tc001-access.spec.ts',
   status: 'passed',
   error: null,
@@ -183,7 +184,7 @@ describe('E2eLinkedCase permissions', () => {
     allowed.unmount();
 
     linkedCase(access({ testplans: 'none' }));
-    expect(screen.getByText('Nenhum test case vinculado.')).toBeInTheDocument();
+    expect(screen.getByText('Nenhum test case remoto vinculado.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Vincular/ })).toBeNull();
   });
 });

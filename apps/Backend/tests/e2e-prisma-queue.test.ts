@@ -60,9 +60,12 @@ describe('PrismaE2eJobQueue', () => {
       }),
     ).toMatchObject({ id: 'j1', creationId: 'c1', testIds: ['t1'], workerId: 'w' });
     const insert = db.$queryRaw.mock.calls[0]!;
+    // One active job per scope of a run: a single test, the exploration, or the whole run.
+    expect(sql(insert)).toContain('WHERE NOT EXISTS');
     expect(sql(insert)).toContain(
-      `ON CONFLICT ("creation_id") WHERE "status" IN ('queued', 'running')`,
+      `ON CONFLICT ("creation_id", (CASE WHEN "kind" = 'execute' AND jsonb_array_length("test_ids") = 1 THEN "test_ids"->>0 WHEN "kind" = 'explore' THEN 'explore' ELSE '' END))`,
     );
+    expect(insert).toContain('t1');
     expect(insert).toContain('["t1"]');
 
     expect(await queue.claim('w')).toMatchObject({ status: 'running' });
@@ -94,6 +97,37 @@ describe('PrismaE2eJobQueue', () => {
     expect(await queue.hasActive('ws', 'c1')).toBe(false);
     expect(await queue.heartbeat('j1', 'w')).toBe(false);
     expect(await queue.cancel('ws', 'c1')).toBe(false);
+  });
+
+  it('tells whether a test, or the run, is kept busy by an active job', async () => {
+    const { db, client } = fakeDb();
+    const queue = new PrismaE2eJobQueue(client);
+    const active = (id: string, kind: string, testIds: string[]) => ({
+      ...modelRow,
+      id,
+      kind,
+      testIds,
+    });
+    db.e2eJobRecord.findMany.mockResolvedValue([active('a', 'execute', ['t1'])]);
+    expect(await queue.hasActive('ws', 'c1', { testId: 't1' })).toBe(true);
+    expect(await queue.hasActive('ws', 'c1', { testId: 't2' })).toBe(false);
+    expect(await queue.hasActive('ws', 'c1', { testId: 't1', exceptJobId: 'a' })).toBe(false);
+    // The exploration of the run keeps no test from being rewritten or run.
+    db.e2eJobRecord.findMany.mockResolvedValue([active('e', 'explore', [])]);
+    expect(await queue.hasActive('ws', 'c1', { testId: 't1' })).toBe(false);
+    // A job on the whole run (or on several tests) keeps every test busy.
+    db.e2eJobRecord.findMany.mockResolvedValue([active('b', 'generate', [])]);
+    expect(await queue.hasActive('ws', 'c1', { testId: 't2' })).toBe(true);
+    db.e2eJobRecord.count.mockResolvedValue(1);
+    expect(await queue.hasActive('ws', 'c1', { exceptJobId: 'a' })).toBe(true);
+    expect(db.e2eJobRecord.count).toHaveBeenLastCalledWith({
+      where: {
+        workspaceId: 'ws',
+        creationId: 'c1',
+        status: { in: ['queued', 'running'] },
+        id: { not: 'a' },
+      },
+    });
   });
 
   it('requeues or fails abandoned jobs, skipping ones that came back to life', async () => {

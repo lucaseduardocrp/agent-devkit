@@ -276,6 +276,8 @@ export class DevelopmentRunner {
     }
     tick();
     await sending;
+    // The tokens were spent whether the session finished, failed or was cancelled.
+    await this.reportSpend(session, cli.provider, progress);
     if (cancelled) {
       this.options.onEvent?.({ type: 'cancelled', session });
       return;
@@ -291,6 +293,32 @@ export class DevelopmentRunner {
         ? null
         : result.stderr.trim() || `The ${session.cli} CLI exited with code ${result.exitCode}.`);
     await this.complete(session, route, files.length, error, progress.summary);
+  }
+
+  /** Adds what the coding CLI spent to the workspace's AI usage; never fails the session. */
+  private async reportSpend(
+    session: SessionDto,
+    provider: string,
+    progress: Progress,
+  ): Promise<void> {
+    const spend = progress.spend();
+    if (!spend) return;
+    await this.options.api
+      .request({
+        method: 'POST',
+        path: '/costs/usage',
+        body: {
+          tool: `development_${session.cli}`,
+          provider,
+          model: spend.model ?? session.cli,
+          inputTokens: spend.inputTokens,
+          outputTokens: spend.outputTokens,
+          // Cached reads are left out, so the cost is an approximation.
+          estimated: true,
+          source: 'cli',
+        },
+      })
+      .catch(() => undefined);
   }
 
   private async complete(

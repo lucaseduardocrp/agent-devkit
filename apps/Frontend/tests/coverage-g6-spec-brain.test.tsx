@@ -227,6 +227,7 @@ describe('BrainView attachments, files and focus', () => {
       target: { files: [new File(['p'], 'shot.png', { type: 'image/png' })] },
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Inserir no texto: shot.png' }));
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     fireEvent.change(view.getByTestId('textarea-document-content'), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Inserir no texto: shot.png' }));
     expect((view.getByTestId('textarea-document-content') as HTMLTextAreaElement).value).toContain(
@@ -249,6 +250,7 @@ describe('BrainView attachments, files and focus', () => {
     fireEvent.change(picker, {
       target: { files: [new File(['p'], 'chosen.png', { type: 'image/png' })] },
     });
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     await waitFor(() =>
       expect(
         (view.getByTestId('textarea-document-content') as HTMLTextAreaElement).value,

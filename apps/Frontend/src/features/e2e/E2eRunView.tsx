@@ -14,7 +14,9 @@ import { useI18n } from '../../lib/i18n/index.js';
 import { Button } from '../../components/ui/button.js';
 import { Select } from '../../components/ui/select.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
+import { E2eGenerateTestsDialog } from './E2eGenerateTestsDialog.js';
 import { E2eImage } from './E2eImage.js';
+import { E2eRunActions } from './E2eRunActions.js';
 import { E2eRunElementPanel, E2eRunMap, E2eRunPagePanel, liveLabel } from './E2eRunMap.js';
 import { E2eTestStatusIcon, E2eTestStatusLabel } from './E2eStatus.js';
 import {
@@ -97,10 +99,17 @@ function E2eRunViewSkeleton() {
 export interface E2eRunViewProps {
   readonly apiClient: ApiClient;
   readonly creationId: string;
+  /** A viewer cannot ask for tests to be generated. */
+  readonly isReadOnly?: boolean;
   readonly onBack: () => void;
   readonly onOpenTest: (testId: string) => void;
   /** Opens what the agent saw when it explored the application. */
   readonly onOpenExploration: () => void;
+  /** Opens the form that edits the run. */
+  readonly onEdit: () => void;
+  /** The run was deleted from its menu: there is nothing left to show. */
+  readonly onDeleted: () => void;
+  readonly onOpenIntegrations?: () => void;
 }
 
 /**
@@ -110,9 +119,13 @@ export interface E2eRunViewProps {
 export function E2eRunView({
   apiClient,
   creationId,
+  isReadOnly = false,
   onBack,
   onOpenTest,
   onOpenExploration,
+  onEdit,
+  onDeleted,
+  onOpenIntegrations,
 }: E2eRunViewProps) {
   const { t, formatDate } = useI18n();
   const [creation, setCreation] = useState<E2eCreationDetail | null>(null);
@@ -128,6 +141,10 @@ export function E2eRunView({
   const split = useRef<HTMLDivElement>(null);
   const [panelWidth, setPanelWidth] = useState(PANEL_DEFAULT);
   const [resizing, setResizing] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [rerunning, setRerunning] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   /** Keeps the side panel between its limits and leaves the map room to show something. */
   const clampPanel = (value: number) => {
@@ -265,13 +282,86 @@ export function E2eRunView({
             })}
           </p>
         </div>
-        {creation.mode === 'frontend' && (
-          <Button variant="outline" onClick={onOpenExploration}>
-            <i className="ti ti-compass" aria-hidden="true" />
-            {t('e2e.runViewExploration')}
-          </Button>
-        )}
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {!isReadOnly && !active && (
+            <Button onClick={() => setGenerating(true)}>
+              <i className="ti ti-wand" aria-hidden="true" />
+              {t('e2e.runGenerate')}
+            </Button>
+          )}
+          {creation.mode === 'frontend' && (
+            <Button variant="outline" onClick={onOpenExploration}>
+              <i className="ti ti-compass" aria-hidden="true" />
+              {t('e2e.runViewExploration')}
+            </Button>
+          )}
+          {!isReadOnly && !active && (
+            <Button
+              variant="outline"
+              isLoading={rerunning}
+              disabled={rerunning}
+              onClick={() => {
+                setNotice(null);
+                setActionError(null);
+                setRerunning(true);
+                apiClient
+                  .rerunE2eCreation(creationId)
+                  .then(() => setNotice(t('e2e.rerunStarted')))
+                  .catch((reason: unknown) =>
+                    setActionError(
+                      reason instanceof Error ? reason.message : t('e2e.actionFailed'),
+                    ),
+                  )
+                  .finally(() => {
+                    setRerunning(false);
+                    void load();
+                  });
+              }}
+            >
+              <i className="ti ti-refresh" aria-hidden="true" />
+              {t('e2e.rerunAll')}
+            </Button>
+          )}
+          {!isReadOnly && (
+            <E2eRunActions
+              apiClient={apiClient}
+              creation={creation}
+              onEdit={onEdit}
+              onRerun={false}
+              onChanged={() => void load()}
+              onDeleted={onDeleted}
+              onNotice={setNotice}
+              onError={setActionError}
+              onOpenIntegrations={onOpenIntegrations}
+            />
+          )}
+        </div>
       </div>
+      {notice && (
+        <p
+          className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300"
+          role="status"
+        >
+          {notice}
+        </p>
+      )}
+      {actionError && (
+        <p className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-300" role="alert">
+          {actionError}
+        </p>
+      )}
+      {generating && (
+        <E2eGenerateTestsDialog
+          apiClient={apiClient}
+          creationId={creationId}
+          hasTests={total > 0}
+          onClose={() => setGenerating(false)}
+          onGenerated={() => {
+            setGenerating(false);
+            void load();
+          }}
+        />
+      )}
 
       <div className="flex gap-1 border-b border-[var(--border)]" role="tablist">
         {(['map', 'browsers'] as const).map((item) => (

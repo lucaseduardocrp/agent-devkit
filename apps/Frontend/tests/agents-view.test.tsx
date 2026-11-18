@@ -481,11 +481,14 @@ describe('AgentsView', () => {
     ]);
     // Keeps the network out of the suite: the stream stays open and silent unless a test drives it.
     vi.spyOn(client, 'streamRunEvents').mockImplementation(() => new Promise(() => undefined));
-    vi.spyOn(client, 'executeAgent').mockResolvedValue({
-      content: '## Execution Output\nTest result',
-      agent: { id: 'agent-qa', name: 'QA Engineer', role: 'QA' },
-      chunksUsed: 2,
-      provider: 'Gemini',
+    vi.spyOn(client, 'streamAgentChat').mockImplementation(async (_id, _request, handlers) => {
+      handlers.onStart?.({
+        provider: 'Gemini',
+        agent: { id: 'agent-qa', name: 'QA Engineer', role: 'QA' },
+      });
+      handlers.onDelta('## Execution ');
+      handlers.onDelta('Output\nTest result');
+      handlers.onDone({ result: '## Execution Output\nTest result', provider: 'Gemini' });
     });
   });
 
@@ -826,7 +829,7 @@ describe('AgentsView', () => {
     expect(client.deleteAgent).not.toHaveBeenCalled();
   });
 
-  it('executes agent in the playground and shows output and chunks count', async () => {
+  it('executes agent in the playground and shows the streamed output', async () => {
     const { getByTestId, getByText, findByTestId } = render(
       <AgentsView apiClient={client} activeWorkspaceId="ws-1" />,
     );
@@ -864,7 +867,6 @@ describe('AgentsView', () => {
 
     const panel = await findByTestId('playground-output-panel');
     expect(panel).toBeInTheDocument();
-    expect(getByText('2 chunks de contexto utilizados')).toBeInTheDocument();
     expect(getByText('Execution Output')).toBeInTheDocument();
 
     // Clear output
@@ -873,7 +875,7 @@ describe('AgentsView', () => {
   });
 
   it('catches and displays prompt injection attacks with security warning banner', async () => {
-    vi.spyOn(client, 'executeAgent').mockRejectedValueOnce(
+    vi.spyOn(client, 'streamAgentChat').mockRejectedValueOnce(
       new Error('Prompt injection attack detected: ignore previous instructions'),
     );
 
@@ -902,7 +904,7 @@ describe('AgentsView', () => {
   });
 
   it('displays generic error when execute fails for other reasons', async () => {
-    vi.spyOn(client, 'executeAgent').mockRejectedValueOnce(new Error('LLM rate limit'));
+    vi.spyOn(client, 'streamAgentChat').mockRejectedValueOnce(new Error('LLM rate limit'));
 
     const { getByTestId, findByText } = render(
       <AgentsView apiClient={client} activeWorkspaceId="ws-1" />,
@@ -920,6 +922,31 @@ describe('AgentsView', () => {
     fireEvent.click(getByTestId('playground-execute-button'));
 
     await findByText('LLM rate limit');
+  });
+
+  it('drops the partial answer and shows the error when the stream fails midway', async () => {
+    vi.spyOn(client, 'streamAgentChat').mockImplementationOnce(async (_id, _request, handlers) => {
+      handlers.onStart?.({
+        provider: 'Claude CLI',
+        agent: { id: 'agent-qa', name: 'QA Engineer', role: 'QA' },
+      });
+      handlers.onDelta('Resposta pela metade');
+      handlers.onError(new Error('A CLI foi encerrada.'));
+    });
+
+    const { getByTestId, findByText, queryByTestId, queryByText } = render(
+      <AgentsView apiClient={client} activeWorkspaceId="ws-1" />,
+    );
+    await waitFor(() => {
+      expect(getByTestId('agent-card-qa-engineer')).toBeInTheDocument();
+    });
+    fireEvent.click(getByTestId('tab-playground'));
+    fireEvent.change(getByTestId('playground-prompt-input'), { target: { value: 'Oi' } });
+    fireEvent.click(getByTestId('playground-execute-button'));
+
+    await findByText('A CLI foi encerrada.');
+    expect(queryByTestId('playground-output-panel')).not.toBeInTheDocument();
+    expect(queryByText('Resposta pela metade')).not.toBeInTheDocument();
   });
 
   it('renders empty state when no agents exist', async () => {
@@ -1011,7 +1038,7 @@ describe('AgentsView', () => {
   });
 
   it('triggers security block when error contains "segurança" or "inseguro" and handles non-Error rejection', async () => {
-    vi.spyOn(client, 'executeAgent')
+    vi.spyOn(client, 'streamAgentChat')
       .mockRejectedValueOnce(new Error('Conteúdo inseguro detectado pela política de segurança.'))
       .mockRejectedValueOnce('Unknown string execution failure');
 
@@ -1058,18 +1085,18 @@ describe('AgentsView', () => {
 
     // Normal Enter does not trigger execution
     fireEvent.keyDown(promptInput, { key: 'Enter', ctrlKey: false });
-    expect(client.executeAgent).not.toHaveBeenCalled();
+    expect(client.streamAgentChat).not.toHaveBeenCalled();
 
     // Ctrl + Enter executes
     fireEvent.change(promptInput, { target: { value: 'Write unit tests' } });
     fireEvent.keyDown(promptInput, { key: 'Enter', ctrlKey: true });
 
     await waitFor(() => {
-      expect(client.executeAgent).toHaveBeenCalledWith('agent-qa', {
-        prompt: 'Write unit tests',
-        useKnowledge: true,
-        llmProvider: 'gemini',
-      });
+      expect(client.streamAgentChat).toHaveBeenCalledWith(
+        'agent-qa',
+        { prompt: 'Write unit tests', useKnowledge: true, llmProvider: 'gemini' },
+        expect.any(Object),
+      );
     });
   });
 

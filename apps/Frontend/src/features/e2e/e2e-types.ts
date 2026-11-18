@@ -8,7 +8,12 @@ export type E2eTestStatus =
   'pending' | 'generating' | 'running' | 'passed' | 'failed' | 'error' | 'cancelled';
 export type E2ePriority = 'high' | 'medium' | 'low';
 export type E2eVerdict = 'app_bug' | 'test_issue' | 'environment';
-export type E2eRepositoryProvider = 'github' | 'azure_devops';
+/** Who decided the status of a test: the run, the user's success criteria, or the user by hand. */
+export type E2eResultSource = 'run' | 'criteria' | 'manual';
+/** What the user can decide about a finished test; "run" gives back the status the run produced. */
+export type E2eResultDecision = 'passed' | 'failed' | 'run';
+/** `local` is a project folder of this computer, available in the desktop app. */
+export type E2eRepositoryProvider = 'github' | 'azure_devops' | 'local';
 export type TestManagementProviderId = 'azure_devops' | 'testrail' | 'xray';
 export type E2eReportStatus = 'publishing' | 'published' | 'failed';
 
@@ -112,6 +117,17 @@ export interface E2eStepResult {
   readonly durationMs: number;
   readonly error: string | null;
   readonly hasScreenshot: boolean;
+  /** The user's own verdict on this step; it overrules `status` until the next execution. */
+  readonly manualStatus?: 'passed' | 'failed';
+  /** Why the user decided the step by hand. */
+  readonly manualNote?: string | null;
+}
+
+/** What a step counts as: the user's verdict when there is one, the run's otherwise. */
+export function effectiveStepStatus(
+  step: Pick<E2eStepResult, 'status' | 'manualStatus'>,
+): E2eStepResult['status'] {
+  return step.manualStatus ?? step.status;
 }
 
 export interface E2eRepositoryRef {
@@ -133,7 +149,8 @@ export interface E2eRepository {
 
 export interface E2eRepositoryWarning {
   readonly provider: E2eRepositoryProvider;
-  readonly code: 'CREDENTIALS_MISSING' | 'NOT_CONFIGURED' | 'PROVIDER_UNAVAILABLE';
+  readonly code:
+    'CREDENTIALS_MISSING' | 'CREDENTIALS_UNREADABLE' | 'NOT_CONFIGURED' | 'PROVIDER_UNAVAILABLE';
 }
 
 export interface E2eBranch {
@@ -174,6 +191,12 @@ export interface E2eLocalRunner {
   readonly online: boolean;
 }
 
+/** Test case saved in ADK (Test Plans) a test is linked to. */
+export interface E2eSavedCaseLink {
+  readonly planId: string;
+  readonly caseId: string;
+}
+
 export interface E2eTestSummary {
   readonly id: string;
   readonly creationId: string;
@@ -190,6 +213,16 @@ export interface E2eTestSummary {
   /** What the user tells the AI about how to write the Before Run; rich text. */
   readonly beforeRunInstructions: string | null;
   readonly afterRunInstructions: string | null;
+  /** What the user told the AI about how to write the spec; kept for every rewrite. */
+  readonly scriptInstructions: string | null;
+  /** How the user decides this test passes; the spec asserts it and a run that meets it passes. */
+  readonly successCriteria?: string | null;
+  /** Who decided `status`; absent on servers that predate success criteria. */
+  readonly resultSource?: E2eResultSource;
+  /** Why the user set the status by hand. */
+  readonly resultNote?: string | null;
+  /** Saved environment this test runs with; null inherits the run's. */
+  readonly environmentId?: string | null;
   readonly status: E2eTestStatus;
   readonly error: string | null;
   readonly analysis: string | null;
@@ -201,6 +234,8 @@ export interface E2eTestSummary {
   readonly hasVideo: boolean;
   /** Test management case this test automates. */
   readonly externalCase: ExternalTestCase | null;
+  /** Test case saved in ADK; its title, description and steps follow it. */
+  readonly savedCase?: E2eSavedCaseLink | null;
   /** Steps of the latest execution, with their evidence. */
   readonly stepResults: readonly E2eStepResult[];
   readonly createdAt: string;
@@ -217,6 +252,8 @@ export interface E2eTestDetail extends E2eTestSummary {
     readonly baseUrl: string;
     readonly localOrigin?: string | null;
     readonly path: string;
+    /** The run's saved environment, which a test without its own inherits. */
+    readonly environmentId?: string | null;
     readonly status: E2eCreationStatus;
   };
 }
@@ -271,6 +308,8 @@ export interface E2eImportResult {
 }
 
 export interface E2eCreationInput {
+  /** False only saves the run: nothing is explored, planned or run until the user asks. */
+  readonly start?: boolean;
   readonly name: string;
   readonly agentId: string;
   readonly mode: E2eMode;
@@ -311,6 +350,9 @@ export const ACTIVE_CREATION_STATUSES: readonly E2eCreationStatus[] = [
   'planning',
   'running',
 ];
+/** What the API accepts of the instructions to rewrite a script or one of its steps. */
+export const MAX_INSTRUCTIONS = 20_000;
+
 export const ACTIVE_TEST_STATUSES: readonly E2eTestStatus[] = ['pending', 'generating', 'running'];
 
 export function isQuickTunnelUrl(value: string): boolean {
@@ -409,6 +451,70 @@ export function testStepTexts(test: {
     : test.steps.map(splitStepText);
 }
 
+export interface E2eFailureReason {
+  /** The first step that failed; null when the run did not report steps. */
+  readonly step: Pick<E2eStepResult, 'position' | 'title'> | null;
+  /** What failed, in the AI analysis' own words; null when there is no usable analysis. */
+  readonly summary: string | null;
+  /** The analysis' likely cause; null when there is no usable analysis. */
+  readonly cause: string | null;
+  /** First line of the error the runner reported, e.g. "expect(locator).toHaveCount(expected) failed". */
+  readonly headline: string;
+  /** "Expected:" and "Received:" of a failed assertion; null when the error has none. */
+  readonly expected: string | null;
+  readonly received: string | null;
+}
+
+/** The AI analysis is written as five paragraphs: Goal, What was executed, What failed, Likely cause, Recommendation. */
+const ANALYSIS_SECTIONS = 5;
+
+/** A section of the analysis without its title line. */
+function sectionBody(section: string): string | null {
+  return section.split('\n').slice(1).join(' ').replace(/\s+/g, ' ').trim() || null;
+}
+
+/**
+ * The reason a run failed, as text to read next to the video: the failed step, what the AI said
+ * failed and why, and the assertion the runner reported. Null while the run has no failure to explain.
+ */
+export function failureReason(
+  test: Pick<E2eTestDetail, 'status' | 'error' | 'analysis' | 'stepResults'>,
+): E2eFailureReason | null {
+  if (test.status !== 'failed' && test.status !== 'error') return null;
+  const failedStep = test.stepResults.find((step) => step.status === 'failed') ?? null;
+  const lines = safeE2eOutput(failedStep?.error || test.error || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const headline = (lines[0] ?? '').replace(/^Error:\s*/i, '');
+  const field = (name: string) =>
+    lines
+      .find((line) => line.startsWith(`${name}:`))
+      ?.slice(name.length + 1)
+      .trim() || null;
+
+  const sections = safeE2eOutput(test.analysis ?? '')
+    .split(/\n\s*\n/)
+    .map((section) => section.trim())
+    .filter(Boolean);
+  const analysed = sections.length === ANALYSIS_SECTIONS;
+  const summary = analysed ? sectionBody(sections[2]!) : null;
+  const cause = analysed ? sectionBody(sections[3]!) : null;
+  if (!headline && !summary) return null;
+
+  return {
+    step: failedStep && { position: failedStep.position, title: failedStep.title },
+    summary,
+    cause,
+    headline,
+    expected: field('Expected'),
+    received: field('Received'),
+  };
+}
+
+/** Longest "Extra instructions" the API accepts for a run. */
+export const MAX_RUN_INSTRUCTIONS_LENGTH = 20_000;
+
 /** Default folder for a run's specs, derived from its name. */
 export function suggestedScriptFolder(name: string): string {
   const slug = name
@@ -455,17 +561,42 @@ export interface E2eExplorationPage {
   readonly summary: string;
   readonly elements: readonly string[];
   readonly hasScreenshot: boolean;
+  /** The flow of the agent's plan this capture is the evidence of; `title` is then its name. */
+  readonly flow?: string;
 }
 
 export interface E2eExplorationLogEntry {
   readonly atMs: number;
-  readonly action: 'navigate' | 'sign_in' | 'click';
+  /** A `note` explains a decision of the agent; its target is a code, optionally `code:detail`. */
+  readonly action:
+    'navigate' | 'sign_in' | 'click' | 'type' | 'select' | 'press' | 'scroll' | 'note';
   readonly target: string;
   readonly result: string | null;
+  /** Why the AI agent did it, in its own words (or what went wrong, for a note). */
+  readonly reason?: string;
+  /** A picture of the screen once the action was done (see `e2eImagePath.explorationStep`). */
+  readonly hasScreenshot?: boolean;
+  /** The address the browser was on after the action. */
+  readonly url?: string;
+  /** Which browser did it, when several explored at once (1-based). */
+  readonly worker?: number;
+}
+
+export type E2eExplorationContextKind = 'pbi' | 'brain' | 'issue';
+
+/** A PBI, issue or Brain document that gave the agent context. */
+export interface E2eExplorationContextRef {
+  readonly kind: E2eExplorationContextKind;
+  readonly id: string;
+  readonly title: string;
 }
 
 export interface E2eExploration {
   readonly status: E2eExplorationStatus;
+  /** What the agent read before exploring, besides the tests of the run. */
+  readonly context?: readonly E2eExplorationContextRef[];
+  /** The agent the user chose to explore; absent when the agent of the run did. */
+  readonly agent?: { readonly id: string; readonly name: string };
   /** What the exploration was asked to cover; null or absent when it was open. */
   readonly description?: string | null;
   /** True when the exploration replaces the Source of the workspace when it ends well. */
@@ -482,6 +613,20 @@ export interface E2eExploration {
   readonly pages: readonly E2eExplorationPage[];
   readonly log: readonly E2eExplorationLogEntry[];
   readonly hasLiveFrame: boolean;
+  /** The recording of each browser that explored; absent when there is none. */
+  readonly videos?: readonly E2eExplorationVideo[];
+}
+
+/** The recording of one browser of an exploration; `worker` is 1 when a single one explored. */
+export interface E2eExplorationVideo {
+  readonly worker: number;
+  readonly mimeType: string;
+}
+
+/** Playwright code of an exploration; `edited` is false while it is the one made from the log. */
+export interface E2eExplorationCode {
+  readonly code: string;
+  readonly edited: boolean;
 }
 
 export function isExplorationActive(exploration: E2eExploration | null): boolean {
@@ -626,6 +771,9 @@ export const e2eImagePath = {
   sourcePage: (index: number) => `source/images/${index}`,
   explorationPage: (creationId: string, index: number) =>
     `creations/${encodeURIComponent(creationId)}/exploration/images/${index}`,
+  /** The picture of an action; `index` is its 1-based position in the log. */
+  explorationStep: (creationId: string, index: number) =>
+    `creations/${encodeURIComponent(creationId)}/exploration/steps/${index}`,
   explorationLive: (creationId: string) =>
     `creations/${encodeURIComponent(creationId)}/exploration/images/live`,
   trail: (image: E2eMapImage, kind: 'page' | 'element') =>
@@ -635,3 +783,17 @@ export const e2eImagePath = {
   step: (testId: string, position: number) =>
     `tests/${encodeURIComponent(testId)}/steps/${position}/screenshot`,
 };
+
+/**
+ * The planned steps a run that went wrong never got to, with their position: all of them when it
+ * failed before the first step (signing in, opening the screen), the ones after the failed step
+ * otherwise. Empty for runs that passed or were stopped.
+ */
+export function stepsNotRun(
+  test: Pick<E2eTestDetail, 'status' | 'stepResults' | 'steps' | 'externalCase'>,
+): readonly (E2eStepText & { readonly position: number })[] {
+  if (test.status !== 'failed' && test.status !== 'error') return [];
+  return testStepTexts(test)
+    .map((text, index) => ({ ...text, position: index + 1 }))
+    .slice(test.stepResults.length);
+}

@@ -11,7 +11,16 @@ import {
   renderLoginPage,
   SealedClientsStore,
 } from '../src/bootstrap/http/oauth.js';
-import { effectiveAllowedHosts } from '../src/bootstrap/http/http-server.js';
+import {
+  effectiveAllowedHosts,
+  requestedProfile,
+  requestedWorkspace,
+} from '../src/bootstrap/http/http-server.js';
+import {
+  parseAccessProfile,
+  profileAllows,
+  profileInstructions,
+} from '../src/core/access-profile.js';
 import { Sealer } from '../src/bootstrap/http/sealed.js';
 import { TokenVerifier } from '../src/bootstrap/http/token-verifier.js';
 import { bearerToken, createHttpServer } from '../src/bootstrap/transports.js';
@@ -116,8 +125,8 @@ const mcpHeaders = {
   accept: 'application/json, text/event-stream',
 };
 
-async function connectClient(url: string, token: string) {
-  const transport = new StreamableHTTPClientTransport(new URL(`${url}/mcp`), {
+async function connectClient(url: string, token: string, query = '') {
+  const transport = new StreamableHTTPClientTransport(new URL(`${url}/mcp${query}`), {
     requestInit: { headers: { authorization: `Bearer ${token}` } },
   });
   const client = new Client({ name: 'http-test', version: '1.0.0' });
@@ -153,6 +162,171 @@ describe('HTTP transport', () => {
     expect(requests.filter((item) => item.path === '/auth/me')).toHaveLength(1);
     await transport.terminateSession();
     await client.close();
+  });
+
+  describe('the workspace of a connection', () => {
+    /** Every workspace the ADK API was asked about while the tool ran. */
+    const workspacesSeen = async (query: string, env: NodeJS.ProcessEnv = {}) => {
+      const { url, requests } = await listen(env);
+      const { client, transport } = await connectClient(url, 'user-token', query);
+      await client.callTool({ name: 'brain_stats', arguments: {} });
+      await transport.terminateSession();
+      await client.close();
+      return [...new Set(requests.map((item) => item.headers['x-workspace-id']).filter(Boolean))];
+    };
+
+    it('is the one in the URL, so an AI CLI of a workspace acts in that workspace', async () => {
+      expect(await workspacesSeen('?workspace=ws-7')).toEqual(['ws-7']);
+      // ...even when the operator configured another one as the default.
+      expect(await workspacesSeen('?workspace=ws-7', { ADK_WORKSPACE_ID: 'ws-default' })).toEqual([
+        'ws-7',
+      ]);
+    });
+
+    it('falls back to the operator default when the URL names none, or something that is no id', async () => {
+      const env = { ADK_WORKSPACE_ID: 'ws-default' };
+      expect(await workspacesSeen('', env)).toEqual(['ws-default']);
+      expect(await workspacesSeen('?workspace=../../etc', env)).toEqual(['ws-default']);
+      expect(await workspacesSeen('?workspace=' + 'a'.repeat(65), env)).toEqual(['ws-default']);
+      expect(await workspacesSeen('?workspace=a&workspace=b', env)).toEqual(['ws-default']);
+      expect(await workspacesSeen('')).toEqual([]);
+    });
+
+    it('also applies when a session is recovered after the server forgot it', async () => {
+      const { url, requests } = await listen();
+      const response = await fetch(`${url}/mcp?workspace=ws-9`, {
+        method: 'POST',
+        headers: {
+          ...mcpHeaders,
+          authorization: 'Bearer user-token',
+          'mcp-session-id': 'forgotten',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: { name: 'brain_stats', arguments: {} },
+        }),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(requests.some((item) => item.headers['x-workspace-id'] === 'ws-9')).toBe(true);
+    });
+
+    it('reads only a plain id from the query', () => {
+      expect(requestedWorkspace({ query: { workspace: 'abc-123_X' } })).toBe('abc-123_X');
+      expect(requestedWorkspace({ query: { workspace: '' } })).toBeUndefined();
+      expect(requestedWorkspace({ query: { workspace: ['a'] } })).toBeUndefined();
+      expect(requestedWorkspace({ query: {} })).toBeUndefined();
+    });
+  });
+
+  describe('access profiles of a connection', () => {
+    const toolsOf = async (query: string) => {
+      const { url } = await listen();
+      const { client, transport } = await connectClient(url, 'user-token', query);
+      const tools = (await client.listTools()).tools;
+      const instructions = client.getInstructions() ?? '';
+      await transport.terminateSession();
+      await client.close();
+      return { tools, names: new Set(tools.map((tool) => tool.name)), instructions };
+    };
+
+    it('give a connection with no profile every tool, as before', async () => {
+      const { tools, names, instructions } = await toolsOf('');
+      expect(tools.length).toBe(modules.flatMap((module) => module.tools).length);
+      expect(names.has('auth_whoami')).toBe(true);
+      expect(instructions).toContain('Getting started');
+    });
+
+    it('standard keeps what reads and writes, and drops what a hijacked model could turn against the user', async () => {
+      const { names, tools, instructions } = await toolsOf('?profile=standard');
+      // Real work stays available...
+      for (const name of ['brain_stats', 'issues_list', 'issues_create'])
+        expect(names.has(name)).toBe(true);
+      // ...but not identity, secrets, people, runs of code, deletion or reaching outside ADK.
+      for (const name of [
+        'auth_whoami',
+        'integrations_save',
+        'workspaces_select',
+        'e2e_run',
+        'brain_sync',
+      ])
+        expect(names.has(name)).toBe(false);
+      expect(tools.every((tool) => tool.annotations?.destructiveHint !== true)).toBe(true);
+      expect(tools.every((tool) => tool.annotations?.openWorldHint !== true)).toBe(true);
+      expect(instructions).toContain('This connection is restricted (standard)');
+      expect(instructions).not.toContain('call auth_whoami');
+    });
+
+    it('read keeps only what reads', async () => {
+      const { names, tools, instructions } = await toolsOf('?profile=read');
+      expect(names.has('brain_stats')).toBe(true);
+      expect(names.has('issues_create')).toBe(false);
+      expect(tools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+      expect(instructions).toContain('none that change data');
+    });
+
+    it('treat a profile nobody knows as the narrowest one, never as no restriction', async () => {
+      const unknown = await toolsOf('?profile=admin');
+      const read = await toolsOf('?profile=read');
+      expect([...unknown.names].sort()).toEqual([...read.names].sort());
+      expect((await toolsOf('?profile=')).names.has('issues_create')).toBe(false);
+    });
+
+    it('also apply when a session is recovered after the server forgot it', async () => {
+      const { url } = await listen();
+      const response = await fetch(`${url}/mcp?profile=read`, {
+        method: 'POST',
+        headers: {
+          ...mcpHeaders,
+          authorization: 'Bearer user-token',
+          'mcp-session-id': 'forgotten',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }),
+      });
+      const body = (await response.json()) as { result: { tools: Array<{ name: string }> } };
+      const names = body.result.tools.map((tool) => tool.name);
+      expect(names).toContain('brain_stats');
+      expect(names).not.toContain('issues_create');
+    });
+
+    it('cannot call a tool the profile took away', async () => {
+      const { url } = await listen();
+      const { client, transport } = await connectClient(url, 'user-token', '?profile=standard');
+      const result = await client
+        .callTool({ name: 'auth_whoami', arguments: {} })
+        .catch((error: Error) => ({ isError: true, error }));
+      expect(result.isError).toBe(true);
+      await transport.terminateSession();
+      await client.close();
+    });
+
+    it('is decided by one rule', () => {
+      const tool = (over: object) =>
+        ({ toolset: 'issues', access: 'write', openWorld: false, ...over }) as never;
+      expect(profileAllows('standard', tool({}))).toBe(true);
+      expect(profileAllows('read', tool({}))).toBe(false);
+      expect(profileAllows('read', tool({ access: 'read' }))).toBe(true);
+      expect(profileAllows('standard', tool({ access: 'destructive' }))).toBe(false);
+      expect(profileAllows('standard', tool({ openWorld: true }))).toBe(false);
+      for (const toolset of [
+        'account',
+        'workspaces',
+        'integrations',
+        'notifications',
+        'development',
+      ])
+        expect(profileAllows('standard', tool({ toolset, access: 'read' }))).toBe(false);
+      expect(parseAccessProfile(undefined)).toBeUndefined();
+      expect(parseAccessProfile('standard')).toBe('standard');
+      expect(parseAccessProfile('read')).toBe('read');
+      expect(parseAccessProfile('anything')).toBe('read');
+      expect(parseAccessProfile(['standard'])).toBe('read');
+      expect(requestedProfile({ query: { profile: 'standard' } })).toBe('standard');
+      expect(requestedProfile({ query: {} })).toBeUndefined();
+      expect(profileInstructions('standard')).not.toContain('none that change data');
+    });
   });
 
   it('blocks DNS rebinding: foreign Host or Origin headers are rejected on loopback', async () => {

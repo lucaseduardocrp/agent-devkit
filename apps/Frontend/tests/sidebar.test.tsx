@@ -179,7 +179,7 @@ describe('Sidebar', () => {
     window.localStorage.removeItem('adk.sidebar.collapsed');
     const view = render(<Sidebar activeTab="brain" onSelectTab={vi.fn()} />);
     const edge = () => view.getByRole('separator', { name: 'Redimensionar barra lateral' });
-    // The sidebar starts 420px wide: dragging it 300px left ends well below the 240px minimum.
+    // The sidebar opens 420px wide with a 240px minimum, and folds when released under 180px.
     pressAt(edge(), 420);
     moveTo(120);
     release();
@@ -190,12 +190,13 @@ describe('Sidebar', () => {
 
     // Released just below the minimum, it springs back to the minimum instead of folding.
     pressAt(edge(), 64);
-    moveTo(280);
+    moveTo(214);
     release();
     expect(view.getByRole('complementary')).not.toHaveAttribute('data-collapsed');
     expect(view.getByRole('button', { name: 'Cérebro' }).textContent).toBe('Cérebro');
-    pressAt(edge(), 280);
-    moveTo(220);
+    expect(edge()).toHaveAttribute('aria-valuenow', '240');
+    pressAt(edge(), 240);
+    moveTo(190);
     release();
     expect(view.getByRole('complementary')).not.toHaveAttribute('data-collapsed');
   });

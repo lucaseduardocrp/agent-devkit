@@ -85,7 +85,7 @@ function parseJsonDocument(content: string): string | null {
   }
 }
 
-const INLINE_REGEX =
+export const INLINE_REGEX =
   /(`[^`]+`|!\[[^\]]*\]\([^)]+\)|\*\*\*[^*]+\*\*\*|___[^_]+___|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|\[[^\]]+\]\([^)]+\)|\[\[[^\]]+\]\])/g;
 
 export function renderInlineContent(

@@ -1,7 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import React from 'react';
 import { cn } from '../../lib/utils.js';
-import { useI18n } from '../../lib/i18n/index.js';
 
 export interface FormattedContentProps {
   readonly content?: string | null;
@@ -194,6 +193,12 @@ export function parseScenarioBlocks(raw: string): readonly ScenarioBlock[] {
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
 
+    // The code fences that frame a diagram written in Markdown are not text to show.
+    if (/^(?:```|~~~)/.test(trimmed)) {
+      flushDiagram();
+      continue;
+    }
+
     // Check if line is part of a box-drawing flowchart
     if (/[─│┌┐└┘├┤┬┴┼▼▶▲◄►]/.test(trimmed)) {
       currentDiagramLines.push(rawLine);
@@ -260,7 +265,6 @@ export function FormattedContent({
   className,
   'data-testid': testId,
 }: FormattedContentProps) {
-  const { t } = useI18n();
   if (!content) return null;
 
   if (inline) {
@@ -305,10 +309,6 @@ export function FormattedContent({
         if (block.type === 'diagram') {
           return (
             <div key={key} className="my-3 space-y-1.5" data-testid="flowchart-diagram">
-              <div className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-muted">
-                <i className="ti ti-git-fork text-xs text-indigo-400" aria-hidden="true" />
-                <span>{t('common.scenarioFlow')}</span>
-              </div>
               <pre className="overflow-x-auto rounded-lg border border-border/50 bg-surface-2/80 p-3 font-mono text-xs leading-tight text-[var(--text-primary)] shadow-inner whitespace-pre">
                 {block.content}
               </pre>

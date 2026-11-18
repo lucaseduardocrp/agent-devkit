@@ -948,12 +948,39 @@ const endpoints: readonly Endpoint[] = [
     R,
   ],
   [
+    'exploreE2eCreation with an agent',
+    (c) => c.exploreE2eCreation('e1', { agentId: 'a2' }),
+    'POST',
+    '/e2e/creations/e1/explore',
+    { agentId: 'a2' },
+    { exploration: R },
+    R,
+  ],
+  [
     'exploreE2eCreation',
     (c) => c.exploreE2eCreation('e1'),
     'POST',
     '/e2e/creations/e1/explore',
     {},
     { exploration: R },
+    R,
+  ],
+  [
+    'getE2eExplorationCode',
+    (c) => c.getE2eExplorationCode('e1'),
+    'GET',
+    '/e2e/creations/e1/exploration/code',
+    undefined,
+    R,
+    R,
+  ],
+  [
+    'saveE2eExplorationCode',
+    (c) => c.saveE2eExplorationCode('e1', '// x'),
+    'PUT',
+    '/e2e/creations/e1/exploration/code',
+    { code: '// x' },
+    R,
     R,
   ],
   ['getE2eSource', (c) => c.getE2eSource(), 'GET', '/e2e/source', undefined, R, R],
@@ -964,6 +991,15 @@ const endpoints: readonly Endpoint[] = [
     '/e2e/source/explore',
     { environmentId: 'v1', agentId: 'a1' },
     { exploration: R },
+    R,
+  ],
+  [
+    'saveE2eSourceDocumentation',
+    (c) => c.saveE2eSourceDocumentation({ overview: '# x', areas: [], brainDocuments: [] }),
+    'PUT',
+    '/e2e/source/documentation',
+    { overview: '# x', areas: [], brainDocuments: [] },
+    { documentation: R },
     R,
   ],
   [
@@ -1054,6 +1090,60 @@ const endpoints: readonly Endpoint[] = [
     'POST',
     '/e2e/tests/t1/run',
     { regenerate: true },
+    {},
+    undefined,
+  ],
+  [
+    'rerunE2eTest (guided regeneration)',
+    (c) => c.rerunE2eTest('t1', true, { instructions: 'Use the route', useLastRun: true }),
+    'POST',
+    '/e2e/tests/t1/run',
+    { regenerate: true, instructions: 'Use the route', useLastRun: true },
+    {},
+    undefined,
+  ],
+  [
+    'fixE2eTestStep',
+    (c) => c.fixE2eTestStep('t1', 3, 'Fill only the Documents filter'),
+    'POST',
+    '/e2e/tests/t1/steps/3/fix',
+    { instructions: 'Fill only the Documents filter' },
+    {},
+    undefined,
+  ],
+  [
+    'rerunE2eTest (with an environment)',
+    (c) => c.rerunE2eTest('t1', false, undefined, 'env-2'),
+    'POST',
+    '/e2e/tests/t1/run',
+    { regenerate: false, environmentId: 'env-2' },
+    {},
+    undefined,
+  ],
+  [
+    'reviseE2eTestCase',
+    (c) =>
+      c.reviseE2eTestCase('t1', {
+        messages: [{ role: 'user', content: 'Start from the menu' }],
+        testCase: { title: 'T', description: 'd', steps: [] },
+        imageIds: ['img-1'],
+      }),
+    'POST',
+    '/e2e/tests/t1/fix-case',
+    {
+      messages: [{ role: 'user', content: 'Start from the menu' }],
+      testCase: { title: 'T', description: 'd', steps: [] },
+      imageIds: ['img-1'],
+    },
+    { revision: R },
+    R,
+  ],
+  [
+    'rerunE2eTest (inheriting the environment of the run)',
+    (c) => c.rerunE2eTest('t1', false, undefined, null),
+    'POST',
+    '/e2e/tests/t1/run',
+    { regenerate: false, environmentId: null },
     {},
     undefined,
   ],
@@ -1738,11 +1828,13 @@ describe('ApiClient special responses', () => {
     await expect(client.getE2eTestVideo('t1')).resolves.toBe(blob);
     await expect(client.getE2eStepScreenshot('t1', 2)).resolves.toBe(blob);
     await expect(client.getE2eImage('tests/t1/live')).resolves.toBe(blob);
+    await expect(client.getE2eExplorationVideo('e 1', 2)).resolves.toBe(blob);
     await expect(client.exportSpecification('sp1')).resolves.toBe('# Spec');
     expect(calls.map((c) => c.url)).toEqual([
       'http://api/e2e/tests/t1/video',
       'http://api/e2e/tests/t1/steps/2/screenshot',
       'http://api/e2e/tests/t1/live',
+      'http://api/e2e/creations/e%201/exploration/videos/2',
       'http://api/spec/specifications/sp1/export',
     ]);
 
@@ -1750,6 +1842,7 @@ describe('ApiClient special responses', () => {
     await expect(failing.getE2eTestVideo('t1')).rejects.toMatchObject({ status: 403 });
     await expect(failing.getE2eStepScreenshot('t1', 1)).rejects.toMatchObject({ status: 403 });
     await expect(failing.getE2eImage('tests/t1/live')).rejects.toMatchObject({ status: 403 });
+    await expect(failing.getE2eExplorationVideo('e1', 1)).rejects.toMatchObject({ status: 403 });
     await expect(failing.exportSpecification('sp1')).rejects.toMatchObject({ status: 403 });
   });
 

@@ -1,5 +1,6 @@
 import { ApplicationError } from '../../../shared/errors.js';
 import {
+  effectiveStepStatus,
   targetUrl,
   type E2eCreation,
   type E2eReportState,
@@ -142,7 +143,7 @@ export class E2eRunReporter {
     for (const [index, step] of external.steps.entries()) {
       const executed = test.stepResults[index];
       // Steps the script never reached (or did not write) cannot be vouched for.
-      const outcome: TestOutcome = executed?.status ?? 'not_executed';
+      const outcome: TestOutcome = executed ? effectiveStepStatus(executed) : 'not_executed';
       const screenshot = executed?.screenshotKey
         ? await this.options.artifacts.get(executed.screenshotKey)
         : null;
@@ -152,7 +153,10 @@ export class E2eRunReporter {
         action: step.action,
         expectedResult: step.expectedResult,
         outcome,
-        actualResult: executed?.error ?? null,
+        // What the user decided overrules the error of the run; their note says why.
+        actualResult: executed?.manualStatus
+          ? (executed.manualNote ?? null)
+          : (executed?.error ?? null),
         durationMs: executed?.durationMs ?? 0,
         evidence: screenshot
           ? [

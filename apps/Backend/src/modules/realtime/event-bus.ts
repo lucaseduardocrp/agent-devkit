@@ -4,7 +4,7 @@
  * the events that follow, so nothing is stored or replayed here.
  */
 
-export type RealtimeEventType = 'run' | 'development';
+export type RealtimeEventType = 'run' | 'development' | 'issue';
 
 export interface RealtimeEvent<Data = unknown> {
   readonly type: RealtimeEventType;

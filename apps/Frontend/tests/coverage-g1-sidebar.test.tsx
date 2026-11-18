@@ -207,7 +207,7 @@ describe('Sidebar storage and sections', () => {
       </PermissionsProvider>,
     );
     expect(screen.getByTestId('sidebar-e2e-button')).toBeInTheDocument();
-    expect(screen.getByTestId('sidebar-e2eSources-button')).toHaveTextContent('Sources');
+    expect(screen.getByTestId('sidebar-e2eSources-button')).toHaveTextContent('Fontes');
   });
 });
 

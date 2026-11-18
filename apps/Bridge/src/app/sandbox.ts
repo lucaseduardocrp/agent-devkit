@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
@@ -100,6 +101,18 @@ export class Sandbox {
         ...credentials?.env,
       },
     };
+  }
+
+  /**
+   * Removes a credential file from the user's HOME, so the next run writes the one in the vault.
+   * Used when someone replaces their token: files are otherwise written once and left to the CLI.
+   */
+  forget(identity: string, path: string): void {
+    const home = join(this.options.homesDir, String(this.numberOf(identity)));
+    const target = join(home, path);
+    const inside = relative(home, target);
+    if (inside.startsWith('..') || isAbsolute(inside)) return; // never outside the HOME
+    rmSync(target, { force: true });
   }
 
   private numberOf(identity: string): number {

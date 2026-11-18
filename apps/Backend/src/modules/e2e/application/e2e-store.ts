@@ -4,6 +4,7 @@ import {
   testCaseCode,
   type E2eCreation,
   type E2ePriority,
+  type E2eSavedCaseLink,
   type E2eTestCase,
 } from '../domain/e2e.js';
 import type { E2eExplorationScript, NewE2eExplorationScript } from '../domain/e2e-insight.js';
@@ -94,6 +95,8 @@ export interface NewE2eTestCase {
   readonly scriptPath?: string;
   /** Set when the test automates a case imported from a test management platform. */
   readonly externalCase?: ExternalTestCase | null;
+  /** Set when the test is linked to a test case saved in ADK. */
+  readonly savedCase?: E2eSavedCaseLink | null;
 }
 
 export type E2eTestChanges = Partial<
@@ -103,7 +106,16 @@ export type E2eTestChanges = Partial<
     | 'scriptPath'
     | 'beforeRunInstructions'
     | 'afterRunInstructions'
+    | 'scriptInstructions'
+    | 'successCriteria'
+    | 'resultSource'
+    | 'resultNote'
+    | 'environmentId'
+    | 'regenerationFeedback'
     | 'externalCase'
+    | 'savedCase'
+    | 'title'
+    | 'description'
     | 'stepResults'
     | 'status'
     | 'error'
@@ -137,6 +149,8 @@ export interface E2eStore {
   appendTests(creation: E2eCreation, cases: readonly NewE2eTestCase[]): Promise<E2eTestCase[]>;
   listTests(workspaceId: string, creationId?: string): Promise<E2eTestCase[]>;
   getTest(workspaceId: string, id: string): Promise<E2eTestCase | null>;
+  /** Tests of any run linked to a test case of this saved Test Plan. */
+  listLinkedTests(workspaceId: string, planId: string): Promise<E2eTestCase[]>;
   updateTest(workspaceId: string, id: string, changes: E2eTestChanges): Promise<E2eTestCase | null>;
   /** Keeps the script of a finished Site Exploration; explorations are never replaced. */
   saveExplorationScript(input: NewE2eExplorationScript): Promise<E2eExplorationScript>;
@@ -169,9 +183,16 @@ export function buildTestCases(
     scriptPath: item.scriptPath ?? null,
     beforeRunInstructions: null,
     afterRunInstructions: null,
+    scriptInstructions: null,
+    successCriteria: null,
+    environmentId: null,
+    regenerationFeedback: null,
     externalCase: item.externalCase ?? null,
+    savedCase: item.savedCase ?? null,
     stepResults: [],
     status: 'pending',
+    resultSource: 'run',
+    resultNote: null,
     error: null,
     analysis: null,
     verdict: null,
@@ -342,6 +363,14 @@ export class InMemoryE2eStore implements E2eStore {
   getTest(workspaceId: string, id: string): Promise<E2eTestCase | null> {
     const test = this.tests.get(id);
     return Promise.resolve(test?.workspaceId === workspaceId ? test : null);
+  }
+
+  listLinkedTests(workspaceId: string, planId: string): Promise<E2eTestCase[]> {
+    return Promise.resolve(
+      [...this.tests.values()].filter(
+        (test) => test.workspaceId === workspaceId && test.savedCase?.planId === planId,
+      ),
+    );
   }
 
   async updateTest(

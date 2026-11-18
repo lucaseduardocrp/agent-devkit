@@ -45,6 +45,11 @@ export interface InboxRun {
 }
 
 /** Private inbox entry: an issue with the runs executed while it was assigned to the user. */
+/** What the inbox stream says: which issue moved. The inbox is read again from the API. */
+export interface InboxEvent {
+  readonly issueId: string;
+}
+
 export interface InboxItem {
   readonly issue: Issue;
   /** Newest first; never empty. */
@@ -176,6 +181,13 @@ export interface McpUsageSummary {
     readonly model: string;
     readonly calls: number;
     readonly totalTokens: number;
+  }[];
+  /** Where the tokens were spent: an API key, a provider CLI or an MCP client. */
+  readonly bySource?: readonly {
+    readonly source: string;
+    readonly calls: number;
+    readonly totalTokens: number;
+    readonly spendMicros: number;
   }[];
 }
 

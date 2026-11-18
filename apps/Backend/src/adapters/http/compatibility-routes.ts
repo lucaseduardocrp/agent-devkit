@@ -6,6 +6,7 @@ import {
   webhookPayloadSchema,
 } from '../../contracts/http.js';
 import { parseAndNormalizeTestPlans } from '../../modules/testplans/domain/test-plan.js';
+import { normalizeTestCaseDescription } from '../../modules/testplans/domain/test-case-description.js';
 import {
   detectTestPlanLanguage,
   DeterministicTestPlanGenerator,
@@ -563,7 +564,19 @@ export function createCompatibilityRouter(
         title:
           typeof body.title === 'string' && body.title.trim() ? body.title.trim() : existing.title,
         plans: Array.isArray(body.plans)
-          ? withCaseIds(keepCaseMetadata(existing.plans, body.plans))
+          ? withCaseIds(keepCaseMetadata(existing.plans, body.plans)).map((plan) =>
+              // Structured sections (sent by an MCP host) are stored as the HTML template.
+              typeof plan.description === 'string'
+                ? plan
+                : {
+                    ...plan,
+                    description: normalizeTestCaseDescription(
+                      plan.description,
+                      context.locale === 'en-US' ? 'en-US' : 'pt-BR',
+                      (plan).steps.map((step) => step.action),
+                    ),
+                  },
+            )
           : existing.plans,
         suiteId: body.suiteId ?? existing.suiteId,
         updatedAt: new Date().toISOString(),

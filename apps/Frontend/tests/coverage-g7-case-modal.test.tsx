@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestCaseModal } from '../src/features/testplans/TestCaseModal.js';
 import type { TestCase } from '../src/features/testplans/TestPlansView.js';
@@ -87,10 +87,72 @@ describe('TestCaseModal attachments', () => {
   it('shows the error of an image pasted into the scenario that is too large', () => {
     const { ui } = open({ ...base, scenario: `<p>See</p><img src="${FILE}" alt="a">` });
     const big = new File([new Uint8Array(11 * 1024 * 1024)], 'big.png', { type: 'image/png' });
-    fireEvent.paste(ui.getByTestId('input-edit-test-scenario'), {
+    fireEvent.paste(ui.getByTestId('input-edit-test-scenario-formatted'), {
       clipboardData: { files: [big] },
     });
     expect(ui.getByRole('alert')).toHaveTextContent('10 MB');
+  });
+});
+
+describe('TestCaseModal description', () => {
+  const shot = {
+    id: 'i1',
+    name: 'shot.png',
+    kind: 'image',
+    scope: 'testcase',
+    source: 'file',
+    url: FILE,
+  };
+
+  it('shows a text diagram as a block that keeps its lines and spaces', () => {
+    const diagram = '┌───────┐\n│ [A]   │\n└───────┘\n▼\n┌───────┐\n│ [B]   │\n└───────┘';
+    const { ui } = open({ ...base, scenario: `## Fluxo\n${diagram}` });
+    const surface = ui.getByTestId('input-edit-test-scenario-formatted');
+    const block = surface.querySelector('pre')!;
+    expect(block.textContent).toBe(diagram);
+    expect(surface.querySelector('h2')).toHaveTextContent('Fluxo');
+    // The same diagram written with <br> by older cases is also kept in a block.
+    ui.unmount();
+    const older = open({ ...base, scenario: `<p>${diagram.replace(/\n/g, '<br>')}</p>` });
+    expect(
+      older.ui.getByTestId('input-edit-test-scenario-formatted').querySelector('pre')!.textContent,
+    ).toBe(diagram);
+  });
+
+  it('puts an attached image at the end of the description as Markdown', async () => {
+    const { ui } = open({ ...base, scenario: '<p>Pay</p>', metadata: { attachments: [shot] } });
+    // Lets the preview of the attached image load before it is used.
+    await act(async () => {});
+    fireEvent.click(ui.getByRole('button', { name: /^Inserir.*shot\.png/i }));
+    fireEvent.click(ui.getByTestId('editor-mode-code'));
+    expect((ui.getByTestId('input-edit-test-scenario-code') as HTMLTextAreaElement).value).toBe(
+      `Pay\n\n![shot.png](${FILE})\n`,
+    );
+  });
+
+  it('starts the description with the image when it is empty', async () => {
+    const { ui } = open({ ...base, scenario: '', metadata: { attachments: [shot] } });
+    await act(async () => {});
+    fireEvent.click(ui.getByRole('button', { name: /^Inserir.*shot\.png/i }));
+    fireEvent.click(ui.getByTestId('editor-mode-code'));
+    expect((ui.getByTestId('input-edit-test-scenario-code') as HTMLTextAreaElement).value).toBe(
+      `![shot.png](${FILE})\n`,
+    );
+  });
+
+  it('is written and saved as Markdown, converting the rich text of older cases', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const { ui } = open(
+      { ...base, scenario: '<p>Pay the <b>cart</b></p><ul><li>One</li></ul>' },
+      onSave,
+    );
+    fireEvent.click(ui.getByTestId('editor-mode-code'));
+    const code = ui.getByTestId('input-edit-test-scenario-code') as HTMLTextAreaElement;
+    expect(code.value).toBe('Pay the **cart**\n\n- One');
+    fireEvent.change(code, { target: { value: '## Caso de uso\n\nPay' } });
+    fireEvent.click(ui.getByTestId('btn-save-test-case-modal'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    expect(onSave.mock.calls[0]![0].scenario).toBe('## Caso de uso\n\nPay');
   });
 });
 
@@ -108,13 +170,10 @@ describe('TestCaseModal editing', () => {
       onSave,
     );
     const png = new File(['png'], 'shot.png', { type: 'image/png' });
-    fireEvent.paste(ui.getByTestId('input-edit-test-scenario'), {
-      clipboardData: { files: [png] },
-    });
-    expect(ui.getByTestId('input-edit-test-scenario').querySelector('img')).not.toBeNull();
-    fireEvent.input(ui.getByTestId('input-edit-test-scenario'), {
-      target: { innerHTML: '<p>New scenario</p>' },
-    });
+    const scenario = ui.getByTestId('input-edit-test-scenario-formatted');
+    fireEvent.paste(scenario, { clipboardData: { files: [png] } });
+    expect(scenario.querySelector('img')).not.toBeNull();
+    fireEvent.input(scenario, { target: { innerHTML: '<p>New scenario</p>' } });
     fireEvent.change(ui.getByTestId('input-step-action-2'), { target: { value: 'Pay now' } });
     fireEvent.change(ui.getByTestId('input-step-expected-2'), { target: { value: 'Paid fast' } });
     fireEvent.click(ui.getByTestId('btn-save-test-case-modal'));

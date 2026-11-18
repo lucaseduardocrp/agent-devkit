@@ -212,7 +212,9 @@ describe('uploads', () => {
     });
     const response = await upload(app, 'scope=issue&name=a.png').expect(201);
     const meta = JSON.parse(
-      (await store.get(attachmentMetaKey('ws-1', response.body.attachment.id)))!.toString(),
+      (await store.get(
+        attachmentMetaKey('ws-1', response.body.attachment.id, 'image'),
+      ))!.toString(),
     );
     expect(meta.createdBy).toBeUndefined();
     expect(meta.status).toBe('pending');
@@ -239,8 +241,9 @@ describe('downloads and deletes', () => {
     extra: Record<string, unknown> = {},
     content: Buffer | null = PNG,
   ) => {
+    const kind = (extra['kind'] as 'image' | 'document' | undefined) ?? 'image';
     await store.put(
-      attachmentMetaKey('ws-1', ID),
+      attachmentMetaKey('ws-1', ID, kind),
       Buffer.from(
         JSON.stringify({
           id: ID,
@@ -254,7 +257,7 @@ describe('downloads and deletes', () => {
         }),
       ),
     );
-    if (content) await store.put(attachmentContentKey('ws-1', ID), content);
+    if (content) await store.put(attachmentContentKey('ws-1', ID, kind), content);
   };
 
   it('answers 404 for unknown ids, missing content and bad ids', async () => {
@@ -298,7 +301,7 @@ describe('downloads and deletes', () => {
       .delete(`/attachments/files/${ID}`)
       .expect(409);
     await request(build({ store }).app).delete(`/attachments/files/${ID}`).expect(204);
-    expect(await store.get(attachmentContentKey('ws-1', ID))).toBeNull();
+    expect(await store.get(attachmentContentKey('ws-1', ID, 'image'))).toBeNull();
     await saveFile(store, { status: 'committed', createdBy: 'user-1' });
     await request(build({ store }).app).delete(`/attachments/files/${ID}`).expect(409);
   });

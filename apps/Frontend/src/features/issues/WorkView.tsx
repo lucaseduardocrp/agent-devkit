@@ -14,6 +14,7 @@ import { UnsavedChangesDialog } from '../../components/ui/unsaved-changes-dialog
 import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/skeleton.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import type { CustomAgentDto } from '../agents/agent-types.js';
+import { useRunStream } from '../agents/use-run-stream.js';
 import type { PbiItem } from '../pbi/pbi-types.js';
 import type { WorkspaceMember } from '../workspaces/workspace-types.js';
 import { AgentBriefTab } from './AgentBriefTab.js';
@@ -49,6 +50,7 @@ import {
 import type {
   AgentRun,
   DashboardSummary,
+  InboxEvent,
   InboxItem,
   Issue,
   IssueChanges,
@@ -57,6 +59,12 @@ import type {
   IssueStatus,
   McpUsageSummary,
 } from './issue-types.js';
+
+/** Wait after an inbox event, so a burst of them is read once. */
+const INBOX_REFRESH_DELAY_MS = 400;
+/** Safety read while the stream is open, and the poll that replaces it while it is not. */
+const INBOX_RECONCILE_MS = 60_000;
+const INBOX_POLL_MS = 10_000;
 
 type WorkTab = 'dashboard' | 'inbox' | 'issues';
 type InboxTab = 'mine' | 'recent' | 'unread' | 'blocked' | 'all';
@@ -128,6 +136,7 @@ interface IssueForm {
   type: string;
   assigneeAgentId: string;
   assigneeUserId: string;
+  proofreaderUserId: string;
 }
 
 const emptyIssueForm: IssueForm = {
@@ -139,6 +148,7 @@ const emptyIssueForm: IssueForm = {
   type: '',
   assigneeAgentId: '',
   assigneeUserId: '',
+  proofreaderUserId: '',
 };
 
 function isHtmlDescription(value: string): boolean {
@@ -432,6 +442,41 @@ export function WorkView({
     return () => controller.abort();
   }, [reload]);
 
+  // The inbox follows the server live: the stream says an issue moved and only the inbox is read
+  // again, a moment later so a burst of events (a run writing progress) is one read. Answers come
+  // back in any order, so only the newest read is applied.
+  const inboxReads = useRef(0);
+  const inboxTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const reloadInbox = useCallback(async () => {
+    const read = ++inboxReads.current;
+    try {
+      const list = await apiClient.getInbox();
+      if (read === inboxReads.current) setInbox(list);
+    } catch {
+      // The list on screen stays; the next event or the periodic read corrects it.
+    }
+  }, [apiClient]);
+  const inboxLive = useRunStream<InboxEvent>({
+    enabled: tab === 'inbox' && workspaceId !== null,
+    connect: (handlers, signal) => apiClient.streamInboxEvents(handlers, signal),
+    onRun: () => {
+      clearTimeout(inboxTimer.current);
+      inboxTimer.current = setTimeout(() => void reloadInbox(), INBOX_REFRESH_DELAY_MS);
+    },
+    // A connection that was down missed events: every (re)connection reads the inbox again.
+    onReady: () => void reloadInbox(),
+  });
+  useEffect(() => () => clearTimeout(inboxTimer.current), []);
+  useEffect(() => {
+    if (tab !== 'inbox' || !workspaceId) return;
+    // Live, the stream carries every change and this only corrects what could have been missed.
+    const timer = window.setInterval(
+      () => void reloadInbox(),
+      inboxLive === 'live' ? INBOX_RECONCILE_MS : INBOX_POLL_MS,
+    );
+    return () => window.clearInterval(timer);
+  }, [tab, workspaceId, inboxLive, reloadInbox]);
+
   useEffect(() => {
     if (!selectedId) return;
     let active = true;
@@ -574,6 +619,7 @@ export function WorkView({
             type: form.type,
             assigneeAgentId: form.assigneeAgentId || null,
             assigneeUserId: form.assigneeUserId || null,
+            ...(form.proofreaderUserId ? { proofreaderUserId: form.proofreaderUserId } : {}),
           }),
       );
       setComposerOpen(false);
@@ -1293,24 +1339,27 @@ export function WorkView({
                 </div>
               </>
             )}
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={() => void reload()}
-                aria-label={t.refresh}
-                title={t.refresh}
-              >
-                <i className="ti ti-refresh" aria-hidden="true" />
-              </Button>
-              {!isReadOnly && (
-                <Button type="button" onClick={() => setComposerOpen(true)}>
-                  <i className="ti ti-plus" aria-hidden="true" />
-                  {t.newIssue}
+            {/* The inbox follows the server live and is not where issues are created. */}
+            {tab === 'issues' && (
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => void reload()}
+                  aria-label={t.refresh}
+                  title={t.refresh}
+                >
+                  <i className="ti ti-refresh" aria-hidden="true" />
                 </Button>
-              )}
-            </div>
+                {!isReadOnly && (
+                  <Button type="button" onClick={() => setComposerOpen(true)}>
+                    <i className="ti ti-plus" aria-hidden="true" />
+                    {t.newIssue}
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
           {tab === 'issues' && filtersOpen && (
             <div className="flex flex-wrap items-center gap-2">
@@ -1651,127 +1700,154 @@ export function WorkView({
       >
         <form
           onSubmit={(event) => void createIssue(event)}
-          className="w-[min(560px,calc(100vw-2rem))] space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-6 shadow-2xl"
+          className="flex h-[min(90vh,900px)] w-[min(96vw,1800px)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)]"
         >
-          <div className="flex items-center justify-between">
-            <h2 id="issue-composer-title" className="text-lg font-semibold">
-              {t.newIssue}
-            </h2>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={closeComposer}
-              aria-label={t.close}
-            >
-              <i className="ti ti-x" aria-hidden="true" />
-            </Button>
+          <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-6 py-3">
+            <div className="min-w-0">
+              <h2 id="issue-composer-title" className="mt-1 text-xl font-semibold">
+                {t.newIssue}
+              </h2>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button type="button" variant="ghost" size="sm" onClick={closeComposer}>
+                {t.cancel}
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={busy || !form.title.trim()}
+                isLoading={busy}
+              >
+                {t.create}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={closeComposer}
+                aria-label={t.close}
+              >
+                <i className="ti ti-x" aria-hidden="true" />
+              </Button>
+            </div>
           </div>
-          <label className="block space-y-1 text-sm">
-            <span>{t.title}</span>
-            <Input
-              autoFocus
-              required
-              maxLength={240}
-              value={form.title}
-              onChange={(event) => setForm({ ...form, title: event.target.value })}
-            />
-          </label>
-          <label className="block space-y-1 text-sm">
-            <span>{t.description}</span>
-            <Textarea
-              rows={5}
-              value={form.description}
-              onChange={(event) => setForm({ ...form, description: event.target.value })}
-              onPaste={formImages.onPaste}
-              onDrop={formImages.onDrop}
-            />
-            <ImageInputStatus state={formImages} />
-          </label>
-          <AttachmentPanel
-            apiClient={apiClient}
-            scope="issue"
-            attachments={form.attachments}
-            onChange={(attachments) => setForm({ ...form, attachments })}
-            onInsertInline={(attachment) =>
-              setForm({ ...form, description: appendImage(form.description, attachment) })
-            }
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <label className="space-y-1 text-sm">
-              <span>{t.status}</span>
-              <Select
-                value={form.status}
-                onChange={(event) =>
-                  setForm({ ...form, status: event.target.value as IssueStatus })
-                }
-              >
-                {statusOrder.map((key) => (
-                  <option key={key} value={key}>
-                    {t.statusNames[key]}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label className="space-y-1 text-sm">
-              <span>{t.priority}</span>
-              <Select
-                value={form.priority}
-                onChange={(event) =>
-                  setForm({ ...form, priority: event.target.value as IssuePriority })
-                }
-              >
-                {priorityOrder.map((key) => (
-                  <option key={key} value={key}>
-                    {t.priorityNames[key]}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label className="space-y-1 text-sm">
-              <span>{t.type}</span>
-              <Select
-                value={form.type}
-                onChange={(event) => setForm({ ...form, type: event.target.value })}
-              >
-                <option value="">{t.noType}</option>
-                {workItemTypes.map((type) => (
-                  <option key={type.key} value={type.key}>
-                    {type.label}
-                  </option>
-                ))}
-              </Select>
-            </label>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="space-y-1 text-sm">
-              <span>{t.agent}</span>
-              <Select
-                value={form.assigneeAgentId}
-                onChange={(event) => setForm({ ...form, assigneeAgentId: event.target.value })}
-              >
-                <option value="">{t.noAgent}</option>
-                {agentOptions}
-              </Select>
-            </label>
-            <label className="space-y-1 text-sm">
-              <span>{t.assignee}</span>
-              <Select
-                value={form.assigneeUserId}
-                onChange={(event) => setForm({ ...form, assigneeUserId: event.target.value })}
-              >
-                <option value="">{t.unassigned}</option>
-                {memberOptions}
-              </Select>
-            </label>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={closeComposer}>
-              {t.cancel}
-            </Button>
-            <Button type="submit" disabled={busy || !form.title.trim()} isLoading={busy}>
-              {t.create}
-            </Button>
+          <div className="min-h-0 flex-1 overflow-y-auto p-6">
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
+              <div className="min-w-0 space-y-5 lg:border-r lg:border-[var(--border)] lg:pr-6">
+                <label className="block space-y-1 text-sm">
+                  <span>{t.title}</span>
+                  <Input
+                    autoFocus
+                    required
+                    maxLength={240}
+                    value={form.title}
+                    onChange={(event) => setForm({ ...form, title: event.target.value })}
+                  />
+                </label>
+                <label className="block space-y-1 text-sm">
+                  <span>{t.description}</span>
+                  <Textarea
+                    rows={12}
+                    value={form.description}
+                    onChange={(event) => setForm({ ...form, description: event.target.value })}
+                    onPaste={formImages.onPaste}
+                    onDrop={formImages.onDrop}
+                  />
+                  <ImageInputStatus state={formImages} />
+                </label>
+                <AttachmentPanel
+                  apiClient={apiClient}
+                  scope="issue"
+                  attachments={form.attachments}
+                  onChange={(attachments) => setForm({ ...form, attachments })}
+                  onInsertInline={(attachment) =>
+                    setForm({ ...form, description: appendImage(form.description, attachment) })
+                  }
+                />
+              </div>
+              <aside className="min-w-0 space-y-5">
+                <div className="grid gap-3">
+                  <label className="space-y-1 text-sm">
+                    <span>{t.status}</span>
+                    <Select
+                      value={form.status}
+                      onChange={(event) =>
+                        setForm({ ...form, status: event.target.value as IssueStatus })
+                      }
+                    >
+                      {statusOrder.map((key) => (
+                        <option key={key} value={key}>
+                          {t.statusNames[key]}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span>{t.priority}</span>
+                    <Select
+                      value={form.priority}
+                      onChange={(event) =>
+                        setForm({ ...form, priority: event.target.value as IssuePriority })
+                      }
+                    >
+                      {priorityOrder.map((key) => (
+                        <option key={key} value={key}>
+                          {t.priorityNames[key]}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span>{t.type}</span>
+                    <Select
+                      value={form.type}
+                      onChange={(event) => setForm({ ...form, type: event.target.value })}
+                    >
+                      <option value="">{t.noType}</option>
+                      {workItemTypes.map((type) => (
+                        <option key={type.key} value={type.key}>
+                          {type.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span>{t.agent}</span>
+                    <Select
+                      value={form.assigneeAgentId}
+                      onChange={(event) =>
+                        setForm({ ...form, assigneeAgentId: event.target.value })
+                      }
+                    >
+                      <option value="">{t.noAgent}</option>
+                      {agentOptions}
+                    </Select>
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span>{t.assignee}</span>
+                    <Select
+                      value={form.assigneeUserId}
+                      onChange={(event) => setForm({ ...form, assigneeUserId: event.target.value })}
+                    >
+                      <option value="">{t.unassigned}</option>
+                      {memberOptions}
+                    </Select>
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span>{t.proofreader}</span>
+                    <Select
+                      value={form.proofreaderUserId}
+                      onChange={(event) =>
+                        setForm({ ...form, proofreaderUserId: event.target.value })
+                      }
+                    >
+                      <option value="">{t.noProofreader}</option>
+                      {memberOptions}
+                    </Select>
+                  </label>
+                </div>
+              </aside>
+            </div>
           </div>
         </form>
       </Modal>
@@ -2526,7 +2602,14 @@ export function WorkView({
   );
 }
 
-/** Current-month tokens the MCP client's own model spent on ADK tool calls. */
+function usageSourceLabel(source: string, t: I18nDictionary['issues']): string {
+  if (source === 'api') return t.usageSourceApi;
+  if (source === 'cli') return t.usageSourceCli;
+  if (source === 'mcp') return t.usageSourceMcp;
+  return source;
+}
+
+/** Current-month tokens spent outside agent runs: API keys, provider CLIs and MCP clients. */
 function McpUsagePanel({
   usage,
   locale,
@@ -2572,6 +2655,26 @@ function McpUsagePanel({
             <p className="text-xs text-[var(--text-muted)]">
               {usage.unpricedCalls} {t.mcpUnpriced}
             </p>
+          )}
+          {usage.bySource && usage.bySource.length > 0 && (
+            <div>
+              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                {t.mcpSources}
+              </h4>
+              <ul className="space-y-1 text-xs text-[var(--text-secondary)]">
+                {usage.bySource.map((item) => (
+                  <li key={item.source} className="flex justify-between gap-3">
+                    <span className="min-w-0 truncate">
+                      {usageSourceLabel(item.source, t)}
+                    </span>
+                    <span className="shrink-0">
+                      {tokens(item.totalTokens)} · {number(item.calls)}× ·{' '}
+                      {money(item.spendMicros, locale)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           <div className="grid gap-4 md:grid-cols-2">
             <div>

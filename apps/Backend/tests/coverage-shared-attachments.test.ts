@@ -113,7 +113,9 @@ describe('attachment helpers', () => {
   });
 
   it('builds storage keys and content disposition', () => {
-    expect(attachmentContentKey('ws', A)).toBe(`attachments/ws/${A}/content`);
+    expect(attachmentContentKey('ws', A, 'document')).toBe(`attachments/files/ws/${A}/content`);
+    expect(attachmentContentKey('ws', A, 'image')).toBe(`attachments/images/ws/${A}/content`);
+    expect(attachmentMetaKey('ws', A, 'video')).toBe(`attachments/videos/ws/${A}/meta.json`);
     expect(contentDisposition('inline', 'ação "x".png')).toBe(
       `inline; filename="a__o _x_.png"; filename*=UTF-8''${encodeURIComponent('ação "x".png')}`,
     );
@@ -122,9 +124,9 @@ describe('attachment helpers', () => {
   it('reads stored metadata, tolerating missing and corrupt entries', async () => {
     const store = new InMemoryE2eArtifactStore();
     expect(await readAttachmentMeta(store, 'ws', A)).toBeNull();
-    await store.put(attachmentMetaKey('ws', A), Buffer.from('{not json'));
+    await store.put(attachmentMetaKey('ws', A, 'document'), Buffer.from('{not json'));
     expect(await readAttachmentMeta(store, 'ws', A)).toBeNull();
-    await store.put(attachmentMetaKey('ws', B), Buffer.from('{"id":"b"}'));
+    await store.put(attachmentMetaKey('ws', B, 'document'), Buffer.from('{"id":"b"}'));
     expect(await readAttachmentMeta(store, 'ws', B)).toEqual({ id: 'b' });
   });
 });
@@ -142,8 +144,11 @@ function meta(id: string, extra: Partial<StoredAttachmentMeta> = {}): StoredAtta
   };
 }
 async function put(store: InMemoryE2eArtifactStore, value: StoredAttachmentMeta) {
-  await store.put(attachmentMetaKey('ws', value.id), Buffer.from(JSON.stringify(value)));
-  await store.put(attachmentContentKey('ws', value.id), Buffer.from('x'));
+  await store.put(
+    attachmentMetaKey('ws', value.id, value.kind),
+    Buffer.from(JSON.stringify(value)),
+  );
+  await store.put(attachmentContentKey('ws', value.id, value.kind), Buffer.from('x'));
 }
 
 describe('attachment files lifecycle', () => {
@@ -200,10 +205,10 @@ describe('attachment files lifecycle', () => {
     const store = new InMemoryE2eArtifactStore();
     await put(store, meta(A, { status: 'committed', owner: 'issue:1' }));
     await syncItemFiles(store, 'ws', 'issue:1', `/attachments/files/${A}`, null);
-    expect(await store.get(attachmentContentKey('ws', A))).toBeNull();
+    expect(await store.get(attachmentContentKey('ws', A, 'image'))).toBeNull();
     await put(store, meta(B));
     await deleteFile(store, 'ws', B);
-    expect(await store.get(attachmentContentKey('ws', B))).toBeNull();
+    expect(await store.get(attachmentContentKey('ws', B, 'image'))).toBeNull();
   });
 
   it('logs instead of failing in the safe variant', async () => {

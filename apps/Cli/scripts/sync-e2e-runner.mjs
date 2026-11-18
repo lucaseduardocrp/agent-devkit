@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 export const RUNNER_FILES = [
   'domain/e2e-mode.ts',
   'application/access-routing.ts',
+  'application/e2e-explore-share.ts',
   'application/e2e-runner.ts',
   'application/script-guard.ts',
   'adapters/playwright-runner.ts',

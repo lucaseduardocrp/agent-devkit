@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('adkDesktop', {
       ipcRenderer.invoke('adk:storage-disconnect', input),
     copyEncryptionKey: () => ipcRenderer.invoke('adk:storage-copy-key'),
   },
+  cache: {
+    status: () => ipcRenderer.invoke('adk:cache-status'),
+    clear: (ids: string[]) => ipcRenderer.invoke('adk:cache-clear', ids),
+  },
   development: {
     connect: (credentials: { token: string; workspaceId: string | null } | null) =>
       development('connect', credentials),

@@ -544,6 +544,7 @@ export function createKnowledgeRouter(
     }
   });
 
+  const queryText = (value: unknown): string => (typeof value === 'string' ? value : '');
   router.get('/knowledge/documents', async (request, response, next) => {
     try {
       const context = await resolveRequestContext(request, response);
@@ -642,6 +643,28 @@ export function createKnowledgeRouter(
         }
       }
 
+      // A select that scrolls and searches asks for a page of titles; the list screens still get
+      // every document with its content.
+      if (request.query.page !== undefined) {
+        const size = Math.min(
+          100,
+          Math.max(1, Number.parseInt(queryText(request.query.pageSize), 10) || 25),
+        );
+        const page = Math.max(1, Number.parseInt(queryText(request.query.page), 10) || 1);
+        const needle = queryText(request.query.q).trim().toLocaleLowerCase();
+        const matching = Array.from(docsMap.values())
+          .filter((doc) =>
+            `${doc.title} ${doc.provider ?? ''}`.toLocaleLowerCase().includes(needle),
+          )
+          .sort((first, second) => first.title.localeCompare(second.title));
+        response.status(200).json({
+          documents: matching
+            .slice((page - 1) * size, page * size)
+            .map(({ content: _content, ...document }) => document),
+          total: matching.length,
+        });
+        return;
+      }
       response.status(200).json({
         documents: Array.from(docsMap.values()),
       });

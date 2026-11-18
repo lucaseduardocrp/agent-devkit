@@ -8,6 +8,7 @@
 // Closing the window, or Ctrl+C here, stops everything.
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,8 +17,29 @@ const apps = join(desktop, '..');
 const backend = join(apps, 'Backend');
 const frontend = join(apps, 'Frontend');
 const mcp = join(apps, 'Mcp');
-const WEB_PORT = Number(process.env['ADK_DESKTOP_WEB_PORT'] ?? 5173);
-const WEB_URL = `http://localhost:${WEB_PORT}`;
+
+/** True when nothing listens on the port, on IPv4 or on IPv6 (another project's dev server may). */
+async function portIsFree(port) {
+  for (const host of ['127.0.0.1', '::1']) {
+    const free = await new Promise((resolve) => {
+      const probe = createServer();
+      probe.once('error', (error) => resolve(error.code === 'EADDRNOTAVAIL')); // no IPv6: fine
+      probe.listen(port, host, () => probe.close(() => resolve(true)));
+    });
+    if (!free) return false;
+  }
+  return true;
+}
+
+// Another project's Vite on the same port, bound to ::1, would answer `localhost` instead of ours.
+// So take the first free port, and pin Vite and the window to 127.0.0.1.
+const PREFERRED_PORT = Number(process.env['ADK_DESKTOP_WEB_PORT'] ?? 5173);
+let WEB_PORT = PREFERRED_PORT;
+while (!(await portIsFree(WEB_PORT))) WEB_PORT += 1;
+if (WEB_PORT !== PREFERRED_PORT) {
+  console.log(`Port ${PREFERRED_PORT} is in use by another program; using ${WEB_PORT}.`);
+}
+const WEB_URL = `http://127.0.0.1:${WEB_PORT}`;
 
 const children = new Set();
 const colors = { api: 36, mcp: 35, web: 33, app: 32 };
@@ -103,7 +125,7 @@ try {
   await Promise.all([
     start('api', watchCommand, backend, { ready: watchReady }),
     start('mcp', watchCommand, mcp, { ready: watchReady }),
-    start('web', `npx vite --port ${WEB_PORT} --strictPort`, frontend, { ready: /ready in/i }),
+    start('web', `npx vite --host 127.0.0.1 --port ${WEB_PORT} --strictPort`, frontend, { ready: /ready in/i }),
   ]);
 } catch (error) {
   console.error(String(error));

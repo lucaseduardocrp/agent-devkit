@@ -126,11 +126,14 @@ describe('AgentsView extra paths', () => {
     vi.spyOn(client, 'getIssues').mockResolvedValue([]);
     vi.spyOn(client, 'getAgentRuns').mockResolvedValue([]);
     vi.spyOn(client, 'getIntegrations').mockResolvedValue([]);
-    vi.spyOn(client, 'executeAgent').mockResolvedValue({
-      content: 'Done',
-      agent: { id: 'agent-qa', name: 'QA Engineer', role: 'QA' },
-      chunksUsed: 0,
-      provider: 'Gemini',
+    vi.spyOn(client, 'streamAgentChat').mockImplementation(async (_id, _request, handlers) => {
+      handlers.onStart?.({
+        provider: 'Gemini',
+        agent: { id: 'agent-qa', name: 'QA Engineer', role: 'QA' },
+      });
+      handlers.onDelta('Do');
+      handlers.onDelta('ne');
+      handlers.onDone({ result: 'Done', provider: 'Gemini' });
     });
   });
 
@@ -153,11 +156,11 @@ describe('AgentsView extra paths', () => {
     });
     fireEvent.click(view.getByTestId('playground-execute-button'));
     await waitFor(() =>
-      expect(client.executeAgent).toHaveBeenCalledWith('agent-qa', {
-        prompt: 'Run it',
-        useKnowledge: true,
-        llmProvider: 'mistral',
-      }),
+      expect(client.streamAgentChat).toHaveBeenCalledWith(
+        'agent-qa',
+        { prompt: 'Run it', useKnowledge: true, llmProvider: 'mistral' },
+        expect.any(Object),
+      ),
     );
   });
 
@@ -179,10 +182,11 @@ describe('AgentsView extra paths', () => {
     });
     fireEvent.click(view.getByTestId('playground-execute-button'));
     await waitFor(() =>
-      expect(client.executeAgent).toHaveBeenCalledWith('agent-qa', {
-        prompt: 'Run it',
-        useKnowledge: true,
-      }),
+      expect(client.streamAgentChat).toHaveBeenCalledWith(
+        'agent-qa',
+        { prompt: 'Run it', useKnowledge: true },
+        expect.any(Object),
+      ),
     );
     expect(view.getByTestId('activity-titles').textContent).toBe('Agente  trabalhando');
   });

@@ -24,20 +24,46 @@ export type NewE2eJob = Pick<E2eJob, 'workspaceId' | 'creationId' | 'kind' | 'te
   readonly requestedBy?: string | null;
 };
 
+/** The scope of the jobs that explore the application: it is no test's id, so it never equals one. */
+export const EXPLORE_SCOPE = 'explore';
+
+/**
+ * What a job occupies in its run: the single test an `execute` job runs, 'explore' for the
+ * exploration of the application (a test can be rewritten while it goes on), or the whole run ('')
+ * for planning, publishing, documenting and executions of several tests.
+ */
+export function jobScope(job: Pick<E2eJob, 'kind' | 'testIds'>): string {
+  if (job.kind === 'explore') return EXPLORE_SCOPE;
+  return job.kind === 'execute' && job.testIds.length === 1 ? job.testIds[0]! : '';
+}
+
+/** Two jobs of one run collide when either takes the whole run or both take the same test. */
+export function scopesCollide(a: string, b: string): boolean {
+  return a === '' || b === '' || a === b;
+}
+
+export interface ActiveJobFilter {
+  /** Only the jobs that keep this test from being changed: its own and those of the whole run. */
+  readonly testId?: string;
+  /** Ignores this job, so a running job can ask whether others are still working on the run. */
+  readonly exceptJobId?: string;
+}
+
 /**
  * Durable work queue shared by the API (producer) and any number of workers (consumers).
- * A creation has at most one queued or running job, so its tests never run twice at once.
+ * A run has at most one queued or running job per scope: its tests run again independently of
+ * each other, but a test never runs twice at once.
  */
 export interface E2eJobQueue {
-  /** Null when the creation already has an active job. */
+  /** Null when the job's scope in the creation is already taken by an active job. */
   enqueue(input: NewE2eJob): Promise<E2eJob | null>;
-  hasActive(workspaceId: string, creationId: string): Promise<boolean>;
+  hasActive(workspaceId: string, creationId: string, filter?: ActiveJobFilter): Promise<boolean>;
   /** Atomically takes the oldest queued job, or null when there is nothing to do. */
   claim(workerId: string): Promise<E2eJob | null>;
   /** Keeps a running job alive; false when it was cancelled, deleted or taken over. */
   heartbeat(jobId: string, workerId: string): Promise<boolean>;
   finish(jobId: string, workerId: string, status: 'succeeded' | 'failed'): Promise<void>;
-  /** Cancels the creation's active job; false when it had none. */
+  /** Cancels the creation's active jobs; false when it had none. */
   cancel(workspaceId: string, creationId: string): Promise<boolean>;
   /**
    * Running jobs whose worker stopped sending heartbeats go back to the queue, or fail
@@ -52,7 +78,9 @@ export class InMemoryE2eJobQueue implements E2eJobQueue {
   private readonly jobs = new Map<string, E2eJob>();
 
   enqueue(input: NewE2eJob): Promise<E2eJob | null> {
-    if (this.active(input.creationId)) return Promise.resolve(null);
+    const scope = jobScope(input);
+    if (this.active(input.creationId).some((job) => scopesCollide(jobScope(job), scope)))
+      return Promise.resolve(null);
     const job: E2eJob = {
       ...input,
       testIds: [...input.testIds],
@@ -68,9 +96,19 @@ export class InMemoryE2eJobQueue implements E2eJobQueue {
     return Promise.resolve(job);
   }
 
-  hasActive(workspaceId: string, creationId: string): Promise<boolean> {
-    const job = this.active(creationId);
-    return Promise.resolve(job?.workspaceId === workspaceId);
+  hasActive(
+    workspaceId: string,
+    creationId: string,
+    filter: ActiveJobFilter = {},
+  ): Promise<boolean> {
+    return Promise.resolve(
+      this.active(creationId).some(
+        (job) =>
+          job.workspaceId === workspaceId &&
+          job.id !== filter.exceptJobId &&
+          (filter.testId === undefined || scopesCollide(jobScope(job), filter.testId)),
+      ),
+    );
   }
 
   claim(workerId: string): Promise<E2eJob | null> {
@@ -104,10 +142,9 @@ export class InMemoryE2eJobQueue implements E2eJobQueue {
   }
 
   cancel(workspaceId: string, creationId: string): Promise<boolean> {
-    const job = this.active(creationId);
-    if (job?.workspaceId !== workspaceId) return Promise.resolve(false);
-    this.jobs.set(job.id, { ...job, status: 'cancelled' });
-    return Promise.resolve(true);
+    const jobs = this.active(creationId).filter((job) => job.workspaceId === workspaceId);
+    for (const job of jobs) this.jobs.set(job.id, { ...job, status: 'cancelled' });
+    return Promise.resolve(jobs.length > 0);
   }
 
   sweep(staleBefore: Date, maxAttempts: number) {
@@ -125,8 +162,8 @@ export class InMemoryE2eJobQueue implements E2eJobQueue {
     return Promise.resolve({ requeued, failed });
   }
 
-  private active(creationId: string): E2eJob | undefined {
-    return [...this.jobs.values()].find(
+  private active(creationId: string): E2eJob[] {
+    return [...this.jobs.values()].filter(
       (job) => job.creationId === creationId && ACTIVE.has(job.status),
     );
   }

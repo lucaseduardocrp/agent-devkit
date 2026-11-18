@@ -1,9 +1,13 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
-import type { AgentService } from '../../modules/agents/application/agent-service.js';
+import type {
+  AgentService,
+  AgentStreamEvent,
+} from '../../modules/agents/application/agent-service.js';
 import type { RequestContextResolver } from './compatibility-routes.js';
 import { requireAuth } from './auth-middleware.js';
-import { ApplicationError } from '../../shared/errors.js';
+import { ApplicationError, toErrorResponse } from '../../shared/errors.js';
+import type { SupportedLocale } from '../../shared/i18n.js';
 import { parseBody } from './validation.js';
 import {
   MAX_AGENT_SKILLS,
@@ -65,6 +69,21 @@ const executeAgentSchema = z.object({
     .transform((value) => value),
   llmProvider: z.string().trim().min(1).optional(),
 });
+
+const chatAgentSchema = executeAgentSchema.extend({
+  /** Earlier turns, oldest first; the server uses the last few. */
+  history: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().max(20_000),
+      }),
+    )
+    .max(40)
+    .optional(),
+});
+
+const STREAM_HEARTBEAT_MS = 15_000;
 
 const brainQuerySchema = z.object({
   prompt: z.string().trim().min(1).max(4000),
@@ -386,7 +405,7 @@ export function createAgentsRouter(
           'No default agent is configured for this workspace.',
           404,
         );
-      const result = await agentService.executeAgent(
+      const result = await agentService.askBrain(
         workspaceId,
         agent.id,
         {
@@ -394,8 +413,7 @@ export function createAgentsRouter(
             ? `Conversa temporária:\n${body.history}\n\nPergunta atual:\n${body.prompt}`
             : body.prompt,
           knowledgeQuery: body.prompt,
-          includeKnowledge: true,
-          knowledgeOnly: true,
+          ...(body.history ? { knowledgeHistory: body.history } : {}),
         },
         req.context,
       );
@@ -423,6 +441,82 @@ export function createAgentsRouter(
       res.status(200).json(result);
     } catch (err) {
       next(err);
+    }
+  });
+
+  // Server-sent events: the agent's answer as the model writes it. Works the same whether the
+  // workspace's LLM is an API key or a provider CLI, because both sit behind `LlmPort`.
+  //   event: start  data: { agent, provider }
+  //   event: delta  data: { text }
+  //   event: done   data: { result, agent, provider, model?, usage? }  (the verified answer)
+  //   event: error  data: { code, message }
+  router.post('/agents/:id/chat', requireAuth, async (req, res, next) => {
+    // The client leaving must stop the model (and kill a CLI process), not let it run to the end.
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
+
+    // Pull the first event before the headers go out: a failure to start (bad agent, no LLM,
+    // blocked prompt) is then an ordinary JSON error with its real status code.
+    let events: AsyncGenerator<AgentStreamEvent>;
+    let first: IteratorResult<AgentStreamEvent>;
+    try {
+      const body = parseBody(chatAgentSchema, req);
+      events = agentService.streamAgent(
+        resolveWorkspaceId(req),
+        req.params['id'] as string,
+        {
+          prompt: body.prompt,
+          includeKnowledge: body.includeKnowledge ?? body.useKnowledge,
+          llmProvider: body.llmProvider,
+          ...(body.history ? { history: body.history } : {}),
+        },
+        req.context,
+        controller.signal,
+      );
+      first = await events.next();
+    } catch (err) {
+      next(err);
+      return;
+    }
+
+    res.status(200).set({
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      // no-transform keeps the compression middleware from buffering the stream.
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders();
+    const send = (type: string, data: unknown): void => {
+      res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    const emit = (event: AgentStreamEvent): void => {
+      if (event.type === 'start') send('start', { agent: event.agent, provider: event.provider });
+      else if (event.type === 'delta') send('delta', { text: event.text });
+      else send('done', event.response);
+    };
+    const heartbeat = setInterval(() => res.write(': keep-alive\n\n'), STREAM_HEARTBEAT_MS);
+    try {
+      // The generator yields `start` first or throws, so a finished first step cannot happen.
+      emit(first.value as AgentStreamEvent);
+      for await (const event of events) emit(event);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        // The same translated, detail-free message an ordinary JSON error would carry.
+        const failure = toErrorResponse(
+          error,
+          res.locals['requestId'] as string,
+          res.locals['locale'] as SupportedLocale | undefined,
+        );
+        if (!(error instanceof ApplicationError))
+          console.error('[AgentChat] stream failed:', error);
+        send('error', { code: failure.code, message: failure.message });
+      }
+    } finally {
+      clearInterval(heartbeat);
+      res.end();
     }
   });
 

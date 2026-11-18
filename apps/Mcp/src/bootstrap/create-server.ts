@@ -40,6 +40,8 @@ export interface ServerDependencies {
   readonly session: Session;
   readonly skills: readonly SkillFile[];
   readonly fetch?: typeof fetch;
+  /** Replaces the default instructions: a restricted connection says what it does not have. */
+  readonly instructions?: string;
 }
 
 /** Builds the per-call context; a request token (HTTP transport) wins over the stored session. */
@@ -123,7 +125,7 @@ export async function recordToolUsage(
 export function createMcpServer(deps: ServerDependencies): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, title: 'ADK', version: packageVersion() },
-    { instructions: SERVER_INSTRUCTIONS },
+    { instructions: deps.instructions ?? SERVER_INSTRUCTIONS },
   );
 
   for (const tool of deps.registry.tools) {

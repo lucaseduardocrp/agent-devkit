@@ -4,6 +4,7 @@ import {
   type E2eCreation,
   type E2eReportState,
   type E2eReportingTarget,
+  type E2eSavedCaseLink,
   type E2eStepResult,
   type E2eTestCase,
 } from '../domain/e2e.js';
@@ -50,10 +51,19 @@ type CreationRow = Omit<
 };
 type TestRow = Omit<
   E2eTestCase,
-  'steps' | 'priority' | 'status' | 'verdict' | 'externalCase' | 'stepResults'
+  | 'steps'
+  | 'priority'
+  | 'status'
+  | 'verdict'
+  | 'externalCase'
+  | 'savedCase'
+  | 'stepResults'
+  | 'resultSource'
 > & {
+  resultSource: string;
   steps: unknown;
   externalCase: string | null;
+  savedCase: string | null;
   stepResults: unknown;
   priority: string;
   status: string;
@@ -126,7 +136,10 @@ function toTest(row: TestRow): E2eTestCase {
     ...row,
     steps: strings(row.steps),
     externalCase: parseJson<ExternalTestCase>(row.externalCase),
+    savedCase: parseJson<E2eSavedCaseLink>(row.savedCase),
     stepResults: Array.isArray(row.stepResults) ? (row.stepResults as E2eStepResult[]) : [],
+    resultSource:
+      row.resultSource === 'criteria' || row.resultSource === 'manual' ? row.resultSource : 'run',
   } as E2eTestCase;
 }
 
@@ -134,15 +147,17 @@ function toTestRow(test: E2eTestCase) {
   return {
     ...test,
     externalCase: jsonText(test.externalCase),
+    savedCase: jsonText(test.savedCase),
     stepResults: test.stepResults as unknown as object[],
   };
 }
 
 function toTestChangesRow(changes: E2eTestChanges) {
-  const { externalCase, stepResults, ...rest } = changes;
+  const { externalCase, savedCase, stepResults, ...rest } = changes;
   return {
     ...rest,
     externalCase: jsonText(externalCase),
+    savedCase: jsonText(savedCase),
     ...(stepResults === undefined ? {} : { stepResults: stepResults as unknown as object[] }),
   };
 }
@@ -318,6 +333,14 @@ export class PrismaE2eStore implements E2eStore {
       orderBy: [{ creationId: 'asc' }, { position: 'asc' }],
     });
     return rows.map(toTest);
+  }
+
+  async listLinkedTests(workspaceId: string, planId: string): Promise<E2eTestCase[]> {
+    const rows = await this.db.e2eTestCaseRecord.findMany({
+      where: { workspaceId, savedCase: { contains: planId } },
+    });
+    // `contains` is only a prefilter on the JSON text: the plan id must match exactly.
+    return rows.map(toTest).filter((test) => test.savedCase?.planId === planId);
   }
 
   async getTest(workspaceId: string, id: string): Promise<E2eTestCase | null> {

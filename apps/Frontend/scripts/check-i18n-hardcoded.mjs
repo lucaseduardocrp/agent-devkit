@@ -87,6 +87,7 @@ const allowed = new Set([
   'features/apitests/load/LoadPlanPane.tsx|jsx|ms',
   'features/apitests/load/LoadRunsPane.tsx|jsx|ms',
   'features/brain/BrainView.tsx|jsx|.md',
+  'features/shared/markdown-editor/MarkdownEditor.tsx|placeholder|https://...',
   'features/brain/BrainView.tsx|detail|Azure DevOps',
   'features/brain/MarkdownViewer.tsx|jsx|mermaid',
   'features/connect/IntegrationConfigModal.tsx|jsx|Branch',

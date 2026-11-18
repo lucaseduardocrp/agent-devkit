@@ -26,6 +26,21 @@ export interface TestPlanRequest {
   readonly useGherkin?: boolean;
   readonly descriptionTemplate?: string;
   readonly agentId?: string;
+  /** PBIs, issues and Brain documents chosen as context; only the kind and the id travel. */
+  readonly context?: readonly TestPlanContextRequest[];
+}
+
+export interface TestPlanContextRequest {
+  readonly kind: 'pbi' | 'issue' | 'brain';
+  readonly id: string;
+}
+
+/** Reads what the user chose as context; whatever cannot be found any more is left out. */
+export interface TestPlanContextReader {
+  read(
+    context: RequestContext,
+    requests: readonly TestPlanContextRequest[],
+  ): Promise<readonly { kind: string; id: string; title: string; content: string }[]>;
 }
 
 export type GeneratedTestPlanResult = TestPlan & { readonly plans: readonly TestPlan[] };
@@ -122,6 +137,21 @@ function hasUsableTestSteps(plans: readonly TestPlan[], requirement: string): bo
           expectedWords.size >= 8 && copiedExpectedWords / expectedWords.size >= 0.8;
         return !actionIsCopied && !expectedIsCopied;
       }),
+  );
+}
+
+/**
+ * The cases of an answer that pass the language and executable-step rules. One weak case must not
+ * cost the others: a large requirement yields many cases, and rejecting the whole answer for one
+ * of them made big generations fail on every attempt.
+ */
+function usablePlans(
+  plans: readonly TestPlan[],
+  language: OutputLanguage,
+  requirement: string,
+): readonly TestPlan[] {
+  return plans.filter(
+    (plan) => usesOutputLanguage([plan], language) && hasUsableTestSteps([plan], requirement),
   );
 }
 
@@ -369,6 +399,12 @@ export class DeterministicTestPlanGenerator implements TestPlanGeneratorPort {
   }
 }
 
+const CONTEXT_KIND_LABEL: Readonly<Record<string, string>> = {
+  pbi: 'PBI',
+  issue: 'Issue',
+  brain: 'Documento',
+};
+
 export interface AiKnowledgeTestPlanGeneratorOptions {
   readonly knowledgeSearch?: KnowledgeSearchPort;
   readonly dynamicProviderFactory?: DynamicProviderFactory;
@@ -376,6 +412,7 @@ export interface AiKnowledgeTestPlanGeneratorOptions {
   readonly fallbackGenerator?: TestPlanGeneratorPort;
   readonly agentRepository?: AgentRepository;
   readonly agentService?: AgentService;
+  readonly contextReader?: TestPlanContextReader;
 }
 
 export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
@@ -506,7 +543,9 @@ export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
       );
     }
 
-    let parsedPlans: readonly TestPlan[] = [];
+    let parsedPlans: readonly TestPlan[];
+    // The best answer so far: the usable cases of the attempt that gave the most.
+    let best: readonly TestPlan[] = [];
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const qualityReminder =
         attempt === 0
@@ -518,6 +557,9 @@ export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
         {
           prompt: `${composed.contextText}\n\n${composed.directive}${qualityReminder}`,
           includeKnowledge: false,
+          // The workspace workflow is the issue pipeline (design, code, review...): its last step
+          // answers in prose, never with test cases. One run of the chosen agent writes them.
+          skipWorkflow: true,
           ...(input.llmProvider ? { llmProvider: input.llmProvider } : {}),
         },
         context,
@@ -526,17 +568,24 @@ export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
         parsedPlans = parseAndNormalizeTestPlans(result.result, {
           language: localeForLanguage(composed.outputLanguage),
         });
-      } catch {
+      } catch (error) {
         parsedPlans = [];
+        // Without this the failure is silent: say why the answer was not a list of cases.
+        const answer = String(result.result ?? '');
+        console.warn(
+          `[AiKnowledgeTestPlanGenerator] agent answer could not be read (${error instanceof Error ? error.message : 'unknown'}); ${answer.length} characters, ending with: ${JSON.stringify(answer.slice(-120))}`,
+        );
       }
-      if (
-        usesOutputLanguage(parsedPlans, composed.outputLanguage) &&
-        hasUsableTestSteps(parsedPlans, composed.prompt)
-      ) {
-        break;
-      }
-      parsedPlans = [];
+      // An answer that is not a list of cases at all is not worth a second try.
+      if (parsedPlans.length === 0) break;
+      const usable = usablePlans(parsedPlans, composed.outputLanguage, composed.prompt);
+      if (usable.length > best.length) best = usable;
+      if (usable.length > 0 && usable.length === parsedPlans.length) break;
+      console.warn(
+        `[AiKnowledgeTestPlanGenerator] attempt ${attempt + 1}: ${usable.length} of ${parsedPlans.length} cases passed the quality rules.`,
+      );
     }
+    parsedPlans = best;
 
     if (parsedPlans.length === 0) {
       throw new ApplicationError(
@@ -646,16 +695,42 @@ export class AiKnowledgeTestPlanGenerator implements TestPlanGeneratorPort {
       }
     }
 
+    // What the user picked (PBIs, issues, Brain documents) is read in full, not searched for.
+    let selectedSnippet = '';
+    if (input.context?.length && this.options.contextReader && context) {
+      try {
+        const documents = await this.options.contextReader.read(context, input.context);
+        selectedSnippet = documents
+          .map((document) => {
+            knowledgeSources.push(document.title);
+            return `--- [${CONTEXT_KIND_LABEL[document.kind] ?? document.kind}: ${document.title}] ---\n${document.content}`;
+          })
+          .join('\n\n');
+      } catch (err) {
+        console.error('[AiKnowledgeTestPlanGenerator] Reading the selected context failed:', err);
+      }
+    }
+
     const additionalCriteria = (input.userPrompt || input.criteria)?.trim();
     const outputLanguage = detectTestPlanLanguage(
       [prompt, additionalCriteria].filter(Boolean).join('\n'),
       context?.locale,
     );
-    const rawContextText = knowledgeSnippet
-      ? `## Contexto da Base de Conhecimento\n${knowledgeSnippet}\n\n## Requisito / Funcionalidade Solicitada\n${prompt}${additionalCriteria ? `\n\n## Critérios de Aceite e Instruções Adicionais\n${additionalCriteria}` : ''}`
-      : `## Requisito\n${prompt}${additionalCriteria ? `\n\n## Critérios de Aceite e Instruções Adicionais\n${additionalCriteria}` : ''}`;
+    const requirementSection = knowledgeSnippet
+      ? `## Requisito / Funcionalidade Solicitada\n${prompt}`
+      : `## Requisito\n${prompt}`;
+    const rawContextText = [
+      selectedSnippet &&
+        `## Contexto Selecionado pelo Usuário (PBIs, Issues e Documentos)\n${selectedSnippet}`,
+      knowledgeSnippet && `## Contexto da Base de Conhecimento\n${knowledgeSnippet}`,
+      requirementSection,
+      additionalCriteria && `## Critérios de Aceite e Instruções Adicionais\n${additionalCriteria}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
 
-    const baseRoleDirective = knowledgeSnippet
+    const hasContext = Boolean(knowledgeSnippet || selectedSnippet);
+    const baseRoleDirective = hasContext
       ? `You are a QA Lead specialized in quality assurance, test automation, and the company's business rules.\nUsing the provided Knowledge Base pages and rules together with the user's request, generate a complete test suite covering as many scenarios as possible (main flows, recalculation rules, automatic conversions, hour/limit overflow, exceptions, and described validations).`
       : `You are a QA Lead specialized in quality assurance and test automation.\nGenerate detailed, technical, and objective test cases for the requirement below, covering as many scenarios as possible (main flow, alternatives, boundaries, and exceptions).`;
 

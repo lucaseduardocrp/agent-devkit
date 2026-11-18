@@ -1,14 +1,16 @@
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { cn } from '../../lib/utils.js';
 import { IconButton } from '../../components/ui/icon-button.js';
 import { useI18n } from '../../lib/i18n/index.js';
+import { CanvasZoomControls } from './CanvasZoomControls.js';
+import { useCanvasViewport, ZOOM_STEP } from './use-canvas-viewport.js';
 import {
   canConnect,
   edgeMidpoint,
   edgePath,
   findNode,
-  fitViewport,
   inputPort,
+  nodeBounds,
   nodePorts,
   nodeProblem,
   nodeSize,
@@ -54,22 +56,8 @@ export interface AgentWorkflowCanvasProps {
   readonly onDisconnect: (edgeId: string) => void;
 }
 
-// Low enough for a long flow to be fitted whole, so the whole flow is visible without scrolling.
-const MIN_ZOOM = 0.2;
-const MAX_ZOOM = 1.6;
-const ZOOM_STEP = 0.15;
-/** Breathing room, in pixels, between the fitted flow and the edge of the canvas. */
-const FIT_PADDING = 32;
 /** Pointer travel, in pixels, that turns a click on a node into a drag. */
 const DRAG_THRESHOLD = 3;
-
-interface Viewport {
-  readonly x: number;
-  readonly y: number;
-  readonly zoom: number;
-}
-
-const INITIAL_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
 
 type Gesture =
   | { readonly kind: 'pan'; readonly pointerX: number; readonly pointerY: number }
@@ -81,10 +69,6 @@ type Gesture =
       readonly moved: boolean;
     }
   | { readonly kind: 'link'; readonly from: string; readonly port?: WorkflowPort };
-
-function clampZoom(zoom: number): number {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(zoom.toFixed(2))));
-}
 
 /** The node id of the element under the pointer, so a connection can be dropped anywhere on it. */
 function nodeIdAt(target: EventTarget): string | null {
@@ -112,14 +96,16 @@ export function AgentWorkflowCanvas({
   onDisconnect,
 }: AgentWorkflowCanvasProps): React.JSX.Element {
   const { t } = useI18n();
-  const surfaceRef = useRef<HTMLDivElement | null>(null);
-  const [viewport, setViewport] = useState<Viewport>(INITIAL_VIEWPORT);
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [pointer, setPointer] = useState<WorkflowPoint>({ x: 0, y: 0 });
-  /** Whether the person framed the view themselves, which the canvas then leaves alone. */
-  const adjusted = useRef(false);
   const nodesRef = useRef(graph.nodes);
   nodesRef.current = graph.nodes;
+  // The whole flow is always in view, with no scrolling: the hook frames it when the canvas gets a
+  // size, when it is resized and when a node is added or removed.
+  const { surfaceRef, viewport, zoomBy, panBy, resetView, handleWheel } = useCanvasViewport(
+    () => nodeBounds(nodesRef.current),
+    graph.nodes.length,
+  );
 
   /** Client coordinates translated into the canvas space the nodes are positioned in. */
   const toCanvas = useCallback(
@@ -131,50 +117,8 @@ export function AgentWorkflowCanvas({
         y: (clientY - rect.top - viewport.y) / viewport.zoom,
       };
     },
-    [viewport],
+    [surfaceRef, viewport],
   );
-
-  const zoomBy = (delta: number) => {
-    adjusted.current = true;
-    setViewport((current) => ({ ...current, zoom: clampZoom(current.zoom + delta) }));
-  };
-
-  /** Frames the whole flow in the canvas; null until the canvas has been laid out. */
-  const fitView = useCallback((): Viewport | null => {
-    // Only called after mount, when the surface exists. The layout size is used, not the
-    // bounding box: a modal that is still animating in is drawn smaller than it is laid out.
-    const surface = surfaceRef.current!;
-    return fitViewport(
-      nodesRef.current,
-      { width: surface.clientWidth, height: surface.clientHeight },
-      { padding: FIT_PADDING, minZoom: MIN_ZOOM },
-    );
-  }, []);
-
-  const resetView = () => {
-    adjusted.current = false;
-    setViewport(fitView() ?? INITIAL_VIEWPORT);
-  };
-
-  /** Frames the whole flow, unless the person already panned or zoomed it themselves. */
-  const frameFlow = useCallback(() => {
-    if (adjusted.current) return;
-    const view = fitView();
-    if (view) setViewport(view);
-  }, [fitView]);
-
-  // The whole flow is always in view, with no scrolling: it is framed as soon as the canvas has a
-  // size (a modal can be laid out a moment after it mounts), again whenever the canvas is resized
-  // (a rotated tablet, a smaller window), and again when a node is added or removed. Once the
-  // person pans or zooms, their view is left alone until they reset it.
-  const nodeCount = graph.nodes.length;
-  useLayoutEffect(() => frameFlow(), [frameFlow, nodeCount]);
-  useLayoutEffect(() => {
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(frameFlow);
-    observer.observe(surfaceRef.current!);
-    return () => observer.disconnect();
-  }, [frameFlow]);
 
   const startPan = (event: React.PointerEvent<HTMLDivElement>) => {
     if (nodeIdAt(event.target)) return;
@@ -210,8 +154,7 @@ export function AgentWorkflowCanvas({
     if (gesture.kind === 'pan') {
       const deltaX = event.clientX - gesture.pointerX;
       const deltaY = event.clientY - gesture.pointerY;
-      adjusted.current = true;
-      setViewport((current) => ({ ...current, x: current.x + deltaX, y: current.y + deltaY }));
+      panBy(deltaX, deltaY);
       setGesture({ kind: 'pan', pointerX: event.clientX, pointerY: event.clientY });
       return;
     }
@@ -246,11 +189,6 @@ export function AgentWorkflowCanvas({
     setGesture(null);
   };
 
-  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (!event.ctrlKey) return;
-    zoomBy(event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP);
-  };
-
   // Both endpoints of an edge exist: the graph handed in is always a normalized one.
   const drawnEdges: readonly {
     readonly edge: WorkflowEdge;
@@ -276,38 +214,13 @@ export function AgentWorkflowCanvas({
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[var(--text-muted)]">
           {/* The gestures are obvious on a touch screen and a small one has no room for them. */}
           <span className="hidden 2xl:inline">{t('agents.workflowCanvasHint')}</span>
-          <div className="flex items-center gap-1">
-            <IconButton
-              variant="subtle"
-              size="sm"
-              icon={<i className="ti ti-minus" aria-hidden="true" />}
-              label={t('agents.workflowZoomOut')}
-              onClick={() => zoomBy(-ZOOM_STEP)}
-              data-testid="workflow-zoom-out"
-            />
-            <span
-              className="min-w-[46px] text-center font-mono text-[11px] text-[var(--text-secondary)]"
-              data-testid="workflow-zoom-level"
-            >
-              {`${Math.round(viewport.zoom * 100)}%`}
-            </span>
-            <IconButton
-              variant="subtle"
-              size="sm"
-              icon={<i className="ti ti-plus" aria-hidden="true" />}
-              label={t('agents.workflowZoomIn')}
-              onClick={() => zoomBy(ZOOM_STEP)}
-              data-testid="workflow-zoom-in"
-            />
-            <IconButton
-              variant="subtle"
-              size="sm"
-              icon={<i className="ti ti-focus-centered" aria-hidden="true" />}
-              label={t('agents.workflowResetView')}
-              onClick={resetView}
-              data-testid="workflow-reset-view"
-            />
-          </div>
+          <CanvasZoomControls
+            zoom={viewport.zoom}
+            onZoomIn={() => zoomBy(ZOOM_STEP)}
+            onZoomOut={() => zoomBy(-ZOOM_STEP)}
+            onReset={resetView}
+            testIdPrefix="workflow"
+          />
           {toolbarActions}
         </div>
       </div>

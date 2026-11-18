@@ -22,7 +22,7 @@ const ok = (body: string) => Promise.resolve(new Response(body));
 
 describe('HttpHubCatalog (edges)', () => {
   it('sends the GitHub token when looking for the newest hub commit', async () => {
-    const fetcher = vi.fn((input: string | URL | Request) =>
+    const fetcher = vi.fn((input: string | URL | Request, _init?: RequestInit) =>
       String(input).includes('api.github.com') ? ok(COMMIT) : ok(JSON.stringify(index)),
     );
     await new HttpHubCatalog({ fetch: fetcher, githubToken: 'ghp_x' }).index();

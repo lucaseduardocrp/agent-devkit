@@ -34,8 +34,15 @@ import {
   loadImageAttachments,
   type ImageAttachment,
 } from '../shared/image-attachment.js';
-import type { LlmImage } from '../agents/application/agent-ports.js';
+import type { LlmFile, LlmImage } from '../agents/application/agent-ports.js';
+import { inlineFileAttachments, loadDocumentAttachments } from '../shared/document-attachment.js';
 import { InMemoryUsageStore, type LlmUsageEvent, type UsageStore } from './usage-store.js';
+
+/** What an issue run shows its model besides the text: images, and documents it can read. */
+interface IssueMedia {
+  readonly images: readonly LlmImage[];
+  readonly files: readonly LlmFile[];
+}
 
 const MAX_MICROS = 2_147_483_647;
 
@@ -95,6 +102,8 @@ export interface UsageInput {
   inputTokens: number;
   outputTokens: number;
   estimated: boolean;
+  /** How the tokens were spent: an MCP client (default), a provider CLI session or an API call. */
+  source?: 'mcp' | 'cli' | 'api';
 }
 
 /** Provider whose rates price the host model behind each MCP client. */
@@ -110,6 +119,19 @@ const MCP_CLIENT_PROVIDERS: ReadonlyArray<readonly [RegExp, string]> = [
  * rate of the client's model provider (e.g. claude-code → anthropic). Overestimating keeps budgets
  * safe; an exact "mcp" rate always wins.
  */
+/**
+ * The adapters name themselves "Claude" and "Gemini" while the rate table uses the company
+ * ("anthropic", "google"). Both spellings price the same model.
+ */
+const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  claude: 'anthropic',
+  gemini: 'google',
+};
+const canonicalProvider = (provider: string): string => {
+  const name = provider.trim().toLowerCase();
+  return PROVIDER_ALIASES[name] ?? name;
+};
+
 function priceUsage(
   rates: readonly CostRate[],
   provider: string,
@@ -117,13 +139,14 @@ function priceUsage(
   usage: { inputTokens: number; outputTokens: number },
 ): number | null {
   let rate = rates.find(
-    (item) => item.provider.toLowerCase() === provider.toLowerCase() && item.model === model,
+    (item) =>
+      canonicalProvider(item.provider) === canonicalProvider(provider) && item.model === model,
   );
   if (!rate && provider.toLowerCase() === 'mcp') {
     const modelProvider = MCP_CLIENT_PROVIDERS.find(([pattern]) => pattern.test(model))?.[1];
     if (modelProvider)
       rate = rates
-        .filter((item) => item.provider.toLowerCase() === modelProvider)
+        .filter((item) => canonicalProvider(item.provider) === modelProvider)
         .sort(
           (a, b) =>
             b.outputUsdPerMillion - a.outputUsdPerMillion ||
@@ -141,6 +164,10 @@ function priceUsage(
 function summarizeMcpUsage(events: readonly LlmUsageEvent[]) {
   const tokens = (event: LlmUsageEvent) => event.inputTokens + event.outputTokens;
   const tools = new Map<string, { tool: string; calls: number; totalTokens: number }>();
+  const sources = new Map<
+    string,
+    { source: string; calls: number; totalTokens: number; spendMicros: number }
+  >();
   const clients = new Map<
     string,
     { provider: string; model: string; calls: number; totalTokens: number }
@@ -150,6 +177,16 @@ function summarizeMcpUsage(events: readonly LlmUsageEvent[]) {
     tool.calls += 1;
     tool.totalTokens += tokens(event);
     tools.set(event.tool, tool);
+    const origin = sources.get(event.source) ?? {
+      source: event.source,
+      calls: 0,
+      totalTokens: 0,
+      spendMicros: 0,
+    };
+    origin.calls += 1;
+    origin.totalTokens += tokens(event);
+    origin.spendMicros += event.costMicros ?? 0;
+    sources.set(event.source, origin);
     const key = `${event.provider}\u0000${event.model}`;
     const client = clients.get(key) ?? {
       provider: event.provider,
@@ -174,6 +211,7 @@ function summarizeMcpUsage(events: readonly LlmUsageEvent[]) {
     unpricedCalls: events.filter((event) => event.costMicros === null).length,
     estimated: events.some((event) => event.estimated),
     byTool: [...tools.values()].sort(byTokens).slice(0, 10),
+    bySource: [...sources.values()].sort(byTokens),
     byClient: [...clients.values()].sort(byTokens),
   };
 }
@@ -288,7 +326,7 @@ export class RunService {
     return this.usage.record({
       workspaceId,
       actorId,
-      source: 'mcp',
+      source: input.source ?? 'mcp',
       tool: input.tool,
       provider,
       model,
@@ -462,15 +500,22 @@ export class RunService {
     const controller = new AbortController();
     this.controllers.set(runId, controller);
     try {
-      const images = await this.imagesForIssue(run.workspaceId, run.issueId);
+      const media = await this.mediaForIssue(run.workspaceId, run.issueId);
+      const { images, files } = media;
       if (run.workflowState) {
-        await this.executeWorkflow(run, run.workflowState, controller.signal, images);
+        await this.executeWorkflow(run, run.workflowState, controller.signal, media);
         return;
       }
       const result = await this.agents.executeAgent(
         workspaceId,
         run.agentId,
-        { prompt: run.prompt, includeKnowledge: true, ...(images.length ? { images } : {}) },
+        {
+          prompt: run.prompt,
+          includeKnowledge: true,
+          unmetered: true,
+          ...(images.length ? { images } : {}),
+          ...(files.length ? { files } : {}),
+        },
         { requestId: run.id, workspaceId, ownerId: run.ownerId, actorId: run.actorId },
         controller.signal,
       );
@@ -512,7 +557,7 @@ export class RunService {
     run: AgentRun,
     initialState: WorkflowRunState,
     signal: AbortSignal,
-    images: readonly LlmImage[],
+    { images, files }: IssueMedia,
   ): Promise<void> {
     let state = initialState;
     const canvas = state.canvas;
@@ -554,7 +599,13 @@ export class RunService {
         step,
         stepNumber,
         state.steps.length,
-        { prompt, includeKnowledge: true, ...(images.length ? { images } : {}) },
+        {
+          prompt,
+          includeKnowledge: true,
+          unmetered: true,
+          ...(images.length ? { images } : {}),
+          ...(files.length ? { files } : {}),
+        },
         state.uncertaintyBehavior,
         {
           requestId: run.id,
@@ -876,19 +927,24 @@ export class RunService {
     });
   }
 
-  private async imagesForIssue(workspaceId: string, issueId: string): Promise<LlmImage[]> {
-    if (!this.imageStore) return [];
+  /** The images and documents of the issue, of its PBI item and of that item's children. */
+  private async mediaForIssue(workspaceId: string, issueId: string): Promise<IssueMedia> {
+    if (!this.imageStore) return { images: [], files: [] };
     const issue = await this.issues.get(workspaceId, issueId);
-    if (!issue) return [];
+    if (!issue) return { images: [], files: [] };
     const attachments: ImageAttachment[] = [
       ...(issue.attachments ?? []),
       ...inlineImageAttachments(issue.description, 'issue'),
+      ...inlineFileAttachments(issue.description, 'issue'),
     ];
     if (issue.pbiItemId && this.pbiItems) {
       const item = await this.pbiItems.get(workspaceId, issue.pbiItemId);
       if (item) {
-        attachments.push(...(item.attachments ?? []));
-        attachments.push(...inlineImageAttachments(item.description, 'pbi'));
+        attachments.push(
+          ...(item.attachments ?? []),
+          ...inlineImageAttachments(item.description, 'pbi'),
+          ...inlineFileAttachments(item.description, 'pbi'),
+        );
         const all = await this.pbiItems.list(workspaceId);
         const visited = new Set<string>();
         const collect = (parentId: string) => {
@@ -898,6 +954,7 @@ export class RunService {
             attachments.push(
               ...(child.attachments ?? []),
               ...inlineImageAttachments(child.description, 'pbi'),
+              ...inlineFileAttachments(child.description, 'pbi'),
             );
             collect(child.id);
           }
@@ -905,7 +962,10 @@ export class RunService {
         collect(item.id);
       }
     }
-    return loadImageAttachments(this.imageStore, workspaceId, attachments);
+    return {
+      images: await loadImageAttachments(this.imageStore, workspaceId, attachments),
+      files: await loadDocumentAttachments(this.imageStore, workspaceId, attachments),
+    };
   }
 
   private async pauseForUser(

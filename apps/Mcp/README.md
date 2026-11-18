@@ -167,7 +167,11 @@ count as output, estimated at about 4 characters per token. The client name sent
 (for example `claude-code`) is recorded as the model under provider `mcp`, so a workspace admin can
 price MCP usage with `issues_set_rate { provider: "mcp", model: "<client name>" }`. The dashboard
 and `issues_costs` include these tokens in the totals and the monthly spend (`mcpUsage` holds the
-monthly breakdown by tool and client). Calls without an active workspace, `account` and
+monthly breakdown by tool, client and source). The same ledger also counts every model call the
+ADK server makes outside agent runs (chats, specs, test plans, E2E, Brain; source `api` for an API
+key, `cli` for a provider CLI) and the coding CLI sessions of `devkit develop` (source `cli`);
+`POST /costs/usage` accepts an optional `source` (`mcp`, `cli` or `api`). Rates for `Claude` and
+`Gemini` adapters match the `anthropic` and `google` entries of the rate table. Calls without an active workspace, `account` and
 `workspaces` tools, and `issues_complete_run` (which reports exact run tokens) are not metered.
 Reporting failures are ignored and never affect the tool result.
 

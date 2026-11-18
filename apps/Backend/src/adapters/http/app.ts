@@ -111,6 +111,7 @@ import {
   type NotificationContactStore,
 } from '../../modules/notifications/application/contact-store.js';
 import { createNotificationsRouter } from './notifications-routes.js';
+import { eventingIssueStore } from '../../modules/issues/eventing-issue-store.js';
 import { EventingRunStore } from '../../modules/issues/eventing-run-store.js';
 import { InMemoryEventBus, type EventBus } from '../../modules/realtime/event-bus.js';
 import { RunService } from '../../modules/issues/run-service.js';
@@ -198,8 +199,15 @@ import { E2eLocalRunnerService } from '../../modules/e2e/application/local-runne
 import { E2eRunReporter } from '../../modules/e2e/application/e2e-reporter.js';
 import type { TestManagementResolver } from '../../modules/test-management/application/test-management-provider.js';
 import { IntegrationTestManagementResolver } from '../../modules/test-management/adapters/integration-test-management-resolver.js';
-import { SavedTestCaseReader } from '../../modules/testplans/application/saved-test-cases.js';
+import {
+  SavedTestCaseReader,
+  savedCasesOf,
+} from '../../modules/testplans/application/saved-test-cases.js';
+import { ObservedSavedTestPlanStore } from '../../modules/testplans/application/observed-saved-test-plans.js';
+import { CompositeScriptRepository } from '../../modules/e2e/adapters/composite-script-repository.js';
 import { GitScriptRepository } from '../../modules/e2e/adapters/git-script-repository.js';
+import { LocalScriptRepository } from '../../modules/e2e/adapters/local-script-repository.js';
+import { WorkspaceContextReader } from '../../modules/e2e/adapters/workspace-context-reader.js';
 import type { E2eScriptRepository } from '../../modules/e2e/application/script-repository.js';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -376,6 +384,8 @@ export function createApp(options: AppOptions = {}) {
   };
   const audit = options.auditPersistence ?? new MemoryAuditPersistence(raw);
   const audited = auditedRepositories(raw, audit);
+  // Linked E2E tests follow every change of a Test Plan, whichever screen makes it.
+  const savedTestPlans = new ObservedSavedTestPlanStore(audited.tests);
   const knowledgeRepository = cachedKnowledgeRepository(audited.knowledge, cache);
   const resolveContext =
     options.requestContextResolver ?? createAuthContextResolver(authService, workspaceService);
@@ -431,16 +441,6 @@ export function createApp(options: AppOptions = {}) {
       knowledgeSearch: options.knowledgeSearch,
     });
 
-  const testPlanGenerator =
-    options.testPlanGenerator ??
-    new AiKnowledgeTestPlanGenerator({
-      knowledgeSearch: options.knowledgeSearch,
-      dynamicProviderFactory,
-      defaultLlm: options.defaultLlm,
-      agentRepository,
-      agentService,
-    });
-
   app.use(createAuditRouter(audit, contextResolver));
   app.use(createAttachmentsRouter(attachmentStore, contextResolver, dynamicProviderFactory));
   app.use(createAuthRouter(authService, { accessTokens, ...options.authRouterOptions }));
@@ -493,16 +493,40 @@ export function createApp(options: AppOptions = {}) {
   const hubAgents = new HubAgentService(options.hubCatalog ?? new HttpHubCatalog(), agentService);
   app.use(createAgentsRouter(agentService, contextResolver, hubAgents));
   const entityAudit = new EntityAuditLog(audit);
-  const issueStore = auditedIssueStore(options.issueStore ?? new InMemoryIssueStore(), entityAudit);
+  // Runs and issues tell the workspace's open streams whenever they change (Agent map, run flow,
+  // Inbox).
+  const eventBus = options.eventBus ?? new InMemoryEventBus();
+  const issueStore = eventingIssueStore(
+    auditedIssueStore(options.issueStore ?? new InMemoryIssueStore(), entityAudit),
+    eventBus,
+  );
   const pbiStore = withPbiChangeHook(options.pbiStore ?? new InMemoryPbiStore(), (workspaceId) =>
     cache.invalidate(pbiCacheScope(workspaceId)),
   );
+  // The same reader serves the E2E exploration and the Test Plan generation: what the user picked
+  // as context (PBIs, issues, Brain documents) is read from the workspace.
+  const workspaceContextReader = new WorkspaceContextReader({
+    pbis: pbiStore,
+    issues: issueStore,
+    knowledge: knowledgeRepository,
+  });
+  const testPlanGenerator =
+    options.testPlanGenerator ??
+    new AiKnowledgeTestPlanGenerator({
+      knowledgeSearch: options.knowledgeSearch,
+      dynamicProviderFactory,
+      defaultLlm: options.defaultLlm,
+      agentRepository,
+      agentService,
+      contextReader: workspaceContextReader,
+    });
   const fieldMappings = options.fieldMappingStore ?? new InMemoryFieldMappingStore();
   app.use(createFieldMappingRouter(fieldMappings, contextResolver));
-  // Runs tell the workspace's open streams whenever they change (Agent map, run flow).
-  const eventBus = options.eventBus ?? new InMemoryEventBus();
   const runStore = new EventingRunStore(options.runStore ?? new InMemoryRunStore(), eventBus);
   const usageStore = options.usageStore ?? new InMemoryUsageStore();
+  // Every model the factory hands out reports its tokens here, so the dashboard counts all AI use.
+  if (dynamicProviderFactory instanceof DynamicProviderFactory)
+    dynamicProviderFactory.setUsageRecorder(usageStore);
   const briefService = new IssueBriefService({
     store: options.issueBriefStore ?? new InMemoryIssueBriefStore(),
     issues: issueStore,
@@ -631,7 +655,13 @@ export function createApp(options: AppOptions = {}) {
     options.e2eEnvironments ?? new InMemoryE2eEnvironmentStore(),
   );
   const e2eQueue = options.e2eQueue ?? new InMemoryE2eJobQueue();
-  const e2eScripts = options.e2eScripts ?? new GitScriptRepository(integrationsService);
+  // The desktop app also keeps specs in a folder of this computer; a hosted ADK never reads its disk.
+  const gitScripts = new GitScriptRepository(integrationsService);
+  const e2eScripts =
+    options.e2eScripts ??
+    (options.e2eRunsLocally
+      ? new CompositeScriptRepository(gitScripts, new LocalScriptRepository())
+      : gitScripts);
   // Development and Design browse repositories through the same Git access the E2E specs use.
   app.use(
     createDevelopmentRouter(
@@ -662,6 +692,16 @@ export function createApp(options: AppOptions = {}) {
   const testManagement =
     options.testManagement ?? new IntegrationTestManagementResolver(integrationsService);
   const testSuites = options.testSuites ?? new InMemoryTestSuiteStore();
+  // The same author writes the scripts of the local worker and judges results asked in the API.
+  const e2eAuthor =
+    options.e2eAuthor ??
+    new AgentE2eAuthor({
+      agents: agentService,
+      providers: dynamicProviderFactory,
+      defaultLlm: options.defaultLlm,
+      attachments: attachmentStore,
+      ...(options.knowledgeSearch ? { knowledge: options.knowledgeSearch } : {}),
+    });
   // Without a remote worker the API consumes its own queue (local development).
   let e2eDispatcher = options.e2eDispatcher;
   if (!e2eDispatcher) {
@@ -670,6 +710,7 @@ export function createApp(options: AppOptions = {}) {
       concurrency: options.e2eWorkerConcurrency,
       executor: new E2eExecutor({
         store: e2eStore,
+        queue: e2eQueue,
         runsLocally: options.e2eRunsLocally,
         runner:
           options.e2eRunner ??
@@ -688,14 +729,7 @@ export function createApp(options: AppOptions = {}) {
         }),
         notifier: runNotifier,
         environments: e2eEnvironments,
-        author:
-          options.e2eAuthor ??
-          new AgentE2eAuthor({
-            agents: agentService,
-            providers: dynamicProviderFactory,
-            defaultLlm: options.defaultLlm,
-            ...(options.knowledgeSearch ? { knowledge: options.knowledgeSearch } : {}),
-          }),
+        author: e2eAuthor,
       }),
     });
     e2eDispatcher = new LocalE2eDispatcher(worker);
@@ -709,11 +743,18 @@ export function createApp(options: AppOptions = {}) {
     transcoder: options.e2eTranscoder,
     scripts: e2eScripts,
     artifacts: e2eArtifacts,
+    attachments: attachmentStore,
     agents: agentService,
     testManagement,
-    savedCases: new SavedTestCaseReader(audited.tests, testSuites),
+    savedCases: new SavedTestCaseReader(savedTestPlans, testSuites),
     environments: e2eEnvironments,
+    author: e2eAuthor,
     ...(options.knowledgeSearch ? { knowledge: options.knowledgeSearch } : {}),
+    contextReader: workspaceContextReader,
+  });
+  savedTestPlans.observe({
+    saved: (plan) => e2eService.syncSavedPlan(plan.workspaceId, plan.id, savedCasesOf(plan)),
+    deleted: (workspaceId, planId) => e2eService.unlinkSavedPlan(workspaceId, planId),
   });
   // Picks up work left in the queue and closes runs that lost their job.
   void e2eService
@@ -732,7 +773,7 @@ export function createApp(options: AppOptions = {}) {
     store: options.apiTestStore ?? new InMemoryApiTestStore(),
     workersReachLocalhost: Boolean(options.hostAlias),
     sources: new WorkspaceSourceLoader({
-      tests: audited.tests,
+      tests: savedTestPlans,
       suites: testSuites,
       knowledge: knowledgeRepository,
       specs: specRepository,
@@ -778,7 +819,7 @@ export function createApp(options: AppOptions = {}) {
       options.knowledgeSearch,
       testPlanGenerator,
       contextResolver,
-      audited.tests,
+      savedTestPlans,
       testSuites,
       dynamicProviderFactory,
       fieldMappings,

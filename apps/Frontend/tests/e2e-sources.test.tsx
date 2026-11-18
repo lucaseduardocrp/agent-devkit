@@ -54,7 +54,13 @@ function source(overrides: Partial<E2eSource> = {}): E2eSource {
     signedInMs: null,
     script: [
       { atMs: 100, action: 'navigate', target: 'https://app.example/login', result: 'Sign in' },
-      { atMs: 2_000, action: 'click', target: 'Issues', result: 'Issues' },
+      {
+        atMs: 2_000,
+        action: 'click',
+        target: 'Issues',
+        result: 'Issues',
+        reason: 'Abrir a lista',
+      },
       { atMs: 3_000, action: 'click', target: 'Broken', result: null },
     ],
     pages: [
@@ -136,6 +142,7 @@ function api(
     getAgents: vi.fn().mockResolvedValue(agents),
     exploreE2eSource: vi.fn().mockResolvedValue({}),
     documentE2eSource: vi.fn().mockResolvedValue(undefined),
+    saveE2eSourceDocumentation: vi.fn().mockResolvedValue({}),
     getE2eImage: vi.fn().mockResolvedValue(new Blob(['img'])),
   };
 }
@@ -182,7 +189,7 @@ describe('E2eSources', () => {
     expect(environmentSelect.value).toBe('env2');
     expect(within(environmentSelect).getAllByRole('option')).toHaveLength(2);
     expect((view.getByLabelText('Agente que documenta') as HTMLSelectElement).value).toBe('a2');
-    expect(view.getByRole('button', { name: /Atualizar Source/ })).toBeInTheDocument();
+    expect(view.getByRole('button', { name: /Atualizar Recursos/ })).toBeInTheDocument();
 
     expect(view.getByTestId('e2e-run-map')).toBeInTheDocument();
     expect(view.getByText('início · 4')).toBeInTheDocument();
@@ -256,7 +263,7 @@ describe('E2eSources', () => {
     expect(view.getByText(/Fica salvo no banco de dados/)).toBeInTheDocument();
     const entries = view.getAllByRole('listitem');
     expect(entries).toHaveLength(3);
-    expect(entries[1]).toHaveTextContent('+2sclicar Issues→ Issues');
+    expect(entries[1]).toHaveTextContent('+2sclicar Issues→ IssuesAbrir a lista');
     expect(entries[2]).not.toHaveTextContent('→');
     fireEvent.click(view.getByRole('tab', { name: 'Ações do agente' }));
     expect(view.getByTestId('e2e-run-map')).toBeInTheDocument();
@@ -291,22 +298,22 @@ describe('E2eSources', () => {
     fireEvent.change(view.getByLabelText('Agente que documenta'), { target: { value: 'a2' } });
 
     client.exploreE2eSource.mockRejectedValueOnce(new Error('Run already in progress.'));
-    fireEvent.click(view.getByRole('button', { name: /Atualizar Source/ }));
+    fireEvent.click(view.getByRole('button', { name: /Atualizar Recursos/ }));
     expect(await view.findByRole('alert')).toHaveTextContent('Run already in progress.');
     client.exploreE2eSource.mockRejectedValueOnce('nope');
-    fireEvent.click(view.getByRole('button', { name: /Atualizar Source/ }));
+    fireEvent.click(view.getByRole('button', { name: /Atualizar Recursos/ }));
     expect(await view.findByText('Não foi possível concluir a ação.')).toBeInTheDocument();
     expect(onExplore).not.toHaveBeenCalled();
 
     // Where to run is only sent when chosen.
-    fireEvent.click(view.getByRole('button', { name: /Atualizar Source/ }));
+    fireEvent.click(view.getByRole('button', { name: /Atualizar Recursos/ }));
     await waitFor(() => expect(onExplore).toHaveBeenCalledWith('anchor'));
     expect(client.exploreE2eSource).toHaveBeenLastCalledWith({
       environmentId: 'env2',
       agentId: 'a2',
     });
     fireEvent.change(view.getByLabelText('Onde executar'), { target: { value: 'local' } });
-    fireEvent.click(view.getByRole('button', { name: /Atualizar Source/ }));
+    fireEvent.click(view.getByRole('button', { name: /Atualizar Recursos/ }));
     await waitFor(() => expect(onExplore).toHaveBeenCalledTimes(2));
     expect(client.exploreE2eSource).toHaveBeenLastCalledWith({
       environmentId: 'env2',
@@ -321,26 +328,34 @@ describe('E2eSources', () => {
       agentId: null,
       busy: false,
     });
-    fireEvent.click(view.getByRole('button', { name: /Atualizar Source/ }));
+    fireEvent.click(view.getByRole('button', { name: /Atualizar Recursos/ }));
     await waitFor(() => expect(client.exploreE2eSource).toHaveBeenCalledTimes(5));
     expect(onExplore).toHaveBeenCalledTimes(2);
   });
 
-  it('writes the documentation again without exploring', async () => {
-    const client = api();
-    const view = render(<E2eSources {...props} apiClient={asClient(client)} />);
-    client.documentE2eSource.mockRejectedValueOnce(new Error('No model.'));
-    fireEvent.click(await view.findByRole('button', { name: 'Atualizar documentação' }));
-    expect(await view.findByRole('alert')).toHaveTextContent('No model.');
-    client.documentE2eSource.mockRejectedValueOnce('nope');
-    fireEvent.click(view.getByRole('button', { name: 'Atualizar documentação' }));
-    expect(await view.findByText('Não foi possível concluir a ação.')).toBeInTheDocument();
+  it('opens the page of the runs of the Source, whoever is looking', async () => {
+    const onExplore = vi.fn();
+    const view = render(
+      <E2eSources {...props} apiClient={asClient(api())} onExplore={onExplore} />,
+    );
+    fireEvent.click(await view.findByRole('button', { name: 'Ver execuções' }));
+    expect(onExplore).toHaveBeenCalledWith('anchor');
+    expect(view.queryByRole('button', { name: 'Atualizar documentação' })).toBeNull();
+    view.unmount();
 
-    const loads = client.getE2eSource.mock.calls.length;
-    fireEvent.click(view.getByRole('button', { name: 'Atualizar documentação' }));
-    await waitFor(() => expect(client.getE2eSource.mock.calls.length).toBeGreaterThan(loads));
-    expect(client.documentE2eSource).toHaveBeenCalledTimes(3);
-    expect(client.exploreE2eSource).not.toHaveBeenCalled();
+    const viewer = render(
+      <E2eSources {...props} isReadOnly apiClient={asClient(api())} onExplore={onExplore} />,
+    );
+    fireEvent.click(await viewer.findByRole('button', { name: 'Ver execuções' }));
+    expect(onExplore).toHaveBeenCalledTimes(2);
+    viewer.unmount();
+
+    // Nothing to see before the first update.
+    const never = render(
+      <E2eSources {...props} apiClient={asClient(api(null, { anchorId: null }))} />,
+    );
+    await never.findByText(/Nenhum Source ainda/);
+    expect(never.queryByRole('button', { name: 'Ver execuções' })).toBeNull();
   });
 
   it('follows an update that is running until it ends', async () => {
@@ -352,8 +367,7 @@ describe('E2eSources', () => {
     const status = await view.findByRole('status');
     expect(status).toHaveTextContent('O Source está sendo atualizado');
     // Nothing can start meanwhile, but the exploration can be followed.
-    expect(view.getByRole('button', { name: /Atualizar Source/ })).toHaveProperty('disabled', true);
-    expect(view.getByRole('button', { name: 'Atualizar documentação' })).toHaveProperty(
+    expect(view.getByRole('button', { name: /Atualizar Recursos/ })).toHaveProperty(
       'disabled',
       true,
     );
@@ -376,7 +390,7 @@ describe('E2eSources', () => {
     });
     await act(async () => tick());
     await waitFor(() => expect(again.queryByRole('status')).toBeNull());
-    expect(again.getByRole('button', { name: /Atualizar Source/ })).toHaveProperty(
+    expect(again.getByRole('button', { name: /Atualizar Recursos/ })).toHaveProperty(
       'disabled',
       false,
     );
@@ -406,7 +420,7 @@ describe('E2eSources', () => {
       const desktop = render(<E2eSources {...props} apiClient={asClient(client)} />);
       await desktop.findByLabelText('Ambiente');
       expect(desktop.queryByLabelText('Onde executar')).toBeNull();
-      fireEvent.click(desktop.getByRole('button', { name: /Atualizar Source/ }));
+      fireEvent.click(desktop.getByRole('button', { name: /Atualizar Recursos/ }));
       await waitFor(() => expect(client.exploreE2eSource).toHaveBeenCalled());
       expect(client.exploreE2eSource).toHaveBeenCalledWith({
         environmentId: 'env2',
@@ -421,11 +435,10 @@ describe('E2eSources', () => {
     const view = render(<E2eSources {...props} apiClient={asClient(api(null))} />);
     // One quiet line, as the other lists of the app: no card, no illustration.
     expect(await view.findByText(/Nenhum Source ainda. Explore a aplicação/)).toBeInTheDocument();
-    expect(view.getByRole('button', { name: /Explorar aplicação/ })).toHaveProperty(
+    expect(view.getByRole('button', { name: /Atualizar Recursos/ })).toHaveProperty(
       'disabled',
       false,
     );
-    expect(view.queryByRole('button', { name: 'Atualizar documentação' })).toBeNull();
     expect(view.queryByRole('tablist')).toBeNull();
     view.unmount();
 
@@ -433,7 +446,7 @@ describe('E2eSources', () => {
     expect(await bare.findByText(/Crie um agente/)).toBeInTheDocument();
     expect(bare.queryByText(/Cadastre o ambiente da aplicação/)).toBeNull();
     expect((bare.getByLabelText('Ambiente') as HTMLSelectElement).value).toBe('');
-    expect(bare.getByRole('button', { name: /Explorar aplicação/ })).toHaveProperty(
+    expect(bare.getByRole('button', { name: /Atualizar Recursos/ })).toHaveProperty(
       'disabled',
       true,
     );
@@ -443,7 +456,7 @@ describe('E2eSources', () => {
     const viewer = render(<E2eSources {...props} isReadOnly apiClient={asClient(api())} />);
     expect(await viewer.findByTestId('e2e-run-map')).toBeInTheDocument();
     expect(viewer.queryByTestId('e2e-sources-controls')).toBeNull();
-    expect(viewer.queryByRole('button', { name: /Atualizar Source/ })).toBeNull();
+    expect(viewer.queryByRole('button', { name: /Atualizar Recursos/ })).toBeNull();
   });
 
   it('adds an environment without leaving the page', async () => {
@@ -561,11 +574,90 @@ describe('the documentation of the system', () => {
     fireEvent.click(within(overview).getByRole('button', { name: /Issues/ }));
     expect(within(overview).getByRole('article', { name: 'Criar issue' })).toBeInTheDocument();
 
+    // Every area folds and opens at once.
+    const expandAll = () =>
+      within(overview).getByRole('button', { name: 'Expandir tudo' }) as HTMLButtonElement;
+    const collapseAll = () =>
+      within(overview).getByRole('button', { name: 'Recolher tudo' }) as HTMLButtonElement;
+    expect(expandAll().disabled).toBe(true);
+    fireEvent.click(collapseAll());
+    expect(within(overview).queryByRole('article')).toBeNull();
+    expect(collapseAll().disabled).toBe(true);
+    fireEvent.click(expandAll());
+    expect(within(overview).getByRole('article', { name: 'Criar issue' })).toBeInTheDocument();
+    expect(within(overview).getByRole('article', { name: 'Trocar tema' })).toBeInTheDocument();
+
     // The map and the script are still one tab away.
     fireEvent.click(view.getByRole('tab', { name: 'Ações do agente' }));
     expect(view.getByTestId('e2e-run-map')).toBeInTheDocument();
     fireEvent.click(view.getByRole('tab', { name: 'Visão geral' }));
     expect(view.getByTestId('e2e-source-overview')).toBeInTheDocument();
+  });
+
+  it('edits the overview and keeps it with the areas and documents it came with', async () => {
+    const client = api(source({ documentation }));
+    const view = render(<E2eSources {...props} apiClient={asClient(client)} />);
+    const overview = await view.findByTestId('e2e-source-overview');
+    fireEvent.click(within(overview).getByRole('button', { name: 'Editar visão geral' }));
+    const editor = view.getByLabelText('Visão geral do sistema (Markdown)') as HTMLTextAreaElement;
+    expect(editor.value).toBe(documentation.overview);
+    // Nothing changed, nothing to save; an empty text is not an overview either.
+    const save = () =>
+      view.getByRole('button', { name: 'Salvar visão geral' }) as HTMLButtonElement;
+    expect(save().disabled).toBe(true);
+    fireEvent.change(editor, { target: { value: '  ' } });
+    expect(save().disabled).toBe(true);
+    fireEvent.click(view.getByRole('button', { name: 'Cancelar' }));
+    expect(view.queryByLabelText('Visão geral do sistema (Markdown)')).toBeNull();
+
+    fireEvent.click(view.getByRole('button', { name: 'Editar visão geral' }));
+    fireEvent.change(view.getByLabelText('Visão geral do sistema (Markdown)'), {
+      target: { value: '# Novo texto' },
+    });
+    const reloads = client.getE2eSource.mock.calls.length;
+    fireEvent.click(save());
+    await waitFor(() =>
+      expect(client.saveE2eSourceDocumentation).toHaveBeenCalledWith({
+        overview: '# Novo texto',
+        areas: documentation.areas,
+        brainDocuments: documentation.brainDocuments,
+      }),
+    );
+    await waitFor(() => expect(client.getE2eSource.mock.calls.length).toBe(reloads + 1));
+    await waitFor(() =>
+      expect(view.queryByLabelText('Visão geral do sistema (Markdown)')).toBeNull(),
+    );
+  });
+
+  it('keeps the text being edited when the overview cannot be saved', async () => {
+    const client = api(source({ documentation }));
+    const view = render(<E2eSources {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Editar visão geral' }));
+    fireEvent.change(view.getByLabelText('Visão geral do sistema (Markdown)'), {
+      target: { value: 'x' },
+    });
+    client.saveE2eSourceDocumentation.mockRejectedValueOnce(new Error('Sem permissão.'));
+    fireEvent.click(view.getByRole('button', { name: 'Salvar visão geral' }));
+    expect(await view.findByRole('alert')).toHaveTextContent('Sem permissão.');
+    expect(
+      (view.getByLabelText('Visão geral do sistema (Markdown)') as HTMLTextAreaElement).value,
+    ).toBe('x');
+    client.saveE2eSourceDocumentation.mockRejectedValueOnce('offline');
+    fireEvent.click(view.getByRole('button', { name: 'Salvar visão geral' }));
+    await waitFor(() =>
+      expect(view.getByRole('alert')).toHaveTextContent('Não foi possível salvar a visão geral.'),
+    );
+    // Giving up clears the error.
+    fireEvent.click(view.getByRole('button', { name: 'Cancelar' }));
+    expect(view.queryByRole('alert')).toBeNull();
+  });
+
+  it('does not let a viewer edit the overview', async () => {
+    const view = render(
+      <E2eSources {...props} isReadOnly apiClient={asClient(api(source({ documentation })))} />,
+    );
+    await view.findByTestId('e2e-source-overview');
+    expect(view.queryByRole('button', { name: 'Editar visão geral' })).toBeNull();
   });
 
   it('keeps the documentation in use and shows why the last update failed', async () => {
@@ -647,29 +739,26 @@ describe('the Sources page of the Test module', () => {
     const view = render(<E2eSourcesPage apiClient={asClient(client)} />);
     expect(await view.findByTestId('e2e-sources')).toBeInTheDocument();
 
-    fireEvent.click(await view.findByRole('button', { name: /Atualizar Source/ }));
+    fireEvent.click(await view.findByRole('button', { name: /Atualizar Recursos/ }));
     expect(await view.findByTestId('e2e-exploration')).toBeInTheDocument();
     expect(client.getE2eExploration).toHaveBeenCalledWith('anchor');
-    expect(
-      await view.findByText('Roteiro salvo no banco de dados como o Source do workspace.'),
-    ).toBeInTheDocument();
     // Only followed: no instructions, no new exploration and no step for planning tests.
     expect(view.queryByRole('button', { name: /Instruções/ })).toBeNull();
     expect(view.queryByRole('button', { name: /Explorar novamente|Re-explorar/ })).toBeNull();
-    expect(view.queryByRole('button', { name: /Ver execução/ })).toBeNull();
-    expect(view.getByLabelText('Etapas da exploração').children).toHaveLength(1);
+    expect(view.queryByRole('button', { name: /Casos de Testes/ })).toBeNull();
+    expect((await view.findByLabelText('Etapas da exploração')).children).toHaveLength(1);
     fireEvent.click(view.getByRole('button', { name: /Voltar/ }));
     expect(await view.findByTestId('e2e-sources')).toBeInTheDocument();
 
     // A run that is being followed can also be left through its own link.
-    fireEvent.click(view.getByRole('button', { name: /Atualizar Source/ }));
+    fireEvent.click(view.getByRole('button', { name: /Atualizar Recursos/ }));
     await view.findByTestId('e2e-exploration');
     view.unmount();
 
     // Viewers see the page but cannot replace the source.
     const viewer = render(<E2eSourcesPage isReadOnly apiClient={asClient(client)} />);
     expect(await viewer.findByTestId('e2e-run-map')).toBeInTheDocument();
-    expect(viewer.queryByRole('button', { name: /Atualizar Source/ })).toBeNull();
+    expect(viewer.queryByRole('button', { name: /Atualizar Recursos/ })).toBeNull();
   });
 
   it('offers no run to open when none is given, even with tests planned', async () => {
@@ -685,23 +774,7 @@ describe('the Sources page of the Test module', () => {
       />,
     );
     await view.findByTestId('e2e-exploration');
-    expect(view.queryByRole('button', { name: /Ver execução/ })).toBeNull();
+    expect(view.queryByRole('button', { name: /Casos de Testes/ })).toBeNull();
   });
 
-  it('says where the script of a source exploration was kept', async () => {
-    const view = render(
-      <E2eExploration
-        creationId="anchor"
-        onBack={vi.fn()}
-        onOpenRun={vi.fn()}
-        apiClient={asClient({
-          getE2eCreation: vi.fn().mockResolvedValue(detail),
-          getE2eExploration: vi.fn().mockResolvedValue(exploration()),
-        })}
-      />,
-    );
-    expect(
-      await view.findByText('Roteiro salvo no banco de dados como o Source do workspace.'),
-    ).toBeInTheDocument();
-  });
 });

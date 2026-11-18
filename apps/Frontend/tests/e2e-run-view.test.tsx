@@ -5,6 +5,9 @@ import { E2eRunView } from '../src/features/e2e/E2eRunView.js';
 import { E2eView } from '../src/features/e2e/E2eView.js';
 import { MAP_CARD, layoutActionMap } from '../src/features/e2e/e2e-run-layout.js';
 import type { ApiClient } from '../src/lib/api-client.js';
+import { extractPdfText } from '../src/lib/pdf-text.js';
+import { MediaProvider } from '../src/features/shared/media.js';
+import { pickRepository } from './helpers/pick-repository.js';
 import {
   e2eImagePath,
   isExplorationActive,
@@ -15,6 +18,11 @@ import {
   type E2eTestStatus,
   type E2eTestSummary,
 } from '../src/features/e2e/e2e-types.js';
+
+// The PDF reader needs a browser worker; its own test covers it.
+vi.mock('../src/lib/pdf-text.js', () => ({ extractPdfText: vi.fn() }));
+
+const REPOSITORY_NAMES = { 'github:42': 'acme/app' };
 
 const asClient = (client: object) => client as unknown as ApiClient;
 
@@ -32,6 +40,7 @@ function test(id: string, status: E2eTestStatus, overrides: Partial<E2eTestSumma
     scriptPath: null,
     beforeRunInstructions: null,
     afterRunInstructions: null,
+    scriptInstructions: null,
     status,
     error: null,
     analysis: null,
@@ -143,7 +152,8 @@ function runApi(creation: E2eCreationDetail = run(), actions: E2eActionMap = map
   return {
     getE2eCreation: vi.fn().mockResolvedValue(creation),
     getE2eActionMap: vi.fn().mockResolvedValue(actions),
-    getE2eImage: vi.fn().mockResolvedValue(new Blob(['img'])),
+    // Given as the implementation, so it outlives the restoring of the mocks that ends each test.
+    getE2eImage: vi.fn(() => Promise.resolve(new Blob(['img']))),
   };
 }
 
@@ -168,6 +178,12 @@ beforeEach(() => {
   );
 });
 afterEach(() => vi.restoreAllMocks());
+
+/** Picks an option of a searchable select: its list is drawn on the page, not inside the field. */
+async function pickSaved(root: ReturnType<typeof within>, label: string, option: string) {
+  fireEvent.focus(root.getByRole('combobox', { name: label }));
+  fireEvent.click(await within(document.body).findByRole('option', { name: option }));
+}
 
 describe('layoutActionMap', () => {
   it('places pages in the column of the earliest moment a test got to them', () => {
@@ -212,6 +228,8 @@ describe('E2eRunView', () => {
     onBack: vi.fn(),
     onOpenTest: vi.fn(),
     onOpenExploration: vi.fn(),
+    onEdit: vi.fn(),
+    onDeleted: vi.fn(),
   };
 
   it('shows the progress of a finished run, its tests by feature area and the map', async () => {
@@ -245,7 +263,7 @@ describe('E2eRunView', () => {
     );
     fireEvent.click(groups[1]!);
     expect(view.queryByRole('button', { name: 'Abrir teste Test t2' })).toBeNull();
-    fireEvent.click(view.getByRole('button', { expanded: false }));
+    fireEvent.click(view.getByRole('button', { name: 'Outros testes', expanded: false }));
     expect(view.getByRole('button', { name: 'Abrir teste Test t2' })).toBeInTheDocument();
 
     fireEvent.change(view.getByLabelText('Filtrar testes'), { target: { value: 'failed' } });
@@ -363,6 +381,127 @@ describe('E2eRunView', () => {
     expect(view.getByTestId('e2e-run-skeleton')).toBeInTheDocument();
     await view.findByText('início · 3');
     expect(view.queryByTestId('e2e-run-skeleton')).toBeNull();
+  });
+
+  describe('three-dot menu of the run', () => {
+    const menuApi = (creation: E2eCreationDetail = run()) => ({
+      ...runApi(creation),
+      rerunE2eCreation: vi.fn().mockResolvedValue(undefined),
+      cancelE2eCreation: vi.fn().mockResolvedValue(undefined),
+      deleteE2eCreation: vi.fn().mockResolvedValue(undefined),
+      pullE2eCreation: vi.fn().mockResolvedValue({ linked: 2, imported: 1, missing: 0 }),
+      getTestManagementProviders: vi.fn().mockResolvedValue([]),
+    });
+    const open = async (view: ReturnType<typeof render>) => {
+      fireEvent.click(await view.findByRole('button', { name: 'Ações' }));
+      return within(await view.findByRole('menu'));
+    };
+
+    it('offers the options of a run, with delete in red', async () => {
+      const client = menuApi(
+        run({
+          repository: { provider: 'github', id: '42', name: 'acme/app', branch: 'main', path: '' },
+        }),
+      );
+      const onEdit = vi.fn();
+      const view = render(<E2eRunView {...props} apiClient={asClient(client)} onEdit={onEdit} />);
+      const menu = await open(view);
+      expect(menu.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+        'Editar',
+        'Pull dos scripts',
+        'Gestão de testes',
+        'Importar test cases',
+        'Excluir execução',
+      ]);
+      expect(menu.getByRole('menuitem', { name: 'Excluir execução' })).toHaveAttribute(
+        'data-destructive',
+      );
+
+      fireEvent.click(menu.getByRole('menuitem', { name: 'Editar' }));
+      expect(onEdit).toHaveBeenCalledOnce();
+      // The page has its own button for the exploration, so the menu does not repeat it.
+      expect(menu.queryByRole('menuitem', { name: 'Exploração do site' })).toBeNull();
+
+      // Running everything again is a button of the page, not an option of the menu.
+      expect(menu.queryByRole('menuitem', { name: 'Executar todos novamente' })).toBeNull();
+      fireEvent.click(view.getByRole('button', { name: 'Executar todos novamente' }));
+      await waitFor(() => expect(client.rerunE2eCreation).toHaveBeenCalledWith('c1'));
+      expect(await view.findByText(/Execução reiniciada/)).toBeTruthy();
+      await waitFor(() => expect(client.getE2eCreation).toHaveBeenCalledTimes(2));
+    });
+
+    it('pulls the scripts and tells the result', async () => {
+      const client = menuApi(
+        run({
+          repository: { provider: 'github', id: '42', name: 'acme/app', branch: 'main', path: '' },
+        }),
+      );
+      const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+      fireEvent.click((await open(view)).getByRole('menuitem', { name: 'Pull dos scripts' }));
+      await waitFor(() => expect(client.pullE2eCreation).toHaveBeenCalledWith('c1'));
+      expect(await view.findByText(/Promo codes: 2 script/)).toBeInTheDocument();
+    });
+
+    it('reports an action that failed', async () => {
+      const client = menuApi();
+      client.rerunE2eCreation.mockRejectedValue(new Error('Worker offline'));
+      const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+      fireEvent.click(await view.findByRole('button', { name: 'Executar todos novamente' }));
+      expect(await view.findByRole('alert')).toHaveTextContent('Worker offline');
+    });
+
+    it('cancels a run in progress instead of offering to edit or run it again', async () => {
+      const client = menuApi(run({ status: 'running' }));
+      const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+      const menu = await open(view);
+      expect(menu.queryByRole('menuitem', { name: 'Editar' })).toBeNull();
+      expect(menu.queryByRole('menuitem', { name: 'Executar todos novamente' })).toBeNull();
+      expect(view.queryByRole('button', { name: 'Executar todos novamente' })).toBeNull();
+      fireEvent.click(menu.getByRole('menuitem', { name: 'Cancelar execução' }));
+      await waitFor(() => expect(client.cancelE2eCreation).toHaveBeenCalledWith('c1'));
+    });
+
+    it('deletes the run after confirming and leaves the page', async () => {
+      const client = menuApi();
+      const onDeleted = vi.fn();
+      const view = render(
+        <E2eRunView {...props} apiClient={asClient(client)} onDeleted={onDeleted} />,
+      );
+      fireEvent.click((await open(view)).getByRole('menuitem', { name: 'Excluir execução' }));
+      fireEvent.click(
+        within(await view.findByRole('alertdialog')).getByRole('button', { name: 'Excluir' }),
+      );
+      await waitFor(() => expect(client.deleteE2eCreation).toHaveBeenCalledWith('c1'));
+      await waitFor(() => expect(onDeleted).toHaveBeenCalledOnce());
+    });
+
+    it('stays on the page when the run cannot be deleted', async () => {
+      const client = menuApi();
+      client.deleteE2eCreation.mockRejectedValue(new Error('Forbidden'));
+      const onDeleted = vi.fn();
+      const view = render(
+        <E2eRunView {...props} apiClient={asClient(client)} onDeleted={onDeleted} />,
+      );
+      fireEvent.click((await open(view)).getByRole('menuitem', { name: 'Excluir execução' }));
+      fireEvent.click(
+        within(await view.findByRole('alertdialog')).getByRole('button', { name: 'Excluir' }),
+      );
+      expect(await view.findByRole('alert')).toHaveTextContent('Forbidden');
+      expect(onDeleted).not.toHaveBeenCalled();
+    });
+
+    it('opens the test management and import dialogs', async () => {
+      const client = menuApi();
+      const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+      fireEvent.click((await open(view)).getByRole('menuitem', { name: 'Gestão de testes' }));
+      expect(await view.findByRole('dialog')).toBeInTheDocument();
+    });
+
+    it('has no menu for a viewer', async () => {
+      const view = render(<E2eRunView {...props} isReadOnly apiClient={asClient(runApi())} />);
+      await view.findByText('início · 3');
+      expect(view.queryByRole('button', { name: 'Ações' })).toBeNull();
+    });
   });
 
   it('resizes the tests panel by dragging or with the arrow keys, within its limits', async () => {
@@ -580,9 +719,21 @@ function exploreApi(state: Exploration | null, creation: E2eCreationDetail = run
     exploreE2eCreation: vi
       .fn()
       .mockResolvedValue(exploration({ status: 'exploring', pages: [], log: [] })),
-    getE2eImage: vi.fn().mockResolvedValue(new Blob(['img'])),
+    getE2eImage: vi.fn(() => Promise.resolve(new Blob(['img']))),
+    // What the context picker of the instructions modal lists.
+    searchPbiItems: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+    searchIssues: vi.fn().mockResolvedValue({ issues: [], total: 0 }),
+    searchKnowledgeDocuments: vi.fn().mockResolvedValue({ documents: [], total: 0 }),
+    // The agents the instructions modal offers to explore with.
+    getAgents: vi.fn().mockResolvedValue([]),
   };
 }
+
+const agentDto = (id: string, name: string, skills: string[] = []) => ({
+  id,
+  name,
+  skills: skills.map((skill) => ({ name: skill, description: '', version: '1', revision: 'r' })),
+});
 
 describe('E2eExploration', () => {
   const props = { creationId: 'c1', onBack: vi.fn(), onOpenRun: vi.fn() };
@@ -592,6 +743,139 @@ describe('E2eExploration', () => {
     expect(isExplorationActive(exploration())).toBe(false);
     expect(isExplorationActive(exploration({ status: 'signing_in' }))).toBe(true);
     expect(isExplorationActive(exploration({ status: 'exploring' }))).toBe(true);
+  });
+
+  it('explains in the log why the agent stayed signed out or stopped', async () => {
+    const client = exploreApi(
+      exploration({
+        log: [
+          { atMs: 0, action: 'note', target: 'sign_in_no_account', result: null },
+          { atMs: 1_000, action: 'note', target: 'stopped_no_targets:3', result: null },
+          { atMs: 2_000, action: 'note', target: 'a_code_from_a_newer_version', result: null },
+          {
+            atMs: 3_000,
+            action: 'type',
+            target: 'Search = report',
+            result: 'Files',
+            reason: 'Filtrar pelo nome do arquivo',
+          },
+          { atMs: 4_000, action: 'press', target: 'Escape', result: null },
+          {
+            atMs: 5_000,
+            action: 'note',
+            target: 'agent_done:4',
+            result: null,
+            reason: 'Tudo coberto',
+          },
+          {
+            atMs: 6_000,
+            action: 'note',
+            target: 'agent_failed:0',
+            result: null,
+            reason: 'Sem LLM',
+          },
+          { atMs: 7_000, action: 'note', target: 'agent_stuck:2', result: null },
+          { atMs: 8_000, action: 'note', target: 'agent_unavailable', result: null },
+        ],
+      }),
+    );
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    await view.findByText('Visão geral de storefront.example');
+    fireEvent.click(view.getByRole('tab', { name: /Log ao vivo/ }));
+    const panel = view.getByRole('tabpanel');
+    expect(panel).toHaveTextContent('não tem conta de teste');
+    expect(panel).toHaveTextContent('não restaram itens de menu, abas ou links para clicar');
+    expect(panel).toHaveTextContent('(3 cliques)');
+    // A code this version does not know is shown as it is.
+    expect(panel).toHaveTextContent('a_code_from_a_newer_version');
+    // What the AI agent did, with the reason it gave.
+    expect(panel).toHaveTextContent('digitar Search = report');
+    expect(panel).toHaveTextContent('Filtrar pelo nome do arquivo');
+    expect(panel).toHaveTextContent('pressionar Escape');
+    expect(panel).toHaveTextContent('O agente terminou de explorar após 4 ações.');
+    expect(panel).toHaveTextContent('Tudo coberto');
+    expect(panel).toHaveTextContent('não conseguiu decidir o próximo passo após 0 ações');
+    expect(panel).toHaveTextContent('Sem LLM');
+    expect(panel).toHaveTextContent('repetindo a mesma ação (2 ações feitas)');
+    expect(panel).toHaveTextContent('em outro computador');
+  });
+
+  it('replays what the agent did, step by step, with where it was and why', async () => {
+    const client = exploreApi(
+      exploration({
+        log: [
+          { atMs: 0, action: 'navigate', target: 'https://storefront.example/', result: 'Sign in' },
+          {
+            atMs: 5_000,
+            action: 'click',
+            target: 'Inbox',
+            result: 'Inbox',
+            reason: 'Abrir a caixa de entrada',
+            hasScreenshot: true,
+            url: 'https://storefront.example/inbox?tab=new',
+            worker: 2,
+          },
+          { atMs: 6_000, action: 'scroll', target: 'down', result: null },
+          {
+            atMs: 7_000,
+            action: 'click',
+            target: 'Home',
+            result: 'Issues',
+            hasScreenshot: true,
+            url: 'not a url',
+          },
+          {
+            atMs: 8_000,
+            action: 'press',
+            target: 'Escape',
+            result: null,
+            hasScreenshot: true,
+            url: 'https://storefront.example/',
+          },
+          // A step the browser could not name the address of.
+          { atMs: 9_000, action: 'type', target: 'Search = x', result: null, hasScreenshot: true },
+        ],
+      }),
+    );
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    expect(await view.findByText('O que o agente fez')).toBeInTheDocument();
+    // Only the actions that kept a picture are steps; the position is the one in the log.
+    expect(view.getByTestId('e2e-player-counter')).toHaveTextContent('1 / 4');
+    await waitFor(() =>
+      expect(client.getE2eImage).toHaveBeenCalledWith(
+        e2eImagePath.explorationStep('c1', 2),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(client.getE2eImage).toHaveBeenCalledWith(
+      e2eImagePath.explorationStep('c1', 5),
+      expect.any(AbortSignal),
+    );
+    expect(await view.findByTestId('e2e-player-image')).toHaveAttribute(
+      'alt',
+      'Captura do passo 2',
+    );
+    // The address of the step, without the protocol, and what the agent did and why.
+    expect(view.getByTestId('e2e-player-address')).toHaveTextContent(
+      'storefront.example/inbox?tab=new',
+    );
+    expect(view.getByTestId('e2e-player-note')).toHaveTextContent(
+      'Navegador 2clicar Inbox — Abrir a caixa de entrada',
+    );
+    fireEvent.click(view.getByRole('button', { name: 'Próximo passo' }));
+    // An address that cannot be read is shown as it is; no browser number for a single browser.
+    expect(view.getByTestId('e2e-player-address')).toHaveTextContent('not a url');
+    expect(view.getByTestId('e2e-player-note')).not.toHaveTextContent('Navegador');
+    // The start page of the site is shown as its host only.
+    fireEvent.click(view.getByRole('button', { name: 'Próximo passo' }));
+    expect(view.getByTestId('e2e-player-address').textContent).toBe('storefront.example');
+    // The exploration has no recording: only the steps.
+    expect(view.getByRole('button', { name: 'Vídeo da execução' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    // The captured pages are still there under the replay.
+    expect(view.getByText('Páginas capturadas')).toBeInTheDocument();
   });
 
   it('shows what the agent captured, its log and opens the planned run', async () => {
@@ -636,7 +920,7 @@ describe('E2eExploration', () => {
     fireEvent.click(view.getByRole('tab', { name: /Páginas encontradas/ }));
     expect(view.getByRole('tabpanel')).toHaveTextContent('App · Inbox');
 
-    fireEvent.click(view.getByRole('button', { name: /Ver execução/ }));
+    fireEvent.click(view.getByRole('button', { name: /Casos de Testes/ }));
     expect(onOpenRun).toHaveBeenCalled();
     fireEvent.click(view.getByRole('button', { name: /Voltar/ }));
     expect(onBack).toHaveBeenCalled();
@@ -667,7 +951,8 @@ describe('E2eExploration', () => {
     expect(view.getByRole('tabpanel')).toHaveTextContent('Nada feito ainda.');
     // Nothing to start or open while the agent works.
     expect(view.queryByRole('button', { name: /Explorar de novo/ })).toBeNull();
-    expect(view.queryByRole('button', { name: /Ver execução/ })).toBeNull();
+    // The test cases are one click away even while the agent works.
+    expect(view.getByRole('button', { name: /Casos de Testes/ })).toBeInTheDocument();
 
     client.getE2eExploration.mockResolvedValue(
       exploration({ status: 'exploring', finishedAt: null, hasLiveFrame: true }),
@@ -721,35 +1006,37 @@ describe('E2eExploration', () => {
   it('collects what to explore in a modal opened from the instructions button', async () => {
     const client = exploreApi(null, run({ tests: [] }));
     const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    // The Markdown editor of the description, whose source is where the text is typed.
+    const source = () => {
+      fireEvent.click(view.getByTestId('editor-mode-code'));
+      return view.getByTestId('e2e-explore-description-code') as HTMLTextAreaElement;
+    };
     // The field only exists inside the modal.
-    expect(view.queryByLabelText('O que explorar (opcional)')).toBeNull();
+    expect(view.queryByTestId('e2e-explore-description')).toBeNull();
     const open = await view.findByRole('button', { name: /Instruções da exploração/ });
     expect(view.queryByRole('img', { name: 'Instruções definidas' })).toBeNull();
 
     fireEvent.click(open);
     expect(view.getByRole('dialog')).toBeInTheDocument();
-    fireEvent.change(view.getByLabelText('O que explorar (opcional)'), {
-      target: { value: 'descartado' },
-    });
+    expect(view.getByText('O que explorar (opcional)')).toBeInTheDocument();
+    // The agent reads text only: there is no way to add a picture to the description.
+    expect(view.queryByTestId('input-document-image')).toBeNull();
+    // The lists of context stand alone, without an explanation above them.
+    expect(view.queryByText(/O agente lê o que você escolher/)).toBeNull();
+    fireEvent.change(source(), { target: { value: 'descartado' } });
     fireEvent.click(view.getByRole('button', { name: /Cancelar/ }));
     expect(view.queryByRole('dialog')).toBeNull();
     expect(view.queryByRole('img', { name: 'Instruções definidas' })).toBeNull();
 
     fireEvent.click(open);
-    expect((view.getByLabelText('O que explorar (opcional)') as HTMLTextAreaElement).value).toBe(
-      '',
-    );
-    fireEvent.change(view.getByLabelText('O que explorar (opcional)'), {
-      target: { value: '  Só as telas de cobrança  ' },
-    });
+    expect(source().value).toBe('');
+    fireEvent.change(source(), { target: { value: '  Só as telas de cobrança  ' } });
     fireEvent.click(view.getByRole('button', { name: /Salvar/ }));
     expect(view.queryByRole('dialog')).toBeNull();
     expect(view.getByRole('img', { name: 'Instruções definidas' })).toBeInTheDocument();
     // Reopening starts from what was saved.
     fireEvent.click(open);
-    expect((view.getByLabelText('O que explorar (opcional)') as HTMLTextAreaElement).value).toBe(
-      '  Só as telas de cobrança  ',
-    );
+    expect(source().value).toBe('  Só as telas de cobrança  ');
     fireEvent.click(view.getByRole('button', { name: /Cancelar/ }));
 
     client.exploreE2eCreation.mockResolvedValueOnce(
@@ -764,6 +1051,223 @@ describe('E2eExploration', () => {
     expect(await view.findByText('Escopo: Só as telas de cobrança')).toBeInTheDocument();
     // While the agent works, the button is not offered.
     expect(view.queryByRole('button', { name: /Instruções da exploração/ })).toBeNull();
+  });
+
+  it('does not save a description longer than the API takes, and says so', async () => {
+    const client = exploreApi(null, run({ tests: [] }));
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: /Instruções da exploração/ }));
+    fireEvent.click(view.getByTestId('editor-mode-code'));
+    const source = view.getByTestId('e2e-explore-description-code');
+    const save = view.getByRole('button', { name: /Salvar/ }) as HTMLButtonElement;
+
+    expect(view.queryByRole('alert')).toBeNull();
+    fireEvent.change(source, { target: { value: 'x'.repeat(2001) } });
+    expect(view.getByRole('alert')).toHaveTextContent(
+      'Texto longo demais: a descrição aceita até 2000 caracteres.',
+    );
+    expect(save.disabled).toBe(true);
+    // Spaces around the text are not sent, so they do not count.
+    fireEvent.change(source, { target: { value: `  ${'x'.repeat(2000)}  ` } });
+    expect(view.queryByRole('alert')).toBeNull();
+    expect(save.disabled).toBe(false);
+  });
+
+  it('chooses PBIs, issues and Brain documents as context and explores with them', async () => {
+    const client = exploreApi(null, run({ tests: [] }));
+    client.searchPbiItems.mockResolvedValue({
+      items: [
+        {
+          id: 'p1',
+          title: 'Filtro de arquivos',
+          status: 'Active',
+          links: [{ providerId: 'azure_devops', externalId: '48325', externalUrl: null }],
+        },
+        { id: 'p2', title: 'Outro item', status: 'New', links: [] },
+      ],
+      total: 2,
+    });
+    client.searchIssues.mockResolvedValue({
+      issues: [{ id: 'i1', number: 7, title: 'Download falha', status: 'todo' }],
+      total: 1,
+    });
+    client.searchKnowledgeDocuments.mockResolvedValue({
+      documents: [
+        { id: 'src:page', title: 'Regras de download', provider: 'azure_devops' },
+        { id: 'x', title: 'Documento solto' },
+      ],
+      total: 2,
+    });
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    const open = await view.findByRole('button', { name: /Instruções da exploração/ });
+    const pick = async (list: string, option: RegExp) => {
+      fireEvent.focus(await view.findByRole('combobox', { name: list }));
+      fireEvent.click(await view.findByRole('option', { name: option }));
+    };
+
+    // A choice that is cancelled is forgotten.
+    fireEvent.click(open);
+    await pick('PBIs', /Filtro de arquivos/);
+    expect(view.getByRole('option', { name: /#48325 · Active/ })).toBeInTheDocument();
+    expect(view.getByRole('option', { name: /Outro item/ })).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: /Cancelar/ }));
+    expect(view.queryByRole('img', { name: 'Instruções definidas' })).toBeNull();
+    fireEvent.click(open);
+    expect(await view.findByRole('combobox', { name: 'PBIs' })).toBeInTheDocument();
+    expect(view.queryByRole('button', { name: /Remover/ })).toBeNull();
+
+    await pick('PBIs', /Filtro de arquivos/);
+    await pick('Issues', /#7 · Download falha/);
+    await pick('Documentos do Brain', /Regras de download/);
+    expect(view.getByRole('option', { name: /azure_devops/ })).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: /Salvar/ }));
+    // Only context was chosen, and the button still says something is set.
+    expect(view.getByRole('img', { name: 'Instruções definidas' })).toBeInTheDocument();
+
+    // Reopening starts from what was saved.
+    fireEvent.click(open);
+    expect(
+      await view.findByRole('button', {
+        name: 'Remover Download falha'.replace('Download', '#7 · Download'),
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: /Cancelar/ }));
+
+    client.exploreE2eCreation.mockResolvedValueOnce(
+      exploration({
+        status: 'exploring',
+        context: [
+          { kind: 'pbi', id: 'p1', title: 'Filtro de arquivos' },
+          { kind: 'issue', id: 'i1', title: 'Download falha' },
+        ],
+      }),
+    );
+    fireEvent.click(view.getByRole('button', { name: /Explorar site/ }));
+    await waitFor(() =>
+      expect(client.exploreE2eCreation).toHaveBeenCalledWith('c1', {
+        context: [
+          { kind: 'pbi', id: 'p1' },
+          { kind: 'issue', id: 'i1' },
+          { kind: 'brain', id: 'src:page' },
+        ],
+      }),
+    );
+    expect(
+      await view.findByText('Contexto: Filtro de arquivos · Download falha'),
+    ).toBeInTheDocument();
+  });
+
+  it("chooses the agent that explores and shows its skills, sending only one other than the run's", async () => {
+    const client = exploreApi(null, run({ tests: [] }));
+    client.getAgents.mockResolvedValue([
+      agentDto('a1', 'QA Padrão'),
+      agentDto('a2', 'Explorador', ['test-design', 'accessibility']),
+    ]);
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    const open = await view.findByRole('button', { name: /Instruções da exploração/ });
+    fireEvent.click(open);
+
+    // It starts on the agent of the run, which has no skills to list.
+    const select = (await view.findByLabelText('Agente')) as HTMLSelectElement;
+    expect(select.value).toBe('a1');
+    expect(view.queryByText(/^Skills:/)).toBeNull();
+    expect(client.getAgents).toHaveBeenCalledTimes(1);
+
+    // Another agent brings its skills along; a choice that is cancelled is forgotten.
+    fireEvent.change(select, { target: { value: 'a2' } });
+    expect(view.getByText('Skills: test-design, accessibility')).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: /Cancelar/ }));
+    expect(view.queryByRole('img', { name: 'Instruções definidas' })).toBeNull();
+    fireEvent.click(open);
+    expect(((await view.findByLabelText('Agente')) as HTMLSelectElement).value).toBe('a1');
+
+    fireEvent.change(view.getByLabelText('Agente'), { target: { value: 'a2' } });
+    fireEvent.click(view.getByRole('button', { name: /Salvar/ }));
+    // Only the agent was chosen, and the button still says something is set.
+    expect(view.getByRole('img', { name: 'Instruções definidas' })).toBeInTheDocument();
+    // The list is not loaded again when reopened, and the choice is what was saved.
+    fireEvent.click(open);
+    expect(((await view.findByLabelText('Agente')) as HTMLSelectElement).value).toBe('a2');
+    expect(client.getAgents).toHaveBeenCalledTimes(1);
+    fireEvent.click(view.getByRole('button', { name: /Cancelar/ }));
+
+    client.exploreE2eCreation.mockResolvedValueOnce(
+      exploration({ status: 'exploring', agent: { id: 'a2', name: 'Explorador' } }),
+    );
+    fireEvent.click(view.getByRole('button', { name: /Explorar site/ }));
+    await waitFor(() =>
+      expect(client.exploreE2eCreation).toHaveBeenCalledWith('c1', { agentId: 'a2' }),
+    );
+    expect(await view.findByText('Agente: Explorador')).toBeInTheDocument();
+  });
+
+  it('goes back to the agent of the run when it is picked again, and sends no agent', async () => {
+    const client = exploreApi(null, run({ tests: [] }));
+    client.getAgents.mockResolvedValue([agentDto('a1', 'QA Padrão'), agentDto('a2', 'Explorador')]);
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    const open = await view.findByRole('button', { name: /Instruções da exploração/ });
+    const save = () => fireEvent.click(view.getByRole('button', { name: /Salvar/ }));
+
+    fireEvent.click(open);
+    fireEvent.change(await view.findByLabelText('Agente'), { target: { value: 'a2' } });
+    save();
+    expect(view.getByRole('img', { name: 'Instruções definidas' })).toBeInTheDocument();
+    fireEvent.click(open);
+    fireEvent.change(await view.findByLabelText('Agente'), { target: { value: 'a1' } });
+    save();
+    expect(view.queryByRole('img', { name: 'Instruções definidas' })).toBeNull();
+
+    fireEvent.click(view.getByRole('button', { name: /Explorar site/ }));
+    await waitFor(() => expect(client.exploreE2eCreation).toHaveBeenCalledWith('c1', {}));
+  });
+
+  it('shows the first agent when the one of the run is gone, and offers none when they cannot be loaded', async () => {
+    const gone = exploreApi(null, run({ tests: [] }));
+    gone.getAgents.mockResolvedValue([agentDto('a2', 'Explorador'), agentDto('a3', 'Outro')]);
+    const first = render(<E2eExploration {...props} apiClient={asClient(gone)} />);
+    fireEvent.click(await first.findByRole('button', { name: /Instruções da exploração/ }));
+    expect(((await first.findByLabelText('Agente')) as HTMLSelectElement).value).toBe('a2');
+    // What the select shows is what is sent.
+    fireEvent.click(first.getByRole('button', { name: /Salvar/ }));
+    fireEvent.click(first.getByRole('button', { name: /Explorar site/ }));
+    await waitFor(() =>
+      expect(gone.exploreE2eCreation).toHaveBeenCalledWith('c1', { agentId: 'a2' }),
+    );
+    first.unmount();
+
+    const offline = exploreApi(null, run({ tests: [] }));
+    offline.getAgents.mockRejectedValue(new Error('offline'));
+    const second = render(<E2eExploration {...props} apiClient={asClient(offline)} />);
+    fireEvent.click(await second.findByRole('button', { name: /Instruções da exploração/ }));
+    await waitFor(() => expect(offline.getAgents).toHaveBeenCalled());
+    // The rest of the instructions still work without the choice of agent.
+    expect(await second.findByRole('combobox', { name: 'PBIs' })).toBeInTheDocument();
+    expect(second.queryByLabelText('Agente')).toBeNull();
+    fireEvent.click(second.getByRole('button', { name: /Salvar/ }));
+    expect(second.queryByRole('img', { name: 'Instruções definidas' })).toBeNull();
+    // Leaving the page while the agents load does not update it.
+    second.unmount();
+  });
+
+  it('keeps the other lists of context when one of them cannot be loaded', async () => {
+    const client = exploreApi(null, run({ tests: [] }));
+    client.searchIssues.mockRejectedValue(new Error('offline'));
+    client.searchPbiItems.mockResolvedValue({
+      items: [{ id: 'p1', title: 'Filtro de arquivos', status: 'Active', links: [] }],
+      total: 1,
+    });
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: /Instruções da exploração/ }));
+    // The list that failed says so when opened; the others still work, and the one that is empty says so.
+    fireEvent.focus(await view.findByRole('combobox', { name: 'Issues' }));
+    expect(await view.findByText('Não foi possível carregar a lista.')).toBeInTheDocument();
+    fireEvent.blur(view.getByRole('combobox', { name: 'Issues' }));
+    fireEvent.focus(await view.findByRole('combobox', { name: 'PBIs' }));
+    fireEvent.click(view.getByRole('option', { name: /Filtro de arquivos/ }));
+    fireEvent.focus(view.getByRole('combobox', { name: 'Documentos do Brain' }));
+    expect(view.getByText('Nada para escolher aqui ainda.')).toBeInTheDocument();
+    // Leaving the page while the lists load does not update it.
+    view.unmount();
   });
 
   it('keeps the script in the database only, with no choice of repository', async () => {
@@ -783,24 +1287,21 @@ describe('E2eExploration', () => {
     await waitFor(() => expect(client.exploreE2eCreation).toHaveBeenCalledWith('c1', {}));
     view.unmount();
 
-    // Where the finished script went, or why it did not.
-    const kept = [
-      [{ savedTo: 'database' }, 'Roteiro salvo no banco de dados.'],
-      [
-        { savedTo: null, saveError: 'branch is protected' },
-        'Não foi possível salvar o roteiro: branch is protected',
-      ],
-    ] as const;
-    for (const [state, message] of kept) {
-      const shown = render(
-        <E2eExploration
-          {...props}
-          apiClient={asClient(exploreApi(exploration({ status: 'ready', ...state })))}
-        />,
-      );
-      expect(await shown.findByText(message)).toBeInTheDocument();
-      shown.unmount();
-    }
+    // Why the finished script was not saved.
+    const shown = render(
+      <E2eExploration
+        {...props}
+        apiClient={asClient(
+          exploreApi(
+            exploration({ status: 'ready', savedTo: null, saveError: 'branch is protected' }),
+          ),
+        )}
+      />,
+    );
+    expect(
+      await shown.findByText('Não foi possível salvar o roteiro: branch is protected'),
+    ).toBeInTheDocument();
+    shown.unmount();
   });
 
   it('explains a failed exploration and lets it be tried again, except for viewers and API runs', async () => {
@@ -900,7 +1401,7 @@ describe('E2eView with the run, exploration and environment screens', () => {
 
     fireEvent.click(await view.findByRole('button', { name: /Exploração do site/ }));
     expect(await view.findByTestId('e2e-exploration')).toBeInTheDocument();
-    fireEvent.click(await view.findByRole('button', { name: /Ver execução/ }));
+    fireEvent.click(await view.findByRole('button', { name: /Casos de Testes/ }));
     expect(await view.findByTestId('e2e-run-view')).toBeInTheDocument();
     fireEvent.click(view.getByRole('button', { name: /Voltar/ }));
     expect(await view.findByTestId('e2e-view')).toBeInTheDocument();
@@ -920,13 +1421,13 @@ describe('E2eView with the run, exploration and environment screens', () => {
     expect(await view.findByTestId('e2e-view')).toBeInTheDocument();
   });
 
-  it('shows the agent exploring right after a new UI run is created', async () => {
+  it('opens the page of a new run, which waits for the user instead of exploring', async () => {
     const client = viewApi();
     const { tests: _tests, prd: _prd, diff: _diff, instructions: _i, ...summary } = run();
     client.createE2eCreation.mockResolvedValue({
       ...summary,
       id: 'c9',
-      status: 'queued',
+      status: 'draft',
       tests: [],
     });
     const view = render(<E2eView apiClient={asClient(client)} />);
@@ -936,17 +1437,565 @@ describe('E2eView with the run, exploration and environment screens', () => {
     );
     fireEvent.change(view.getByLabelText('Nome da execução'), { target: { value: 'new run' } });
     fireEvent.change(view.getByLabelText('Ou cole o conteúdo'), { target: { value: 'PRD' } });
-    await waitFor(() =>
-      expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBe(2),
-    );
-    fireEvent.change(view.getByLabelText('Repositório'), { target: { value: 'github:42' } });
+    await pickRepository(REPOSITORY_NAMES, 'github:42');
     await waitFor(() =>
       expect((view.getByLabelText('Branch base') as HTMLSelectElement).value).toBe('main'),
     );
     fireEvent.change(view.getByLabelText('URL base'), { target: { value: 'https://example.com' } });
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
-    expect(await view.findByTestId('e2e-exploration')).toBeInTheDocument();
-    expect(await view.findByText('Visão geral de storefront.example')).toBeInTheDocument();
-    expect(client.getE2eExploration).toHaveBeenCalledWith('c9');
+    expect(await view.findByTestId('e2e-run-view')).toBeInTheDocument();
+    expect(client.getE2eCreation).toHaveBeenCalledWith('c9');
+    expect(client.createE2eCreation).toHaveBeenCalledWith(
+      expect.objectContaining({ start: false }),
+    );
+    // Nothing is explored until the user asks.
+    expect(client.getE2eExploration).not.toHaveBeenCalled();
+  });
+});
+
+describe('E2eExploration code tab', () => {
+  const props = { creationId: 'c1', onBack: vi.fn(), onOpenRun: vi.fn() };
+  const GENERATED = 'test("Exploration of Run", async ({ page }) => {});\n';
+
+  function codeApi(overrides: Record<string, unknown> = {}) {
+    return {
+      ...exploreApi(exploration()),
+      getE2eExplorationCode: vi.fn().mockResolvedValue({ code: GENERATED, edited: false }),
+      saveE2eExplorationCode: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  async function openCode(client: ReturnType<typeof codeApi>, extra: object = {}) {
+    const view = render(<E2eExploration {...props} {...extra} apiClient={asClient(client)} />);
+    await view.findByText('Visão geral de storefront.example');
+    fireEvent.click(view.getByRole('tab', { name: /Code/ }));
+    return view;
+  }
+
+  it('shows the code of a finished exploration instead of the overview', async () => {
+    const client = codeApi();
+    const view = await openCode(client);
+    await waitFor(() =>
+      expect(view.getByTestId('e2e-exploration-code')).toHaveTextContent('Exploration of Run'),
+    );
+    expect(client.getE2eExplorationCode).toHaveBeenCalledWith('c1');
+    expect(view.queryByText('Páginas capturadas')).not.toBeInTheDocument();
+    expect(view.queryByText('Editado por você')).not.toBeInTheDocument();
+    fireEvent.click(view.getByRole('tab', { name: /Resumo/ }));
+    expect(view.getByText('Páginas capturadas')).toBeInTheDocument();
+  });
+
+  it('edits the code and saves it, or gives up', async () => {
+    const client = codeApi();
+    const view = await openCode(client);
+    fireEvent.click(await view.findByRole('button', { name: 'Editar código' }));
+    const editor = view.getByLabelText('Código da exploração') as HTMLTextAreaElement;
+    expect(editor.value).toBe(GENERATED);
+    // Nothing changed, nothing to save.
+    expect(
+      (view.getByRole('button', { name: 'Salvar código' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.click(view.getByRole('button', { name: 'Cancelar' }));
+    expect(view.queryByLabelText('Código da exploração')).not.toBeInTheDocument();
+
+    fireEvent.click(view.getByRole('button', { name: 'Editar código' }));
+    fireEvent.change(view.getByLabelText('Código da exploração'), {
+      target: { value: '// mine' },
+    });
+    client.saveE2eExplorationCode.mockResolvedValueOnce({ code: '// mine', edited: true });
+    fireEvent.click(view.getByRole('button', { name: 'Salvar código' }));
+    expect(await view.findByText('Código salvo.')).toBeInTheDocument();
+    expect(client.saveE2eExplorationCode).toHaveBeenCalledWith('c1', '// mine');
+    expect(view.getByTestId('e2e-exploration-code')).toHaveTextContent('// mine');
+    expect(view.getByText('Editado por você')).toBeInTheDocument();
+  });
+
+  it('saves with Ctrl+S only when something changed', async () => {
+    const client = codeApi();
+    const view = await openCode(client);
+    fireEvent.click(await view.findByRole('button', { name: 'Editar código' }));
+    const editor = view.getByLabelText('Código da exploração');
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true });
+    expect(client.saveE2eExplorationCode).not.toHaveBeenCalled();
+    fireEvent.change(editor, { target: { value: '// ctrl' } });
+    client.saveE2eExplorationCode.mockResolvedValueOnce({ code: '// ctrl', edited: true });
+    fireEvent.keyDown(editor, { key: 's', ctrlKey: true });
+    expect(await view.findByText('Código salvo.')).toBeInTheDocument();
+    expect(client.saveE2eExplorationCode).toHaveBeenCalledWith('c1', '// ctrl');
+  });
+
+  it('keeps the draft when the code cannot be saved', async () => {
+    const client = codeApi();
+    const view = await openCode(client);
+    fireEvent.click(await view.findByRole('button', { name: 'Editar código' }));
+    fireEvent.change(view.getByLabelText('Código da exploração'), { target: { value: 'x' } });
+    client.saveE2eExplorationCode.mockRejectedValueOnce(new Error('Sem permissão.'));
+    fireEvent.click(view.getByRole('button', { name: 'Salvar código' }));
+    expect(await view.findByRole('alert')).toHaveTextContent('Sem permissão.');
+    expect((view.getByLabelText('Código da exploração') as HTMLTextAreaElement).value).toBe('x');
+    client.saveE2eExplorationCode.mockRejectedValueOnce('offline');
+    fireEvent.click(view.getByRole('button', { name: 'Salvar código' }));
+    await waitFor(() =>
+      expect(view.getByRole('alert')).toHaveTextContent('Não foi possível salvar o código.'),
+    );
+  });
+
+  it('goes back to the generated code', async () => {
+    const client = codeApi({
+      getE2eExplorationCode: vi.fn().mockResolvedValue({ code: '// mine', edited: true }),
+    });
+    const view = await openCode(client);
+    client.saveE2eExplorationCode.mockResolvedValueOnce({ code: GENERATED, edited: false });
+    fireEvent.click(await view.findByRole('button', { name: 'Restaurar código gerado' }));
+    expect(await view.findByText('Código salvo.')).toBeInTheDocument();
+    expect(client.saveE2eExplorationCode).toHaveBeenCalledWith('c1', '');
+    expect(view.getByTestId('e2e-exploration-code')).toHaveTextContent('Exploration of Run');
+    expect(view.queryByRole('button', { name: 'Restaurar código gerado' })).toBeNull();
+  });
+
+  it('hides the restore button while editing', async () => {
+    const client = codeApi({
+      getE2eExplorationCode: vi.fn().mockResolvedValue({ code: '// mine', edited: true }),
+    });
+    const view = await openCode(client);
+    fireEvent.click(await view.findByRole('button', { name: 'Editar código' }));
+    expect(view.queryByRole('button', { name: 'Restaurar código gerado' })).toBeNull();
+  });
+
+  it('reports a code that cannot be loaded and tries again', async () => {
+    const client = codeApi();
+    client.getE2eExplorationCode.mockRejectedValueOnce(new Error('Sem acesso.'));
+    const view = await openCode(client);
+    expect(await view.findByRole('alert')).toHaveTextContent('Sem acesso.');
+    expect(view.queryByRole('button', { name: 'Editar código' })).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: 'Tentar novamente' }));
+    expect(await view.findByText(/Exploration of Run/)).toBeInTheDocument();
+    client.getE2eExplorationCode.mockRejectedValueOnce('offline');
+    fireEvent.click(view.getByRole('tab', { name: /Resumo/ }));
+    fireEvent.click(view.getByRole('tab', { name: /Code/ }));
+    await waitFor(() =>
+      expect(view.getByRole('alert')).toHaveTextContent('Não foi possível carregar o código.'),
+    );
+  });
+
+  it('says so when there is no code, and does not let a viewer edit it', async () => {
+    const client = codeApi({
+      getE2eExplorationCode: vi.fn().mockResolvedValue({ code: '  ', edited: false }),
+    });
+    const view = await openCode(client, { isReadOnly: true });
+    expect(await view.findByText('Esta exploração ainda não tem código.')).toBeInTheDocument();
+    expect(view.queryByRole('button', { name: 'Editar código' })).toBeNull();
+  });
+
+  it('lets the code of the exploration of the Source be edited too', async () => {
+    const view = await openCode(codeApi(), { following: true });
+    await view.findByText(/Exploration of Run/);
+    expect(view.getByRole('button', { name: 'Editar código' })).toBeInTheDocument();
+  });
+
+  it('has no code tab while the agent is exploring', async () => {
+    const client = codeApi();
+    client.getE2eExploration.mockResolvedValue(exploration({ status: 'exploring' }));
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    await view.findByText('Ao vivo');
+    expect(view.queryByRole('tab', { name: /Code/ })).toBeNull();
+    expect(client.getE2eExplorationCode).not.toHaveBeenCalled();
+  });
+});
+
+describe('E2eExploration video', () => {
+  const props = { creationId: 'c1', onBack: vi.fn(), onOpenRun: vi.fn() };
+  const shot = (atMs: number, worker?: number) => ({
+    atMs,
+    action: 'click' as const,
+    target: 'Inbox',
+    result: 'Inbox',
+    hasScreenshot: true,
+    url: 'https://storefront.example/inbox',
+    ...(worker ? { worker } : {}),
+  });
+  let created = 0;
+  beforeEach(() => {
+    created = 0;
+    // Pictures of the steps are object URLs too: only the recordings are told apart.
+    URL.createObjectURL = vi.fn((blob: Blob) =>
+      blob.type.startsWith('video') ? `blob:${blob.type}` : `blob:image-${++created}`,
+    );
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  it('plays the recording of the exploration, which opens first', async () => {
+    const client = {
+      ...exploreApi(
+        exploration({
+          log: [shot(1)],
+          videos: [{ worker: 1, mimeType: 'video/mp4' }],
+        }),
+      ),
+      getE2eExplorationVideo: vi.fn().mockResolvedValue(new Blob(['v'], { type: 'video/mp4' })),
+    };
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    const video = (await view.findByTestId('e2e-video')) as HTMLVideoElement;
+    expect(video.src).toBe('blob:video/mp4');
+    expect(client.getE2eExplorationVideo).toHaveBeenCalledWith('c1', 1, expect.any(AbortSignal));
+    // One browser needs no choice of which one to watch.
+    expect(view.queryByRole('group', { name: 'Gravação do navegador' })).toBeNull();
+    // The steps are one click away.
+    fireEvent.click(view.getByRole('button', { name: 'Passos (capturas de tela)' }));
+    expect(await view.findByTestId('e2e-player-image')).toBeInTheDocument();
+    view.unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:video/mp4');
+  });
+
+  it('chooses which browser to watch when several explored', async () => {
+    const client = {
+      ...exploreApi(
+        exploration({
+          log: [shot(1, 1), shot(2, 2)],
+          videos: [
+            { worker: 1, mimeType: 'video/mp4' },
+            { worker: 2, mimeType: 'video/webm' },
+          ],
+        }),
+      ),
+      getE2eExplorationVideo: vi.fn((_id: string, worker: number) =>
+        Promise.resolve(new Blob(['v'], { type: worker === 1 ? 'video/mp4' : 'video/webm' })),
+      ),
+    };
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    await view.findByTestId('e2e-video');
+    const choice = view.getByRole('group', { name: 'Gravação do navegador' });
+    expect(within(choice).getByRole('button', { name: 'Navegador 1' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    fireEvent.click(within(choice).getByRole('button', { name: 'Navegador 2' }));
+    await waitFor(() =>
+      expect(client.getE2eExplorationVideo).toHaveBeenCalledWith('c1', 2, expect.any(AbortSignal)),
+    );
+    await waitFor(() =>
+      expect((view.getByTestId('e2e-video') as HTMLVideoElement).src).toBe('blob:video/webm'),
+    );
+    expect(within(choice).getByRole('button', { name: 'Navegador 2' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('says when the recording cannot be loaded, and has no video without one', async () => {
+    const client = {
+      ...exploreApi(
+        exploration({ log: [shot(1)], videos: [{ worker: 1, mimeType: 'video/mp4' }] }),
+      ),
+      getE2eExplorationVideo: vi.fn().mockRejectedValue(new Error('gone')),
+    };
+    const view = render(<E2eExploration {...props} apiClient={asClient(client)} />);
+    expect(await view.findByText('Não foi possível carregar o vídeo.')).toBeInTheDocument();
+    view.unmount();
+
+    const plain = render(
+      <E2eExploration
+        {...props}
+        apiClient={asClient(exploreApi(exploration({ log: [shot(1)] })))}
+      />,
+    );
+    await plain.findByTestId('e2e-player-counter');
+    expect(plain.queryByTestId('e2e-video')).toBeNull();
+    expect(
+      (plain.getByRole('button', { name: 'Vídeo da execução' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+});
+
+/** The Markdown source of the PRD field, where the text is typed. */
+const prdSource = (view: ReturnType<typeof render>) => {
+  fireEvent.click(view.getByTestId('editor-mode-code'));
+  return view.getByTestId('e2e-generate-editor-code') as HTMLTextAreaElement;
+};
+/** Writes the PRD as Markdown. */
+const write = (view: ReturnType<typeof render>, markdown: string) =>
+  fireEvent.change(prdSource(view), { target: { value: markdown } });
+
+/** jsdom's File cannot be read as text. */
+const doc = (name: string, content: string, size = content.length) =>
+  ({ name, size, text: async () => content }) as unknown as File;
+
+describe('E2eRunView generating tests', () => {
+  const props = {
+    creationId: 'c1',
+    onBack: vi.fn(),
+    onOpenTest: vi.fn(),
+    onOpenExploration: vi.fn(),
+    onEdit: vi.fn(),
+    onDeleted: vi.fn(),
+  };
+  const suites = [
+    { id: 's1', name: 'Checkout', parentId: undefined },
+    { id: 's2', name: 'Payment', parentId: 's1' },
+  ];
+  const plans = [
+    {
+      id: 'p1',
+      title: 'Plano de pagamento',
+      suiteId: 's2',
+      plans: [
+        { title: 'Pagar com cartão', metadata: { caseId: 'k1' } },
+        { title: 'Pagar com pix', metadata: { caseId: 'k2' } },
+      ],
+    },
+  ];
+  function generateApi(creation: E2eCreationDetail) {
+    return {
+      ...runApi(creation),
+      generateE2eTests: vi.fn().mockResolvedValue(undefined),
+      getTestSuites: vi.fn().mockResolvedValue(suites),
+      getAllSavedTestPlans: vi.fn().mockResolvedValue(plans),
+    };
+  }
+  const empty = () => run({ tests: [], status: 'draft' });
+
+  it('offers to generate the tests of a run that waits for the user', async () => {
+    const client = generateApi(empty());
+    const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    const dialog = within(await view.findByTestId('e2e-generate-dialog'));
+    // Two tabs only; the PRD is where it starts.
+    expect(dialog.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['PRD', 'Test Plan']);
+    expect(dialog.getByRole('tab', { name: 'PRD' })).toHaveAttribute('aria-selected', 'true');
+    // Nothing to plan from until a file is attached or the PRD is written.
+    const submit = dialog.getByRole('button', { name: 'Gerar' }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    write(view, '  Login com e-mail e senha.  ');
+    const loads = client.getE2eCreation.mock.calls.length;
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(client.generateE2eTests).toHaveBeenCalledWith('c1', {
+        prd: 'Login com e-mail e senha.',
+        prdFileNames: [],
+      }),
+    );
+    await waitFor(() => expect(view.queryByTestId('e2e-generate-dialog')).toBeNull());
+    expect(client.getE2eCreation.mock.calls.length).toBeGreaterThan(loads);
+  });
+
+  it('writes the PRD in the Markdown editor, with its images shown in the text', async () => {
+    const client = generateApi(empty());
+    const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    await view.findByTestId('e2e-generate-editor');
+    write(view, '### Login\n\nCom **senha**.\n\n![print](/attachments/files/abc)');
+    // The formatted view shows the image where it was put.
+    fireEvent.click(view.getByTestId('editor-mode-formatted'));
+    expect(view.getByTestId('e2e-generate-editor-formatted').querySelector('img')).not.toBeNull();
+    fireEvent.click(view.getByRole('button', { name: 'Gerar' }));
+    await waitFor(() =>
+      expect(client.generateE2eTests).toHaveBeenCalledWith('c1', {
+        prd: '### Login\n\nCom **senha**.\n\n![print](/attachments/files/abc)',
+        prdFileNames: [],
+      }),
+    );
+  });
+
+  it('puts pasted and dropped images in the text and uploads them when generating', async () => {
+    Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:print'), revokeObjectURL: vi.fn() });
+    const stored = (id: string) => ({
+      id,
+      name: `${id}.png`,
+      kind: 'image',
+      scope: 'e2e',
+      source: 'adk',
+      url: `/attachments/files/${id}`,
+    });
+    const client = {
+      ...generateApi(empty()),
+      uploadAttachment: vi
+        .fn()
+        .mockResolvedValueOnce(stored('u1'))
+        .mockResolvedValueOnce(stored('u2')),
+      deleteAttachment: vi.fn().mockResolvedValue(undefined),
+    };
+    const view = render(
+      <MediaProvider apiClient={asClient(client)}>
+        <E2eRunView {...props} apiClient={asClient(client)} />
+      </MediaProvider>,
+    );
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    await view.findByTestId('e2e-generate-editor');
+    const field = prdSource(view);
+    const png = (name: string) => new File(['x'], name, { type: 'image/png' });
+    fireEvent.paste(field, { clipboardData: { files: [png('a.png')] } });
+    fireEvent.drop(field, { dataTransfer: { files: [png('b.png')] } });
+    // Both are placed in the text, as drafts until the tests are generated.
+    expect(field.value).toMatch(/!\[a\.png\]\(\/attachments\/drafts\/.+!\[b\.png\]/s);
+    fireEvent.click(view.getByRole('button', { name: 'Gerar' }));
+    await waitFor(() => expect(client.generateE2eTests).toHaveBeenCalled());
+    const sent = (client.generateE2eTests.mock.calls[0]![1] as { prd: string }).prd;
+    expect(sent).toContain('![a.png](/attachments/files/u1)');
+    expect(sent).toContain('![b.png](/attachments/files/u2)');
+    expect(client.uploadAttachment).toHaveBeenCalledWith('e2e', expect.any(File));
+  });
+
+  it('plans from attached documents, PDF included, together with the written text', async () => {
+    vi.mocked(extractPdfText).mockResolvedValueOnce('Texto do PDF');
+    const client = generateApi(empty());
+    const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    const input = await view.findByTestId('e2e-generate-file-input');
+    const big = doc('enorme.md', 'x', 3_000_000);
+    fireEvent.change(input, {
+      target: {
+        files: [doc('regras.md', '# Regras'), doc('spec.pdf', '%PDF'), big],
+      },
+    });
+    expect(await view.findByText('regras.md')).toBeInTheDocument();
+    expect(view.getByText('spec.pdf')).toBeInTheDocument();
+    // A file that cannot be read is said, not attached.
+    expect(view.getByRole('alert')).toHaveTextContent('Não foi possível ler o arquivo enorme.md.');
+    // The same file attached again replaces the earlier one.
+    fireEvent.change(input, { target: { files: [doc('regras.md', '# Novo')] } });
+    await waitFor(() => expect(view.getAllByText('regras.md')).toHaveLength(1));
+    write(view, 'Extra');
+    fireEvent.click(view.getByRole('button', { name: 'Gerar' }));
+    await waitFor(() =>
+      expect(client.generateE2eTests).toHaveBeenCalledWith('c1', {
+        prd: '# spec.pdf\n\nTexto do PDF\n\n---\n\n# regras.md\n\n# Novo\n\n---\n\nExtra',
+        prdFileNames: ['spec.pdf', 'regras.md'],
+      }),
+    );
+  });
+
+  it('removes an attached document, drops files onto the area and rejects a PRD too long', async () => {
+    const client = generateApi(empty());
+    const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    const zone = await view.findByTestId('e2e-generate-dropzone');
+    fireEvent.dragOver(zone);
+    // Closing the file dialog without choosing anything changes nothing.
+    fireEvent.change(await view.findByTestId('e2e-generate-file-input'), {
+      target: { files: null },
+    });
+    fireEvent.dragLeave(zone);
+    fireEvent.dragOver(zone);
+    fireEvent.drop(zone, { dataTransfer: { files: [doc('a.md', 'a'.repeat(500_001))] } });
+    expect(await view.findByText('a.md')).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: 'Remover a.md' }));
+    expect(view.queryByText('a.md')).toBeNull();
+    fireEvent.drop(zone, { dataTransfer: { files: [doc('b.md', 'a'.repeat(500_001))] } });
+    await view.findByText('b.md');
+    fireEvent.click(view.getByRole('button', { name: 'Gerar' }));
+    expect(await view.findByRole('alert')).toHaveTextContent('O PRD é grande demais');
+    expect(client.generateE2eTests).not.toHaveBeenCalled();
+    // The picker also opens the file dialog.
+    const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+    fireEvent.click(view.getByRole('button', { name: /Selecione seu documento/ }));
+    expect(click).toHaveBeenCalled();
+    click.mockRestore();
+  });
+
+  it('keeps the dialog open and says why when the tests cannot be generated', async () => {
+    const client = generateApi(empty());
+    const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    await view.findByTestId('e2e-generate-editor');
+    write(view, 'PRD');
+    client.generateE2eTests.mockRejectedValueOnce(new Error('Já em execução.'));
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar' }));
+    expect(await view.findByRole('alert')).toHaveTextContent('Já em execução.');
+    client.generateE2eTests.mockRejectedValueOnce('offline');
+    fireEvent.click(view.getByRole('button', { name: 'Gerar' }));
+    await waitFor(() =>
+      expect(view.getByRole('alert')).toHaveTextContent('Não foi possível gerar os testes.'),
+    );
+    fireEvent.click(view.getByRole('button', { name: 'Cancelar' }));
+    expect(view.queryByTestId('e2e-generate-dialog')).toBeNull();
+  });
+
+  it('associates the cases saved in Test Plans, a suite or one of its plans', async () => {
+    const client = generateApi(empty());
+    const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    fireEvent.click(await view.findByRole('tab', { name: 'Test Plan' }));
+    const submit = () => view.getByRole('button', { name: 'Gerar' }) as HTMLButtonElement;
+    // Nothing to associate until a suite or Test Plan is chosen.
+    await view.findByTestId('e2e-saved-case-picker');
+    expect(submit().disabled).toBe(true);
+    await pickSaved(view, 'Test Plan', 'Checkout');
+    expect(submit().disabled).toBe(false);
+    fireEvent.click(submit());
+    await waitFor(() =>
+      expect(client.generateE2eTests).toHaveBeenLastCalledWith('c1', {
+        savedCases: { suiteId: 's1' },
+      }),
+    );
+  });
+
+  it('only links the saved cases to the run, without writing or running them', async () => {
+    const client = {
+      ...generateApi(empty()),
+      linkE2eSavedCases: vi.fn().mockResolvedValue({ imported: 2, skipped: 0 }),
+    };
+    const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    // The PRD has no use for it: the button only exists for saved cases.
+    expect(view.queryByRole('button', { name: 'Apenas vincular' })).toBeNull();
+    fireEvent.click(await view.findByRole('tab', { name: 'Test Plan' }));
+    const link = () => view.getByRole('button', { name: 'Apenas vincular' }) as HTMLButtonElement;
+    await view.findByTestId('e2e-saved-case-picker');
+    expect(link().disabled).toBe(true);
+    await pickSaved(view, 'Test Plan', 'Checkout');
+    fireEvent.click(link());
+    await waitFor(() =>
+      expect(client.linkE2eSavedCases).toHaveBeenCalledWith('c1', { suiteId: 's1' }),
+    );
+    expect(client.generateE2eTests).not.toHaveBeenCalled();
+    await waitFor(() => expect(view.queryByTestId('e2e-generate-dialog')).toBeNull());
+  });
+
+  it('associates only the cases picked of a Test Plan', async () => {
+    const client = generateApi(empty());
+    const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    fireEvent.click(await view.findByRole('tab', { name: 'Test Plan' }));
+    await view.findByTestId('e2e-saved-case-picker');
+    await pickSaved(view, 'Test Plan', 'Checkout');
+    await pickSaved(view, 'Test Suite', 'Plano de pagamento');
+    fireEvent.click(await view.findByLabelText(/Pagar com pix/));
+    fireEvent.click(view.getByRole('button', { name: 'Gerar' }));
+    await waitFor(() =>
+      expect(client.generateE2eTests).toHaveBeenLastCalledWith('c1', {
+        savedCases: { planId: 'p1', caseIds: ['k1'] },
+      }),
+    );
+  });
+
+  it('only adds cases to a run that already has tests, and only for who can write', async () => {
+    const client = generateApi(run());
+    const view = render(<E2eRunView {...props} apiClient={asClient(client)} />);
+    fireEvent.click(await view.findByRole('button', { name: 'Gerar testes' }));
+    // Planning again would replace the tests it has.
+    expect(await view.findByRole('tab', { name: 'Test Plan' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    const prdTab = view.getByRole('tab', { name: 'PRD' });
+    expect((prdTab as HTMLButtonElement).disabled).toBe(true);
+    expect(prdTab).toHaveAttribute(
+      'title',
+      'Esta execução já tem testes; planejar de novo os substituiria.',
+    );
+    view.unmount();
+
+    const viewer = render(<E2eRunView {...props} isReadOnly apiClient={asClient(client)} />);
+    await viewer.findByText('3 testes em storefront.example');
+    expect(viewer.queryByRole('button', { name: 'Gerar testes' })).toBeNull();
+    viewer.unmount();
+
+    // Nothing can be generated while the run works.
+    const busy = render(
+      <E2eRunView {...props} apiClient={asClient(generateApi(run({ status: 'running' })))} />,
+    );
+    await busy.findByRole('status');
+    expect(busy.queryByRole('button', { name: 'Gerar testes' })).toBeNull();
   });
 });

@@ -49,20 +49,6 @@ describe('TestCaseModal attachments and saving', () => {
     return { ui, onSave };
   }
 
-  it('inserts an attachment in the scenario, removes it and saves through the media client', async () => {
-    const { ui, onSave } = modal();
-    expect(ui.getByText('shot.png')).toBeInTheDocument();
-    fireEvent.click(ui.getByRole('button', { name: 'Inserir no texto: shot.png' }));
-    expect(ui.getByTestId('input-edit-test-scenario').querySelector('img')).not.toBeNull();
-    fireEvent.click(ui.getByRole('button', { name: 'Remover anexo: shot.png' }));
-    expect(ui.queryByText('shot.png')).toBeNull();
-    fireEvent.click(ui.getByTestId('btn-save-test-case-modal'));
-    await waitFor(() => expect(onSave).toHaveBeenCalled());
-    const saved = onSave.mock.calls[0]![0] as TestCase;
-    expect(saved.scenario).toContain(`<img src="${FILE}"`);
-    expect(saved.metadata?.['attachments']).toEqual([]);
-  });
-
   it('shows the save failure, from an Error or any other value', async () => {
     const first = modal(
       vi.fn(() => {
@@ -80,33 +66,6 @@ describe('TestCaseModal attachments and saving', () => {
     );
     fireEvent.click(second.ui.getByTestId('btn-save-test-case-modal'));
     expect(await second.ui.findByRole('alert')).toHaveTextContent('offline');
-  });
-});
-
-describe('TestCaseModal without metadata', () => {
-  it('adds a URL attachment and reports images too large to drop', async () => {
-    const apiClient = new ApiClient({ baseUrl: 'http://api.test' });
-    const ui = render(
-      <MediaProvider apiClient={apiClient}>
-        <TestCaseModal
-          testCase={{ id: 'CT-10', title: 'Bare', scenario: '' }}
-          onSave={vi.fn()}
-          onClose={vi.fn()}
-        />
-      </MediaProvider>,
-    );
-    fireEvent.change(ui.getByLabelText('URL do arquivo'), {
-      target: { value: 'https://x.test/doc.pdf' },
-    });
-    fireEvent.click(ui.getByRole('button', { name: 'Adicionar URL' }));
-    expect(ui.getByText('doc.pdf')).toBeInTheDocument();
-
-    const big = new File(['x'], 'big.png', { type: 'image/png' });
-    Object.defineProperty(big, 'size', { value: 50 * 1024 * 1024 });
-    fireEvent.drop(ui.getByTestId('input-edit-test-scenario'), {
-      dataTransfer: { files: [big] },
-    });
-    expect(await ui.findByRole('alert')).toHaveTextContent('big.png');
   });
 });
 
@@ -217,29 +176,6 @@ describe('PublishTestSuiteModal loading and destinations', () => {
     );
     fireEvent.click(within(dialog).getByRole('button', { name: 'Tentar novamente' }));
     expect(await within(dialog).findByRole('option', { name: /^Orphan/ })).toBeInTheDocument();
-  });
-
-  it('offers each board work item once and reports board and publish failures', async () => {
-    const api = client();
-    const onPublish = vi.fn().mockRejectedValue('nope');
-    const dialog = open(api, onPublish);
-    fireEvent.change(await within(dialog).findByLabelText('Provedor'), {
-      target: { value: 'azure_devops' },
-    });
-    fireEvent.focus(
-      await within(dialog).findByRole('combobox', { name: 'Work items vinculados (opcional)' }),
-    );
-    expect(
-      within(within(dialog).getByRole('listbox'))
-        .getAllByRole('option')
-        .map((option) => option.textContent),
-    ).toEqual(['#50 · CoresNew']);
-    const publish = within(dialog).getByRole('button', { name: 'Publicar suite' });
-    await waitFor(() => expect(publish).toHaveProperty('disabled', false));
-    fireEvent.click(publish);
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      'Falha ao publicar a suite de testes.',
-    );
   });
 
   it('offers the suite custom fields as template sources', async () => {

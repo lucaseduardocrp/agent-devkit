@@ -913,10 +913,23 @@ model E2eTestCaseRecord {
   scriptPath   String?   @map("script_path")
   beforeRunInstructions String? @map("before_run_instructions") @db.Text
   afterRunInstructions  String? @map("after_run_instructions") @db.Text
+  /// What the user tells the AI about how to write the spec; kept for every later rewrite.
+  scriptInstructions    String? @map("script_instructions") @db.Text
+  /// How the user decides the test passes; the spec asserts it and a run that meets it counts as passed.
+  successCriteria       String? @map("success_criteria") @db.Text
+  /// Saved environment this test runs with instead of the run's; null inherits the run's.
+  environmentId         String? @map("environment_id")
+  /// JSON {script, problem}: the previous spec and what its last run produced, read once by the next rewrite.
+  regenerationFeedback  String? @map("regeneration_feedback") @db.Text
   /// JSON: the test management case this test automates (ExternalTestCase).
   externalCase String?   @map("external_case") @db.Text
+  /// JSON: the test case saved in ADK (Test Plans) this test is linked to ({ planId, caseId }).
+  savedCase    String?   @map("saved_case") @db.Text
   stepResults  Json      @default("[]") @map("step_results")
   status       String    @default("pending")
+  /// Who decided the status: "run", "criteria" (met the user's success criteria) or "manual".
+  resultSource String    @default("run") @map("result_source")
+  resultNote   String?   @map("result_note") @db.Text
   error        String?   @db.Text
   analysis     String?   @db.Text
   verdict      String?

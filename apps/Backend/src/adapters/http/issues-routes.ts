@@ -1,4 +1,4 @@
-import { Router, type Request } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { ApplicationError } from '../../shared/errors.js';
 import { requireAuth } from './auth-middleware.js';
@@ -9,7 +9,8 @@ import type { AgentService } from '../../modules/agents/application/agent-servic
 import type { WorkspaceService } from '../../modules/workspaces/application/workspace-service.js';
 import type { Issue, IssueStore, IssueChanges } from '../../modules/issues/issue-store.js';
 import type { RunService } from '../../modules/issues/run-service.js';
-import type { EventBus } from '../../modules/realtime/event-bus.js';
+import type { AgentRun } from '../../modules/issues/run-store.js';
+import type { EventBus, RealtimeEvent } from '../../modules/realtime/event-bus.js';
 import { issueNotificationData } from '../../modules/notifications/application/issue-notifications.js';
 import type { NotificationService } from '../../modules/notifications/application/notification-service.js';
 import type { IssueBriefService } from '../../modules/issues/agent-brief/brief-service.js';
@@ -149,6 +150,7 @@ const usageFields = z.object({
   inputTokens: tokenCount,
   outputTokens: tokenCount,
   estimated: z.boolean().default(true),
+  source: z.enum(['mcp', 'cli', 'api']).default('mcp'),
 });
 
 /** Issue fields the brief engine reads; changing status or assignment does not regenerate it. */
@@ -242,6 +244,43 @@ export function createIssuesRouter(
   events?: EventBus,
   notifications?: Pick<NotificationService, 'dispatch' | 'issueUrl'>,
 ): Router {
+  /** Tells the open inboxes of the workspace that an issue moved (a comment, a read mark). */
+  const announceIssue = (request: Request, issueId: string) =>
+    events?.publish(workspaceId(request), 'issue', { issueId }, issueId);
+
+  /**
+   * Opens a server-sent stream of the workspace's events. `frame` turns an event into what is sent
+   * (or null to skip it). Declared stream routes must come before their `/:id` siblings.
+   */
+  const openStream = (
+    request: Request,
+    response: Response,
+    frame: (event: RealtimeEvent) => { name: string; data: unknown } | null,
+  ) => {
+    const workspace = workspaceId(request);
+    if (!events)
+      throw new ApplicationError('REALTIME_UNAVAILABLE', 'Live updates are not available.', 501);
+    response.status(200).set({
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      // no-transform keeps the compression middleware from buffering the stream.
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    response.flushHeaders();
+    response.write('retry: 3000\n\nevent: ready\ndata: {}\n\n');
+    const unsubscribe = events.subscribe(workspace, (event) => {
+      const sent = frame(event);
+      if (sent) response.write(`event: ${sent.name}\ndata: ${JSON.stringify(sent.data)}\n\n`);
+    });
+    const heartbeat = setInterval(() => response.write(': keep-alive\n\n'), STREAM_HEARTBEAT_MS);
+    const close = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    request.on('close', close);
+    response.on('error', close);
+  };
   /**
    * Tells the people an issue was just handed to (assignee, proofreader) when rules ask for it.
    * Not awaited: delivering can take seconds (SMTP) and must never delay or fail the request.
@@ -503,6 +542,7 @@ export function createIssuesRouter(
       const issue = await findIssue(store, request);
       const { body } = parseBody(commentFields, request);
       const comment = await store.addComment(issue.id, actorId(request), body);
+      announceIssue(request, issue.id);
       let run;
       let pending = false;
       let automationError: string | undefined = issue.assigneeAgentId
@@ -528,6 +568,25 @@ export function createIssuesRouter(
         ...(run ? { run } : {}),
         ...(pending ? { pending: true } : {}),
         ...(automationError ? { automationError } : {}),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+  // Server-sent events: a nudge, with the issue concerned, whenever something that can change the
+  // inbox of the caller happens: a run executed while the issue was assigned to them, or any change
+  // of an issue. The inbox is private, so the client reads it again from GET /inbox; nothing of
+  // another user's inbox travels here.
+  router.get('/inbox/stream', requireAuth, (request, response, next) => {
+    try {
+      const userId = actorId(request);
+      openStream(request, response, (event) => {
+        if (event.type === 'issue') return { name: 'inbox', data: event.data };
+        if (event.type !== 'run') return null;
+        const run = event.data as Pick<AgentRun, 'issueId' | 'assigneeUserId'>;
+        return run.assigneeUserId === userId
+          ? { name: 'inbox', data: { issueId: run.issueId } }
+          : null;
       });
     } catch (error) {
       next(error);
@@ -594,6 +653,8 @@ export function createIssuesRouter(
         archivedAt:
           archived === undefined ? (current?.archivedAt ?? null) : archived ? new Date() : null,
       });
+      // The user's other open windows follow the read or archived mark.
+      announceIssue(request, issue.id);
       response.json({ state });
     } catch (error) {
       next(error);
@@ -665,28 +726,7 @@ export function createIssuesRouter(
   // /runs/:id so "stream" is not taken for a run id.
   router.get('/runs/stream', requireAuth, (request, response, next) => {
     try {
-      const workspace = workspaceId(request);
-      if (!events)
-        throw new ApplicationError('REALTIME_UNAVAILABLE', 'Live updates are not available.', 501);
-      response.status(200).set({
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        // no-transform keeps the compression middleware from buffering the stream.
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
-      response.flushHeaders();
-      response.write('retry: 3000\n\nevent: ready\ndata: {}\n\n');
-      const unsubscribe = events.subscribe(workspace, (event) => {
-        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
-      });
-      const heartbeat = setInterval(() => response.write(': keep-alive\n\n'), STREAM_HEARTBEAT_MS);
-      const close = () => {
-        clearInterval(heartbeat);
-        unsubscribe();
-      };
-      request.on('close', close);
-      response.on('error', close);
+      openStream(request, response, (event) => ({ name: event.type, data: event.data }));
     } catch (error) {
       next(error);
     }

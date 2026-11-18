@@ -21,6 +21,20 @@ import type { KnowledgeSearchPort } from '../src/modules/knowledge/application/k
 import type { DynamicProviderFactory } from '../src/modules/integrations/application/dynamic-provider-factory.js';
 
 describe('Test Plan Domain - parseAndNormalizeTestPlans', () => {
+  it('keeps the finished cases of an answer that was cut off midway', () => {
+    const cut =
+      '[{"title":"One","description":"d","steps":[{"action":"Open the screen","expected":"It opens"}]},' +
+      '{"title":"Two","description":"d","steps":[{"action":"Click {save}","expected":"Saved"}]},' +
+      '{"title":"Three","description":"d","steps":[{"action":"Open the';
+    const plans = parseAndNormalizeTestPlans(cut);
+    expect(plans.map((plan) => plan.title)).toEqual(['One', 'Two']);
+    expect(plans[1]!.steps[0]!.action).toBe('Click {save}');
+  });
+
+  it('still rejects an answer with no finished case', () => {
+    expect(() => parseAndNormalizeTestPlans('[{"title":"One","steps":[{"action":"Open')).toThrow();
+  });
+
   it('throws on empty or whitespace input', () => {
     expect(() => parseAndNormalizeTestPlans('')).toThrow('Resposta vazia.');
     expect(() => parseAndNormalizeTestPlans('   ')).toThrow('Resposta vazia.');

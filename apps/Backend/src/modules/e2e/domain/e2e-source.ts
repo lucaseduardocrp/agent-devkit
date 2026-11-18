@@ -91,6 +91,67 @@ export function sourceDiscovery(source: Pick<E2eSource, 'pages' | 'script'>) {
   };
 }
 
+const SCRIPT_PAGES = 40;
+const SCRIPT_CONTROLS = 30;
+const SCRIPT_NAVIGATION = 80;
+
+/** What an author of test scripts reads of an exploration: pages with controls and the path taken. */
+export interface E2eScriptExploration {
+  readonly pages: readonly {
+    readonly name: string;
+    readonly url: string;
+    readonly summary: string;
+    readonly controls: readonly string[];
+  }[];
+  readonly navigation: readonly {
+    readonly action: string;
+    readonly target: string;
+    readonly ledTo: string | null;
+    readonly why?: string;
+  }[];
+}
+
+/**
+ * The explorations (of the run and the Source of the workspace) as context to write a script:
+ * pages and steps without repeats, the first exploration given first, and bounded in size.
+ * Null when nothing was discovered.
+ */
+export function scriptExploration(
+  explorations: readonly (Pick<E2eSource, 'pages' | 'script'> | null | undefined)[],
+): E2eScriptExploration | null {
+  const pages = new Map<string, E2eScriptExploration['pages'][number]>();
+  const steps = new Map<string, E2eScriptExploration['navigation'][number]>();
+  for (const exploration of explorations) {
+    if (!exploration) continue;
+    for (const page of exploration.pages) {
+      const key = `${page.url}|${page.title}`;
+      if (pages.has(key)) continue;
+      pages.set(key, {
+        name: page.title,
+        url: page.url,
+        summary: page.summary,
+        controls: page.elements.slice(0, SCRIPT_CONTROLS),
+      });
+    }
+    for (const entry of exploration.script) {
+      if (entry.action === 'note') continue;
+      const key = `${entry.action}|${entry.target}|${entry.result ?? ''}`;
+      if (steps.has(key)) continue;
+      steps.set(key, {
+        action: entry.action,
+        target: entry.target.slice(0, 200),
+        ledTo: entry.result ? entry.result.slice(0, 200) : null,
+        ...(entry.reason ? { why: entry.reason.slice(0, 200) } : {}),
+      });
+    }
+  }
+  if (!pages.size && !steps.size) return null;
+  return {
+    pages: [...pages.values()].slice(0, SCRIPT_PAGES),
+    navigation: [...steps.values()].slice(0, SCRIPT_NAVIGATION),
+  };
+}
+
 /** One way through the application: the action that ends it and the pages it goes through. */
 export interface E2eSourceFlow {
   readonly id: string;

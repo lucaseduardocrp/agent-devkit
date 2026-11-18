@@ -92,7 +92,7 @@ function setup(
     scripts,
     ...options,
   });
-  return { service, store, runner, author, scripts, worker };
+  return { service, store, runner, author, scripts, worker, artifacts };
 }
 
 describe('E2eService access credentials', () => {
@@ -183,7 +183,7 @@ describe('E2eService execution target', () => {
   });
 
   it('explores a tunnelled run through its public URL when a deleted spec is rewritten', async () => {
-    const { service, runner, scripts, worker } = setup();
+    const { service, runner, scripts, worker, artifacts } = setup();
     const tunnel = {
       ...input,
       baseUrl: 'https://sample.trycloudflare.com',
@@ -193,6 +193,8 @@ describe('E2eService execution target', () => {
     await worker.idle();
     const [test] = (await service.get('ws', created.id)).tests;
     scripts.files.clear();
+    // A snapshot kept from the plan would be reused: the application is read afresh here.
+    await artifacts.removePrefix(`ws/${created.id}/snapshot.json`);
     runner.explore.mockClear();
     await service.rerunTest('ws', test!.id);
     await worker.idle();

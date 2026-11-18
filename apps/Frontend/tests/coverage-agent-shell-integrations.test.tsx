@@ -171,7 +171,7 @@ describe('IntegrationConfigModal provider forms', () => {
     );
   });
 
-  it('saves the GitHub project number', async () => {
+  it('saves the GitHub project owner and number', async () => {
     const { view, save } = renderModal(item('github_projects', 'GitHub', 'PROJECT_MANAGEMENT'));
 
     fill(view, {

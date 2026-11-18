@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ApiClient, SavedTestPlanDto, TestSuiteDto } from '../../lib/api-client.js';
 import { cn } from '../../lib/utils.js';
 import { useI18n } from '../../lib/i18n/index.js';
-import { Select } from '../../components/ui/select.js';
+import {
+  SearchableSelect,
+  type SearchableSelectOption,
+} from '../../components/ui/searchable-select.js';
+import { Skeleton, SkeletonInput } from '../../components/ui/skeleton.js';
+
+const SELECT_PAGE_SIZE = 25;
 
 /**
  * Test cases saved in ADK picked for a run; empty strings mean "not chosen". The suite stays
@@ -18,6 +24,7 @@ export interface SavedCaseSelection {
 export const EMPTY_SAVED_SELECTION: SavedCaseSelection = { suiteId: '', planId: '', caseIds: null };
 
 interface SavedCase {
+  readonly planId: string;
   readonly caseId: string;
   readonly title: string;
   readonly planTitle: string;
@@ -35,16 +42,16 @@ function descendants(suites: readonly TestSuiteDto[], rootId: string): Set<strin
   return ids;
 }
 
-/** Suites in tree order with their depth. */
+/** Suites in tree order: each one right after its parent. */
 function inTreeOrder(suites: readonly TestSuiteDto[]) {
-  const ordered: { suite: TestSuiteDto; depth: number }[] = [];
-  const visit = (parentId: string | undefined, depth: number) => {
+  const ordered: TestSuiteDto[] = [];
+  const visit = (parentId: string | undefined) => {
     for (const suite of suites.filter((item) => item.parentId === parentId)) {
-      ordered.push({ suite, depth });
-      visit(suite.id, depth + 1);
+      ordered.push(suite);
+      visit(suite.id);
     }
   };
-  visit(undefined, 0);
+  visit(undefined);
   return ordered;
 }
 
@@ -56,11 +63,17 @@ export function E2eSavedCasePicker({
   apiClient,
   value,
   invalid = false,
+  single = false,
+  onPickCase,
   onChange,
 }: {
   readonly apiClient: ApiClient;
   readonly value: SavedCaseSelection;
   readonly invalid?: boolean;
+  /** Picks exactly one case instead of a set of them. */
+  readonly single?: boolean;
+  /** With `single`: the Test Plan and case just picked (the plan is not part of the selection). */
+  readonly onPickCase?: (pick: { readonly planId: string; readonly caseId: string }) => void;
   readonly onChange: (value: SavedCaseSelection) => void;
 }) {
   const { messages } = useI18n();
@@ -93,68 +106,80 @@ export function E2eSavedCasePicker({
     const ids = descendants(suites, suiteId);
     return plans.filter((plan) => plan.suiteId && ids.has(plan.suiteId));
   }, [suites, plans, suiteId]);
+  const suiteOptions = useMemo<SearchableSelectOption[]>(
+    // All at the same level: the Test Plans are not shown as a tree.
+    () => inTreeOrder(suites ?? []).map((suite) => ({ value: suite.id, label: suite.name })),
+    [suites],
+  );
+  const planOptions = useMemo<SearchableSelectOption[]>(
+    () => suitePlans.map((plan) => ({ value: plan.id, label: plan.title })),
+    [suitePlans],
+  );
   const cases: SavedCase[] = (
     value.planId ? suitePlans.filter((plan) => plan.id === value.planId) : suitePlans
   ).flatMap((plan) =>
     plan.plans.flatMap((testCase) => {
       const caseId = testCase.metadata?.['caseId'];
       return typeof caseId === 'string'
-        ? [{ caseId, title: testCase.title, planTitle: plan.title }]
+        ? [{ planId: plan.id, caseId, title: testCase.title, planTitle: plan.title }]
         : [];
     }),
   );
-  const selected = new Set(value.caseIds ?? cases.map((item) => item.caseId));
+  // A single pick has no "every case" default: nothing is chosen until one is.
+  const selected = new Set(value.caseIds ?? (single ? [] : cases.map((item) => item.caseId)));
   const select = (next: Set<string>) =>
     onChange({
       ...value,
       suiteId,
-      caseIds: next.size === cases.length ? null : [...next],
+      caseIds: !single && next.size === cases.length ? null : [...next],
     });
 
   if (error) return <p className="text-sm text-red-400">{error}</p>;
-  if (!suites || !plans) return <p className="text-sm text-[var(--text-muted)]">{c.loading}</p>;
+  if (!suites || !plans)
+    return (
+      <div
+        className="flex flex-col gap-3"
+        role="status"
+        aria-label={c.loading}
+        data-testid="e2e-saved-case-picker-loading"
+      >
+        <div className="flex flex-col gap-1.5">
+          <Skeleton className="h-3 w-16" />
+          <SkeletonInput className="h-[48px]" />
+        </div>
+        <Skeleton className="h-3 w-2/3" />
+      </div>
+    );
   if (!plans.length) return <p className="text-sm text-[var(--text-muted)]">{c.nothingSaved}</p>;
 
   return (
     <div className="flex flex-col gap-3" data-testid="e2e-saved-case-picker">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="flex min-w-0 flex-col gap-1.5 text-sm text-[var(--text-secondary)]">
+      <div className="flex flex-col gap-3">
+        <div className="flex min-w-0 flex-col gap-1.5 text-sm text-[var(--text-secondary)]">
           {c.suite}
-          <Select
+          <SearchableSelect
+            label={c.suite}
             value={suiteId}
-            onChange={(event) =>
-              onChange({ suiteId: event.target.value, planId: '', caseIds: null })
-            }
-          >
-            <option value="">{c.anySuite}</option>
-            {inTreeOrder(suites).map(({ suite, depth }) => (
-              <option key={suite.id} value={suite.id}>
-                {`${'  '.repeat(depth)}${suite.name}`}
-              </option>
-            ))}
-          </Select>
-        </label>
+            options={suiteOptions}
+            placeholder={c.anySuite}
+            emptyMessage={c.noMatches}
+            pageSize={SELECT_PAGE_SIZE}
+            onChange={(next) => onChange({ suiteId: next, planId: '', caseIds: null })}
+          />
+        </div>
         {suiteId && (
-          <label className="flex min-w-0 flex-col gap-1.5 text-sm text-[var(--text-secondary)]">
+          <div className="flex min-w-0 flex-col gap-1.5 text-sm text-[var(--text-secondary)]">
             {c.plan}
-            <Select
+            <SearchableSelect
+              label={c.plan}
               value={value.planId}
-              onChange={(event) =>
-                onChange({
-                  suiteId,
-                  planId: event.target.value,
-                  caseIds: null,
-                })
-              }
-            >
-              <option value="">{c.allPlans}</option>
-              {suitePlans.map((plan) => (
-                <option key={plan.id} value={plan.id}>
-                  {plan.title}
-                </option>
-              ))}
-            </Select>
-          </label>
+              options={planOptions}
+              placeholder={c.allPlans}
+              emptyMessage={c.noMatches}
+              pageSize={SELECT_PAGE_SIZE}
+              onChange={(next) => onChange({ suiteId, planId: next, caseIds: null })}
+            />
+          </div>
         )}
       </div>
       {suiteId &&
@@ -167,37 +192,43 @@ export function E2eSavedCasePicker({
               invalid && 'border-red-500/60',
             )}
           >
-            <label className="flex cursor-pointer items-center gap-3 border-b border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--text-secondary)]">
-              <input
-                type="checkbox"
-                checked={selected.size === cases.length}
-                onChange={() =>
-                  select(
-                    selected.size === cases.length
-                      ? new Set()
-                      : new Set(cases.map((item) => item.caseId)),
-                  )
-                }
-              />
-              <span className="flex-1">{c.allCases.replace('{count}', String(cases.length))}</span>
-              <span className="text-xs text-[var(--text-muted)]">
-                {c.selected
-                  .replace('{count}', String(selected.size))
-                  .replace('{total}', String(cases.length))}
-              </span>
-            </label>
+            {!single && (
+              <label className="flex cursor-pointer items-center gap-3 border-b border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--text-secondary)]">
+                <input
+                  type="checkbox"
+                  checked={selected.size === cases.length}
+                  onChange={() =>
+                    select(
+                      selected.size === cases.length
+                        ? new Set()
+                        : new Set(cases.map((item) => item.caseId)),
+                    )
+                  }
+                />
+                <span className="flex-1">
+                  {c.allCases.replace('{count}', String(cases.length))}
+                </span>
+                <span className="text-xs text-[var(--text-muted)]">
+                  {c.selected
+                    .replace('{count}', String(selected.size))
+                    .replace('{total}', String(cases.length))}
+                </span>
+              </label>
+            )}
             <ul className="max-h-64 overflow-y-auto">
               {cases.map((item) => (
                 <li key={item.caseId}>
                   <label className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-[var(--surface-2)]">
                     <input
-                      type="checkbox"
+                      type={single ? 'radio' : 'checkbox'}
+                      name={single ? 'e2e-saved-case' : undefined}
                       checked={selected.has(item.caseId)}
                       onChange={() => {
-                        const next = new Set(selected);
-                        if (next.has(item.caseId)) next.delete(item.caseId);
+                        const next = new Set(single ? [] : selected);
+                        if (selected.has(item.caseId) && !single) next.delete(item.caseId);
                         else next.add(item.caseId);
                         select(next);
+                        onPickCase?.({ planId: item.planId, caseId: item.caseId });
                       }}
                     />
                     <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">
@@ -212,7 +243,7 @@ export function E2eSavedCasePicker({
             </ul>
           </div>
         ))}
-      <p className="text-xs text-[var(--text-muted)]">{c.hint}</p>
+      {!single && <p className="text-xs text-[var(--text-muted)]">{c.hint}</p>}
     </div>
   );
 }

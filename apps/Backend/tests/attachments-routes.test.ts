@@ -282,7 +282,7 @@ describe('stored file lifecycle', () => {
       { description: 'no images', attachments: [second] },
     );
     expect(await readAttachmentMeta(store, 'ws-1', first.id)).toBeNull();
-    expect(await store.get(attachmentContentKey('ws-1', first.id))).toBeNull();
+    expect(await store.get(attachmentContentKey('ws-1', first.id, 'image'))).toBeNull();
 
     // Deleting the item deletes its files, but never files another item owns.
     const shared = await upload(app);

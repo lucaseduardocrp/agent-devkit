@@ -186,6 +186,14 @@ export interface WorkflowViewport {
   readonly zoom: number;
 }
 
+/** The rectangle, in canvas space, that a viewport has to bring into view. */
+export interface CanvasBounds {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
 /**
  * The viewport that shows every node at once: as large as fits (never above 100%, never below
  * `minZoom`), centred in the surface. Null while the surface or the graph has no size to fit.
@@ -193,13 +201,30 @@ export interface WorkflowViewport {
 export function fitViewport(
   nodes: readonly WorkflowNode[],
   surface: { readonly width: number; readonly height: number },
+  options: { readonly padding: number; readonly minZoom: number },
+): WorkflowViewport | null {
+  const bounds = nodeBounds(nodes);
+  return bounds ? fitBounds(bounds, surface, options) : null;
+}
+
+/** The rectangle that holds every node; null for a graph without nodes. */
+export function nodeBounds(nodes: readonly WorkflowNode[]): CanvasBounds | null {
+  if (nodes.length === 0) return null;
+  return {
+    left: Math.min(...nodes.map((node) => node.x)),
+    top: Math.min(...nodes.map((node) => node.y)),
+    right: Math.max(...nodes.map((node) => node.x + nodeSize(node.kind).width)),
+    bottom: Math.max(...nodes.map((node) => node.y + nodeSize(node.kind).height)),
+  };
+}
+
+/** The viewport that shows a whole rectangle; the same rules as `fitViewport`. */
+export function fitBounds(
+  { left, top, right, bottom }: CanvasBounds,
+  surface: { readonly width: number; readonly height: number },
   { padding, minZoom }: { readonly padding: number; readonly minZoom: number },
 ): WorkflowViewport | null {
-  if (nodes.length === 0 || surface.width <= 0 || surface.height <= 0) return null;
-  const left = Math.min(...nodes.map((node) => node.x));
-  const top = Math.min(...nodes.map((node) => node.y));
-  const right = Math.max(...nodes.map((node) => node.x + nodeSize(node.kind).width));
-  const bottom = Math.max(...nodes.map((node) => node.y + nodeSize(node.kind).height));
+  if (surface.width <= 0 || surface.height <= 0) return null;
   // Rounded down, like the zoom buttons round: the label and the layout use the same number.
   const zoom = Math.max(
     minZoom,

@@ -129,6 +129,10 @@ export const enUS = {
     'The Requirement Based Suite is created when publishing: choose a new Test Plan or a new suite inside the selected one.',
   AGENT_LOAD_FAILED: 'The selected agent could not be loaded.',
   AGENT_NOT_AVAILABLE: 'The selected agent is unavailable for this generator.',
+  AGENT_WORKFLOW_AGENT_REQUIRED:
+    'Select an agent (or set a default agent in the workspace) before generating this test plan.',
+  AGENT_WORKFLOW_OUTPUT_INVALID:
+    'The agent did not return valid test cases. Try again, detail the requirement or reduce the selected context.',
   NOT_FOUND: 'Resource not found.',
   USER_ALREADY_EXISTS: 'User with this email already exists.',
   INVALID_CREDENTIALS: 'Invalid email or password.',
@@ -180,6 +184,23 @@ export const enUS = {
     'The AI provider quota or rate limit was reached. Check billing and usage limits, then try again.',
   LLM_AUTHENTICATION_FAILED: 'The AI provider rejected the configured API key.',
   LLM_MODEL_UNAVAILABLE: 'The configured AI model is unavailable for this API key.',
+  LLM_CLI_NOT_INSTALLED:
+    'The provider CLI is not installed where it should run (the machine of the API, or the Bridge).',
+  LLM_CLI_NOT_AUTHENTICATED:
+    'The provider CLI is not signed in. Check the CLI token in the integration, or sign in on the machine that runs the CLI.',
+  LLM_CLI_BRIDGE_UNAVAILABLE:
+    'The Bridge that runs the provider CLI could not be reached. Check that it is running and that BRIDGE_URL and BRIDGE_SHARED_TOKEN are right.',
+  LLM_CLI_UNSUPPORTED: 'The provider CLI does not support this request. Use an API key instead.',
+  LLM_CLI_DISABLED:
+    'Provider CLIs are turned off on this server. Ask the administrator to set ADK_LLM_CLI=true or to configure the Bridge.',
+  LLM_CLI_INVALID_MODEL: 'The CLI model name is not valid.',
+  LLM_CLI_PROFILE_INVALID:
+    'The account name must use letters, numbers, "-" or "_" (up to 32 characters).',
+  LLM_CLI_PROFILES_UNSUPPORTED:
+    'Separate CLI accounts are only available for Claude and Codex run on this machine.',
+  LLM_CLI_INVALID_CONFIG_DIR:
+    'The CLI login folder must be an absolute path, such as C:\\Users\\you\\.claude-account2.',
+  LLM_TIMEOUT: 'The AI provider took too long to answer.',
   SLUG_CONFLICT: 'A resource with this identifier already exists.',
   USER_NOT_FOUND: 'User not found.',
   WORKSPACE_ACCESS_DENIED: 'You do not have access to this workspace.',
@@ -210,8 +231,13 @@ export const enUS = {
   E2E_TEST_NOT_FOUND: 'E2E test not found.',
   E2E_ALREADY_RUNNING: 'This E2E run is already in progress.',
   E2E_NOT_RUNNING: 'This E2E run is not in progress.',
+  E2E_SUCCESS_CRITERIA_REQUIRED: 'Write the success criteria before reviewing the result.',
+  E2E_RESULT_NOT_REVIEWABLE: 'This test has no finished result to review. Run it first.',
+  E2E_REVIEW_UNAVAILABLE: 'The AI review of results is not available right now.',
+  E2E_CASE_CHAT_UNAVAILABLE: 'Fixing a test case with AI is not available right now.',
   E2E_VIDEO_NOT_FOUND: 'No video is available for this test.',
   E2E_PLAN_INVALID: 'The AI did not return a valid test plan. Try again.',
+  E2E_EXPLORE_ACTION_INVALID: 'The AI did not return a valid step for the exploration.',
   E2E_SOURCE_INVALID: 'The AI did not return a valid documentation of the system. Try again.',
   E2E_TARGET_UNREACHABLE:
     'Could not reach the application. Make sure the server is running and reachable from the backend.',
@@ -219,6 +245,8 @@ export const enUS = {
     'Playwright Chromium is not installed on the backend. Run "npx playwright install chromium" in apps/Backend.',
   E2E_RUNNER_FAILED: 'The E2E test runner failed.',
   E2E_SCRIPT_REJECTED: 'The generated script was blocked by the security checks.',
+  E2E_LOCAL_FOLDER_UNAVAILABLE:
+    'This ADK server cannot read folders of your computer. Local folders only work through the ADK desktop app: use its own address ("Copy MCP server address" in the ADK menu, http://localhost:<port>/mcp) instead of the hosted one.',
   E2E_INTERRUPTED: 'The backend restarted during the run. Run it again.',
   E2E_LOCAL_RUNNER_UNAVAILABLE:
     'No local runner picked up the test. On your computer, run "devkit runner" signed in with your ADK account, then run the tests again.',
@@ -255,13 +283,9 @@ export const enUS = {
   AGENT_TOO_MANY_SKILLS: 'This agent has more skills than allowed.',
   AGENT_WORKFLOW_AGENT_IN_USE:
     'This agent is used by the active workspace workflow. Update the workflow before deleting it.',
-  AGENT_WORKFLOW_AGENT_REQUIRED:
-    'An agent must be selected in the workflow or workspace before generating this test plan.',
   AGENT_WORKFLOW_EMPTY: 'An enabled workflow needs at least one step or module rule.',
   AGENT_WORKFLOW_INVALID_RULE: 'A workflow module rule is invalid.',
   AGENT_WORKFLOW_INVALID_STEP: 'A workflow step is invalid.',
-  AGENT_WORKFLOW_OUTPUT_INVALID: 'The agent workflow did not produce valid localized test steps.',
-  AGENT_WORKFLOW_PROVIDER_ACTION_REQUIRED: 'Provider restrictions need an exact action name.',
   AGENT_WORKFLOW_TOO_LONG: 'A workflow can have at most 20 steps.',
   AGENT_WORKFLOW_TOO_MANY_RULES: 'A workflow can have at most 100 module rules.',
   ATTACHMENTS_UNAVAILABLE: 'File storage is not configured.',

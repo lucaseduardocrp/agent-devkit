@@ -1,6 +1,6 @@
 import type { E2eArtifactStore } from '../e2e/application/artifact-store.js';
 
-export const attachmentScopes = ['issue', 'pbi', 'brain', 'spec', 'testcase'] as const;
+export const attachmentScopes = ['issue', 'pbi', 'brain', 'spec', 'testcase', 'e2e'] as const;
 export type AttachmentScope = (typeof attachmentScopes)[number];
 export type AttachmentKind = 'image' | 'video' | 'document';
 
@@ -147,12 +147,67 @@ export function attachmentFileUrl(id: string): string {
   return `/attachments/files/${id}`;
 }
 
-export function attachmentContentKey(workspaceId: string, id: string): string {
-  return `attachments/${workspaceId}/${id}/content`;
+/** Folder of `attachments/` that holds each kind of file: documents, images and videos. */
+export const attachmentFolders: Readonly<Record<AttachmentKind, string>> = {
+  document: 'files',
+  image: 'images',
+  video: 'videos',
+};
+
+export function attachmentContentKey(workspaceId: string, id: string, kind: AttachmentKind) {
+  return `attachments/${attachmentFolders[kind]}/${workspaceId}/${id}/content`;
 }
 
-export function attachmentMetaKey(workspaceId: string, id: string): string {
-  return `attachments/${workspaceId}/${id}/meta.json`;
+export function attachmentMetaKey(workspaceId: string, id: string, kind: AttachmentKind) {
+  return `attachments/${attachmentFolders[kind]}/${workspaceId}/${id}/meta.json`;
+}
+
+/** Where files were kept before they were split by kind: `attachments/<workspace>/<id>/...`. */
+function flatAttachmentKey(workspaceId: string, id: string, name: 'content' | 'meta.json') {
+  return `attachments/${workspaceId}/${id}/${name}`;
+}
+
+/** Every place a file can be, the split folders first and the old flat one last. */
+export function attachmentPrefixes(workspaceId: string, id: string): string[] {
+  return [
+    ...Object.values(attachmentFolders).map(
+      (folder) => `attachments/${folder}/${workspaceId}/${id}`,
+    ),
+    `attachments/${workspaceId}/${id}`,
+  ];
+}
+
+function parseMeta(raw: Buffer): StoredAttachmentMeta | null {
+  try {
+    return JSON.parse(raw.toString('utf8')) as StoredAttachmentMeta;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Finds the record of a file by its id, which is all a link carries: the kind (and so the
+ * folder) is only known once the record is read. `key` is where it was found, so it can be
+ * written back in place.
+ */
+export async function locateAttachmentMeta(
+  store: E2eArtifactStore,
+  workspaceId: string,
+  id: string,
+): Promise<{ meta: StoredAttachmentMeta; key: string } | null> {
+  const keys = [
+    ...(Object.keys(attachmentFolders) as AttachmentKind[]).map((kind) =>
+      attachmentMetaKey(workspaceId, id, kind),
+    ),
+    flatAttachmentKey(workspaceId, id, 'meta.json'),
+  ];
+  for (const key of keys) {
+    const raw = await store.get(key);
+    if (!raw) continue;
+    const meta = parseMeta(raw);
+    return meta ? { meta, key } : null;
+  }
+  return null;
 }
 
 export async function readAttachmentMeta(
@@ -160,13 +215,20 @@ export async function readAttachmentMeta(
   workspaceId: string,
   id: string,
 ): Promise<StoredAttachmentMeta | null> {
-  const raw = await store.get(attachmentMetaKey(workspaceId, id));
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw.toString('utf8')) as StoredAttachmentMeta;
-  } catch {
-    return null;
-  }
+  return (await locateAttachmentMeta(store, workspaceId, id))?.meta ?? null;
+}
+
+/** The bytes of a file: from its kind's folder, or from the old flat place for older files. */
+export async function readAttachmentContent(
+  store: E2eArtifactStore,
+  workspaceId: string,
+  id: string,
+  kind: AttachmentKind,
+): Promise<Buffer | null> {
+  return (
+    (await store.get(attachmentContentKey(workspaceId, id, kind))) ??
+    (await store.get(flatAttachmentKey(workspaceId, id, 'content')))
+  );
 }
 
 /** File name safe for a Content-Disposition header, with the UTF-8 form for other clients. */

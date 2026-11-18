@@ -11,12 +11,18 @@ import {
 import type { E2eEnvironmentService } from '../../modules/e2e/application/e2e-environments.js';
 import {
   MAX_ENVIRONMENT_VARIABLES,
+  EXPLORATION_CONTEXT_KINDS,
+  MAX_EXPLORATION_CONTEXT,
   MAX_EXPLORATION_DESCRIPTION,
 } from '../../modules/e2e/domain/e2e-insight.js';
+import { MAX_EXPLORATION_CODE_LENGTH } from '../../modules/e2e/domain/e2e-exploration-code.js';
 import {
   E2E_SCRIPT_KINDS,
   HOOK_KINDS,
   MAX_HOOK_INSTRUCTIONS_LENGTH,
+  MAX_RESULT_NOTE_LENGTH,
+  MAX_RUN_INSTRUCTIONS_LENGTH,
+  MAX_SUCCESS_CRITERIA_LENGTH,
 } from '../../modules/e2e/domain/e2e.js';
 import { TEST_MANAGEMENT_PROVIDERS } from '../../modules/test-management/domain/test-run.js';
 import { requireAuth, requireModulePermission } from './auth-middleware.js';
@@ -44,19 +50,19 @@ const createFields = z.object({
   /** The tests are planned and written from the Brain; a PRD is then optional. */
   useBrain: z.boolean().optional(),
   diff: z.string().max(500_000).optional(),
-  instructions: z.string().trim().max(5_000).optional(),
+  instructions: z.string().trim().max(MAX_RUN_INSTRUCTIONS_LENGTH).optional(),
   repository: z.object({
-    provider: z.enum(['github', 'azure_devops']),
+    provider: z.enum(['github', 'azure_devops', 'local']),
     id: z.string().trim().min(1).max(200),
     branch: z.string().trim().min(1).max(250),
     path: z.string().trim().max(300).default(''),
   }),
 });
-/** Editing a run keeps its product source: a PRD, or the Brain in its place. */
-const editFields = createFields.refine((fields) => fields.prd || fields.useBrain, {
-  path: ['prd'],
-  message: 'A product document is required unless the Brain is used.',
-});
+/**
+ * Editing a run starts nothing, so it needs no product document: it is context for the AI, and
+ * the tests are written later, from the document asked for when the user generates them.
+ */
+const editFields = createFields;
 const providerId = z.enum(TEST_MANAGEMENT_PROVIDERS);
 const remoteId = z.string().trim().min(1).max(200);
 const importFields = z.object({
@@ -81,6 +87,9 @@ const savedCaseFields = z
     path: ['suiteId'],
     message: 'Choose a suite or a Test Plan.',
   });
+const linkSavedFields = z.object({
+  savedCase: z.object({ planId: remoteId, caseId: remoteId }).nullable(),
+});
 const newRunFields = createFields
   .extend({
     planning: z.enum(['server', 'host']).default('server'),
@@ -88,14 +97,38 @@ const newRunFields = createFields
     importCases: importFields.optional(),
     savedCases: savedCaseFields.optional(),
     reporting: reportingFields.nullable().optional(),
+    // False only creates the run: nothing is explored or planned until the user asks.
+    start: z.boolean().optional(),
   })
-  .refine((fields) => fields.prd || fields.useBrain || fields.importCases || fields.savedCases, {
-    path: ['prd'],
-    message: 'A product document is required unless the Brain is used or test cases are imported.',
-  })
+  // Only a run that starts planning or writing right away needs a source for its tests; one that
+  // is just saved (`start: false`) gets it when the user generates the tests.
+  .refine(
+    (fields) =>
+      fields.start === false ||
+      fields.prd ||
+      fields.useBrain ||
+      fields.importCases ||
+      fields.savedCases,
+    {
+      path: ['prd'],
+      message:
+        'A product document is required unless the Brain is used or test cases are imported.',
+    },
+  )
   .refine((fields) => !(fields.importCases && fields.savedCases), {
     path: ['savedCases'],
     message: 'Automate platform cases or saved cases, not both.',
+  });
+const generateFields = z
+  .object({
+    savedCases: savedCaseFields.optional(),
+    /** A product document written for this planning: it replaces the run's PRD. */
+    prd: z.string().trim().min(1).max(500_000).optional(),
+    prdFileNames: z.array(z.string().trim().min(1).max(255)).max(20).optional(),
+  })
+  .refine((fields) => !(fields.prd && fields.savedCases), {
+    path: ['savedCases'],
+    message: 'Plan from a PRD or automate saved cases, not both.',
   });
 const externalCaseFields = z.object({
   provider: providerId,
@@ -133,7 +166,7 @@ const stepParams = z.object({
   position: z.coerce.number().int().min(1).max(1_000),
 });
 const branchQuery = z.object({
-  provider: z.enum(['github', 'azure_devops']),
+  provider: z.enum(['github', 'azure_devops', 'local']),
   repositoryId: z.string().trim().min(1).max(200),
 });
 const script = z.string().min(1).max(MAX_SCRIPT_LENGTH);
@@ -145,10 +178,21 @@ const hookInstructionFields = z.object({
   kind: z.enum(HOOK_KINDS as ['beforeRun', 'afterRun']),
   instructions: z.string().max(MAX_HOOK_INSTRUCTIONS_LENGTH),
 });
+const explorationCodeFields = z.object({ code: z.string().max(MAX_EXPLORATION_CODE_LENGTH) });
 const hook = z.string().max(MAX_SCRIPT_LENGTH).nullable().optional();
 const briefFields = z.object({ refresh: z.boolean().default(false) });
 const exploreFields = z.object({
   description: z.string().trim().max(MAX_EXPLORATION_DESCRIPTION).optional(),
+  context: z
+    .array(
+      z.object({
+        kind: z.enum(EXPLORATION_CONTEXT_KINDS),
+        id: z.string().trim().min(1).max(600),
+      }),
+    )
+    .max(MAX_EXPLORATION_CONTEXT)
+    .optional(),
+  agentId: z.string().trim().min(1).max(100).optional(),
 });
 const sourceExploreFields = z.object({
   environmentId: z.string().trim().min(1).max(100),
@@ -203,12 +247,62 @@ const planFields = z.object({
         beforeRun: hook,
         afterRun: hook,
         externalCase: externalCaseFields.nullable().optional(),
+        savedCase: z.object({ planId: remoteId, caseId: remoteId }).nullable().optional(),
       }),
     )
     .min(1)
     .max(MAX_E2E_TESTS),
 });
-const rerunTestFields = z.object({ regenerate: z.boolean().default(false) });
+const successCriteriaFields = z.object({
+  criteria: z.string().max(MAX_SUCCESS_CRITERIA_LENGTH),
+});
+const testResultFields = z.object({
+  /** "run" gives back the status the execution produced. */
+  decision: z.enum(['passed', 'failed', 'run']),
+  note: z.string().max(MAX_RESULT_NOTE_LENGTH).optional(),
+});
+const MAX_CASE_CHAT_MESSAGES = 40;
+const MAX_CASE_CHAT_MESSAGE_LENGTH = 10_000;
+const MAX_CASE_CHAT_IMAGES = 5;
+const rerunTestFields = z.object({
+  regenerate: z.boolean().default(false),
+  /** How the user decides the test passes; kept on the test. */
+  successCriteria: z.string().max(MAX_SUCCESS_CRITERIA_LENGTH).optional(),
+  /** How to rewrite the spec; only used with regenerate. */
+  instructions: z.string().max(MAX_HOOK_INSTRUCTIONS_LENGTH).optional(),
+  useLastRun: z.boolean().optional(),
+  /** Saved environment the test runs with; null goes back to the run's, omitted keeps it. */
+  environmentId: z.string().trim().min(1).max(100).nullable().optional(),
+});
+const fixStepFields = z.object({
+  /** What the user knows or wants about the step (Markdown, may hold images). */
+  instructions: z.string().max(MAX_HOOK_INSTRUCTIONS_LENGTH).default(''),
+});
+const reviseCaseFields = z.object({
+  /** The conversation so far; the last message is what the user just said. */
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().max(MAX_CASE_CHAT_MESSAGE_LENGTH),
+      }),
+    )
+    .min(1)
+    .max(MAX_CASE_CHAT_MESSAGES)
+    .refine((messages) => messages.at(-1)?.role === 'user', {
+      message: 'The last message must be the user’s.',
+    }),
+  /** The case as the user has it open, with or without unsaved changes. */
+  testCase: z.object({
+    title: z.string().trim().min(1).max(300),
+    description: z.string().max(20_000),
+    steps: z
+      .array(z.object({ action: z.string().max(1_000), expectedResult: z.string().max(1_000) }))
+      .max(100),
+  }),
+  /** Images uploaded as attachments that the AI looks at. */
+  imageIds: z.array(z.string().uuid()).max(MAX_CASE_CHAT_IMAGES).optional(),
+});
 const executionFields = z.object({ executionTarget: z.enum(['remote', 'local']) });
 const idParams = z.object({ id: z.string().min(1).max(100) });
 const environmentFields = z.object({
@@ -229,6 +323,12 @@ const environmentFields = z.object({
 });
 const explorationImageParams = idParams.extend({
   page: z.union([z.literal('live'), z.coerce.number().int().min(1).max(999)]),
+});
+const explorationStepParams = idParams.extend({
+  index: z.coerce.number().int().min(1).max(999),
+});
+const explorationVideoParams = idParams.extend({
+  worker: z.coerce.number().int().min(1).max(16),
 });
 const trailImageParams = idParams.extend({
   kind: z.enum(['page', 'element']),
@@ -254,6 +354,11 @@ function workspaceId(request: Request): string {
 }
 
 /** Who started the work: a local run's browser work goes to that user's runner. */
+/** The language of the person asking: a run is reported back to them in it. */
+function localeOf(request: Request): string | undefined {
+  return request.context?.locale;
+}
+
 function actorId(request: Request): string | undefined {
   return request.context?.actorId;
 }
@@ -383,6 +488,61 @@ export function createE2eRouter(
     },
   );
 
+  router.put(
+    '/e2e/tests/:id/success-criteria',
+    requireAuth,
+    write,
+    async (request, response, next) => {
+      try {
+        const { id } = parseParams(idParams, request);
+        const { criteria } = parseBody(successCriteriaFields, request);
+        response.json({
+          test: await service.updateSuccessCriteria(workspaceId(request), id, criteria),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.put('/e2e/tests/:id/result', requireAuth, write, async (request, response, next) => {
+    try {
+      const { id } = parseParams(idParams, request);
+      const { decision, note } = parseBody(testResultFields, request);
+      response.json({ test: await service.setResult(workspaceId(request), id, decision, note) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put(
+    '/e2e/tests/:id/steps/:position/result',
+    requireAuth,
+    write,
+    async (request, response, next) => {
+      try {
+        const { id, position } = parseParams(stepParams, request);
+        const { decision, note } = parseBody(testResultFields, request);
+        response.json({
+          test: await service.setStepResult(workspaceId(request), id, position, decision, note),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post('/e2e/tests/:id/reevaluate', requireAuth, write, async (request, response, next) => {
+    try {
+      const { id } = parseParams(idParams, request);
+      response.json({
+        test: await service.reevaluate(workspaceId(request), id, localeOf(request)),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get(
     '/e2e/test-management/providers',
     requireAuth,
@@ -457,6 +617,31 @@ export function createE2eRouter(
       }
     },
   );
+
+  router.post(
+    '/e2e/creations/:id/saved-cases',
+    requireAuth,
+    write,
+    async (request, response, next) => {
+      try {
+        const { id } = parseParams(idParams, request);
+        const input = parseBody(savedCaseFields, request);
+        response.json({ result: await service.linkSavedCases(workspaceId(request), id, input) });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.put('/e2e/tests/:id/saved-case', requireAuth, write, async (request, response, next) => {
+    try {
+      const { id } = parseParams(idParams, request);
+      const { savedCase } = parseBody(linkSavedFields, request);
+      response.json({ test: await service.linkSavedCase(workspaceId(request), id, savedCase) });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.put(
     '/e2e/creations/:id/reporting',
@@ -587,13 +772,44 @@ export function createE2eRouter(
     }
   });
 
+  router.post(
+    '/e2e/creations/:id/generate',
+    requireAuth,
+    write,
+    async (request, response, next) => {
+      try {
+        const { id } = parseParams(idParams, request);
+        const { savedCases, prd, prdFileNames } = parseBody(generateFields, request);
+        response.status(202).json(
+          await started(
+            request,
+            await service.generate(
+              workspaceId(request),
+              id,
+              {
+                ...(savedCases ? { savedCases } : {}),
+                ...(prd ? { prd, prdFileNames: prdFileNames ?? [] } : {}),
+              },
+              actorId(request),
+            ),
+          ),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   router.post('/e2e/creations/:id/run', requireAuth, write, async (request, response, next) => {
     try {
       const { id } = parseParams(idParams, request);
       response
         .status(202)
         .json(
-          await started(request, await service.rerun(workspaceId(request), id, actorId(request))),
+          await started(
+            request,
+            await service.rerun(workspaceId(request), id, actorId(request), localeOf(request)),
+          ),
         );
     } catch (error) {
       next(error);
@@ -641,15 +857,75 @@ export function createE2eRouter(
   router.post('/e2e/tests/:id/run', requireAuth, write, async (request, response, next) => {
     try {
       const { id } = parseParams(idParams, request);
-      const { regenerate } = parseBody(rerunTestFields.default({ regenerate: false }), request);
-      response
-        .status(202)
-        .json(
-          await started(
-            request,
-            await service.rerunTest(workspaceId(request), id, regenerate, actorId(request)),
+      const { regenerate, instructions, useLastRun, environmentId, successCriteria } = parseBody(
+        rerunTestFields.default({ regenerate: false }),
+        request,
+      );
+      response.status(202).json(
+        await started(
+          request,
+          await service.rerunTest(
+            workspaceId(request),
+            id,
+            regenerate,
+            actorId(request),
+            {
+              ...(instructions === undefined ? {} : { instructions }),
+              ...(useLastRun === undefined ? {} : { useLastRun }),
+              ...(successCriteria === undefined ? {} : { successCriteria }),
+            },
+            environmentId,
+            localeOf(request),
           ),
-        );
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Rewrites one failed step of the spec with the AI and runs the test again.
+  router.post(
+    '/e2e/tests/:id/steps/:position/fix',
+    requireAuth,
+    write,
+    async (request, response, next) => {
+      try {
+        const { id, position } = parseParams(stepParams, request);
+        const { instructions } = parseBody(fixStepFields, request);
+        response
+          .status(202)
+          .json(
+            await started(
+              request,
+              await service.fixTestStep(
+                workspaceId(request),
+                id,
+                position,
+                instructions,
+                actorId(request),
+                localeOf(request),
+              ),
+            ),
+          );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post('/e2e/tests/:id/fix-case', requireAuth, write, async (request, response, next) => {
+    try {
+      const { id } = parseParams(idParams, request);
+      const { messages, testCase, imageIds } = parseBody(reviseCaseFields, request);
+      response.json({
+        revision: await service.reviseTestCase(
+          workspaceId(request),
+          id,
+          { messages, testCase, ...(imageIds ? { imageIds } : {}) },
+          localeOf(request),
+        ),
+      });
     } catch (error) {
       next(error);
     }
@@ -721,13 +997,44 @@ export function createE2eRouter(
     },
   );
 
+  router.get(
+    '/e2e/creations/:id/exploration/code',
+    requireAuth,
+    read,
+    async (request, response, next) => {
+      try {
+        const { id } = parseParams(idParams, request);
+        response.json(await service.explorationCode(workspaceId(request), id));
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.put(
+    '/e2e/creations/:id/exploration/code',
+    requireAuth,
+    write,
+    async (request, response, next) => {
+      try {
+        const { id } = parseParams(idParams, request);
+        const { code } = parseBody(explorationCodeFields, request);
+        response.json(await service.saveExplorationCode(workspaceId(request), id, code));
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   router.post('/e2e/creations/:id/explore', requireAuth, write, async (request, response, next) => {
     try {
       const { id } = parseParams(idParams, request);
-      const { description } = parseBody(exploreFields.default({}), request);
+      const { description, context, agentId } = parseBody(exploreFields.default({}), request);
       response.status(202).json({
         exploration: await service.explore(workspaceId(request), id, actorId(request), {
           ...(description ? { description } : {}),
+          ...(context?.length ? { context } : {}),
+          ...(agentId ? { agentId } : {}),
         }),
       });
     } catch (error) {
@@ -821,6 +1128,42 @@ export function createE2eRouter(
       next(error);
     }
   });
+
+  router.get(
+    '/e2e/creations/:id/exploration/videos/:worker',
+    requireAuth,
+    read,
+    async (request, response, next) => {
+      try {
+        const { id, worker } = parseParams(explorationVideoParams, request);
+        const video = await service.explorationVideo(workspaceId(request), id, worker);
+        response.setHeader('content-type', video.mimeType);
+        response.setHeader('content-length', String(video.content.byteLength));
+        response.setHeader('cache-control', 'private, max-age=300');
+        response.end(video.content);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/e2e/creations/:id/exploration/steps/:index',
+    requireAuth,
+    read,
+    async (request, response, next) => {
+      try {
+        const { id, index } = parseParams(explorationStepParams, request);
+        sendJpeg(
+          response,
+          await service.explorationImage(workspaceId(request), id, { step: index }),
+          true,
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.get(
     '/e2e/creations/:id/exploration/images/:page',

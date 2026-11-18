@@ -325,6 +325,66 @@ describe('DevelopmentRunner.poll', () => {
     );
   });
 
+  it('adds the tokens the coding CLI spent to the workspace usage, even if that fails', async () => {
+    const spent =
+      (cli: string, model?: string) =>
+      async (_invocation: Invocation, options: Pick<StreamOptions, 'onLine'>) => {
+        if (cli === 'claude')
+          options.onLine(
+            JSON.stringify({
+              type: 'assistant',
+              message: {
+                id: 'm1',
+                model,
+                usage: { input_tokens: 30, cache_creation_input_tokens: 70, output_tokens: 12 },
+                content: [],
+              },
+            }),
+          );
+        else
+          options.onLine(
+            JSON.stringify({
+              type: 'turn.completed',
+              usage: { input_tokens: 5, output_tokens: 1 },
+            }),
+          );
+        return { exitCode: 0, stderr: '' };
+      };
+
+    const claude = await setup(routesFor(session()), spent('claude', 'claude-sonnet-5-5'));
+    await claude.runner.poll();
+    expect(claude.sent('POST /costs/usage')).toEqual([
+      {
+        tool: 'development_claude',
+        provider: 'anthropic',
+        model: 'claude-sonnet-5-5',
+        inputTokens: 100,
+        outputTokens: 12,
+        estimated: true,
+        source: 'cli',
+      },
+    ]);
+
+    // Codex reports no model, so it is priced under its own name; a refused report is ignored.
+    const codex = await setup(
+      routesFor(session({ cli: 'codex' }), { 'POST /costs/usage': new Error('offline') }),
+      spent('codex'),
+    );
+    await codex.runner.poll();
+    expect(codex.sent('POST /costs/usage')).toMatchObject([
+      { provider: 'openai', model: 'codex', inputTokens: 5, outputTokens: 1 },
+    ]);
+    expect(codex.sent('POST /development/sessions/s1/complete')).toEqual([
+      { outcome: 'succeeded' },
+    ]);
+  });
+
+  it('sends no usage when the coding CLI reported none', async () => {
+    const quiet = await setup(routesFor(session()));
+    await quiet.runner.poll();
+    expect(quiet.sent('POST /costs/usage')).toEqual([]);
+  });
+
   it('fails the session when the work cannot even start', async () => {
     const unknown = await setup(routesFor(session({ cli: 'cursor' })));
     await unknown.runner.poll();

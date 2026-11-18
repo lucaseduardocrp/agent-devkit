@@ -93,22 +93,30 @@ export class ImportTestCases {
       ]);
 
     const wanted = input.caseIds?.length ? new Set(input.caseIds) : null;
-    const locations: Location[] = [];
     let total = 0;
-    for (const suite of selected.length ? selected : [undefined]) {
-      const cases = (
-        await provider.listCases({
-          planId: input.planId,
-          ...(suite ? { suiteId: suite.id } : {}),
-        })
-      ).filter((item) => !wanted || wanted.has(item.caseId));
-      total += cases.length;
-      if (total > MAX_IMPORTED_CASES)
-        throw new ApplicationError('TEST_IMPORT_TOO_LARGE', 'Too many cases in one import.', 400, [
-          { max: MAX_IMPORTED_CASES },
-        ]);
-      locations.push({ ...(suite ? { suite } : {}), cases });
-    }
+    // A whole plan has many suites and each read is a round trip to the platform, so a few run
+    // at once; the order of the suites is kept.
+    const locations = await mapConcurrently(
+      selected.length ? selected : [undefined],
+      IMPORT_READ_CONCURRENCY,
+      async (suite): Promise<Location> => {
+        const cases = (
+          await provider.listCases({
+            planId: input.planId,
+            ...(suite ? { suiteId: suite.id } : {}),
+          })
+        ).filter((item) => !wanted || wanted.has(item.caseId));
+        total += cases.length;
+        if (total > MAX_IMPORTED_CASES)
+          throw new ApplicationError(
+            'TEST_IMPORT_TOO_LARGE',
+            'Too many cases in one import.',
+            400,
+            [{ max: MAX_IMPORTED_CASES }],
+          );
+        return { ...(suite ? { suite } : {}), cases };
+      },
+    );
     if (!total)
       throw new ApplicationError('TEST_CASES_NOT_FOUND', 'No test cases matched the import.', 404);
 
@@ -250,6 +258,33 @@ export class ImportTestCases {
       if (!location.suite || filled.has(location.suite.id)) await resolve(location);
     return { rootId: root.id, created, bySuite };
   }
+}
+
+/** Reads at once from the platform during one import. */
+const IMPORT_READ_CONCURRENCY = 5;
+
+/** `Array.map` with at most `limit` calls in flight; results keep the order of `items`. */
+async function mapConcurrently<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array<R>(items.length);
+  let next = 0;
+  let failed = false;
+  const worker = async (): Promise<void> => {
+    while (!failed && next < items.length) {
+      const index = next++;
+      try {
+        results[index] = await run(items[index]!);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 /** The chosen suite and, when asked, everything nested under it; the whole plan otherwise. */

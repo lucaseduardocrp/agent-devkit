@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { E2eConfigForm } from '../src/features/e2e/E2eConfigForm.js';
 import type { E2eCreationDetail } from '../src/features/e2e/e2e-types.js';
 import type { ApiClient } from '../src/lib/api-client.js';
+import { pickRepository } from './helpers/pick-repository.js';
 
 const existing: E2eCreationDetail = {
   id: 'c1',
@@ -35,6 +36,8 @@ const existing: E2eCreationDetail = {
   diff: null,
   instructions: null,
 };
+
+const REPOSITORY_NAMES = { 'github:42': 'acme/demo-app' };
 
 const azure = {
   id: 'azure_devops',
@@ -92,12 +95,7 @@ function setup(options: { creationId?: string; providers?: unknown[] } = {}) {
 }
 
 async function chooseRepository() {
-  await waitFor(() =>
-    expect(screen.getByLabelText('Repositório').querySelectorAll('option').length).toBeGreaterThan(
-      1,
-    ),
-  );
-  fireEvent.change(screen.getByLabelText('Repositório'), { target: { value: 'github:42' } });
+  await pickRepository(REPOSITORY_NAMES, 'github:42');
   await waitFor(() =>
     expect((screen.getByLabelText('Branch base') as HTMLSelectElement).value).toBe('main'),
   );

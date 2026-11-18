@@ -58,7 +58,7 @@ describe('E2eScriptPanel hook templates', () => {
 
   it('keeps instructions saved for an After Run, falling back to none when the server omits them', async () => {
     const { view, client } = setup('afterRun', 'frontend', null);
-    await view.findByText(/Este teste não tem After Run/);
+    await view.findByText(/Este teste ainda não tem After Run/);
     fireEvent.click(view.getByRole('button', { name: 'Alterar instruções' }));
     const editor = view.getByLabelText('Instruções para a IA');
     editor.innerHTML = '<p>Apagar o registro</p>';

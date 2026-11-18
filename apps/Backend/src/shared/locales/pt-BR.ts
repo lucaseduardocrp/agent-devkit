@@ -129,6 +129,10 @@ export const ptBR = {
     'A Requirement Based Suite é criada na publicação: escolha um novo Test Plan ou uma nova suite dentro da selecionada.',
   AGENT_LOAD_FAILED: 'Não foi possível carregar o agente selecionado.',
   AGENT_NOT_AVAILABLE: 'O agente selecionado não está disponível para este gerador.',
+  AGENT_WORKFLOW_AGENT_REQUIRED:
+    'Selecione um agente (ou defina um agente padrão no workspace) antes de gerar este plano de testes.',
+  AGENT_WORKFLOW_OUTPUT_INVALID:
+    'O agente não retornou casos de teste válidos. Tente novamente, detalhe o requisito ou reduza o contexto selecionado.',
   NOT_FOUND: 'Recurso não encontrado.',
   USER_ALREADY_EXISTS: 'Usuário com este e-mail já existe.',
   INVALID_CREDENTIALS: 'E-mail ou senha inválidos.',
@@ -181,6 +185,23 @@ export const ptBR = {
     'A cota ou o limite de uso do provedor de IA foi atingido. Verifique faturamento e limites antes de tentar novamente.',
   LLM_AUTHENTICATION_FAILED: 'O provedor de IA rejeitou a chave de API configurada.',
   LLM_MODEL_UNAVAILABLE: 'O modelo de IA configurado não está disponível para esta chave de API.',
+  LLM_CLI_NOT_INSTALLED:
+    'A CLI do provedor não está instalada onde deveria rodar (a máquina da API ou a Bridge).',
+  LLM_CLI_NOT_AUTHENTICATED:
+    'A CLI do provedor não está autenticada. Confira o token da CLI na integração, ou faça login na máquina que executa a CLI.',
+  LLM_CLI_BRIDGE_UNAVAILABLE:
+    'Não foi possível falar com a Bridge que executa a CLI do provedor. Confira se ela está no ar e se BRIDGE_URL e BRIDGE_SHARED_TOKEN estão corretos.',
+  LLM_CLI_UNSUPPORTED: 'A CLI do provedor não suporta esta solicitação. Use uma chave de API.',
+  LLM_CLI_DISABLED:
+    'As CLIs de provedores estão desligadas neste servidor. Peça ao administrador para definir ADK_LLM_CLI=true ou configurar a Bridge.',
+  LLM_CLI_INVALID_MODEL: 'O nome do modelo da CLI não é válido.',
+  LLM_CLI_PROFILE_INVALID:
+    'O nome da conta deve usar letras, números, "-" ou "_" (até 32 caracteres).',
+  LLM_CLI_PROFILES_UNSUPPORTED:
+    'Contas separadas da CLI só existem para Claude e Codex executados nesta máquina.',
+  LLM_CLI_INVALID_CONFIG_DIR:
+    'A pasta de login da CLI deve ser um caminho absoluto, como C:\\Users\\voce\\.claude-conta2.',
+  LLM_TIMEOUT: 'O provedor de IA demorou demais para responder.',
   SLUG_CONFLICT: 'Já existe um recurso com este identificador.',
   USER_NOT_FOUND: 'Usuário não encontrado.',
   WORKSPACE_ACCESS_DENIED: 'Você não tem acesso a este workspace.',
@@ -212,8 +233,14 @@ export const ptBR = {
   E2E_TEST_NOT_FOUND: 'Teste E2E não encontrado.',
   E2E_ALREADY_RUNNING: 'Esta execução E2E já está em andamento.',
   E2E_NOT_RUNNING: 'Esta execução E2E não está em andamento.',
+  E2E_SUCCESS_CRITERIA_REQUIRED: 'Escreva o critério de sucesso antes de revisar o resultado.',
+  E2E_RESULT_NOT_REVIEWABLE:
+    'Este teste não tem um resultado finalizado para revisar. Execute-o primeiro.',
+  E2E_REVIEW_UNAVAILABLE: 'A revisão do resultado pela IA não está disponível no momento.',
+  E2E_CASE_CHAT_UNAVAILABLE: 'Corrigir o caso de teste com IA não está disponível no momento.',
   E2E_VIDEO_NOT_FOUND: 'Nenhum vídeo disponível para este teste.',
   E2E_PLAN_INVALID: 'A IA não retornou um plano de testes válido. Tente novamente.',
+  E2E_EXPLORE_ACTION_INVALID: 'A IA não retornou um passo válido para a exploração.',
   E2E_SOURCE_INVALID: 'A IA não retornou uma documentação válida do sistema. Tente novamente.',
   E2E_TARGET_UNREACHABLE:
     'Não foi possível acessar a aplicação. Verifique se o servidor está rodando e acessível a partir do backend.',
@@ -221,6 +248,8 @@ export const ptBR = {
     'O Chromium do Playwright não está instalado no backend. Execute "npx playwright install chromium" em apps/Backend.',
   E2E_RUNNER_FAILED: 'O executor de testes E2E falhou.',
   E2E_SCRIPT_REJECTED: 'O script gerado foi bloqueado pelas verificações de segurança.',
+  E2E_LOCAL_FOLDER_UNAVAILABLE:
+    'Este servidor do ADK não lê pastas do seu computador. Pastas locais só funcionam pelo app desktop do ADK: use o endereço dele ("Copy MCP server address" no menu ADK, http://localhost:<porta>/mcp) em vez do endereço hospedado.',
   E2E_INTERRUPTED: 'O backend foi reiniciado durante a execução. Execute novamente.',
   E2E_LOCAL_RUNNER_UNAVAILABLE:
     'Nenhum executor local assumiu o teste. No seu computador, execute "devkit runner" conectado à sua conta do ADK e rode os testes novamente.',
@@ -259,13 +288,9 @@ export const ptBR = {
   AGENT_TOO_MANY_SKILLS: 'Este agente tem mais skills do que o permitido.',
   AGENT_WORKFLOW_AGENT_IN_USE:
     'Este agente é usado pelo workflow ativo do workspace. Atualize o workflow antes de excluí-lo.',
-  AGENT_WORKFLOW_AGENT_REQUIRED:
-    'Selecione um agente no workflow ou no workspace antes de gerar este plano de teste.',
   AGENT_WORKFLOW_EMPTY: 'Um workflow ativo precisa de pelo menos uma etapa ou regra de módulo.',
   AGENT_WORKFLOW_INVALID_RULE: 'Uma regra de módulo do workflow é inválida.',
   AGENT_WORKFLOW_INVALID_STEP: 'Uma etapa do workflow é inválida.',
-  AGENT_WORKFLOW_OUTPUT_INVALID: 'O workflow de agentes não produziu passos de teste válidos.',
-  AGENT_WORKFLOW_PROVIDER_ACTION_REQUIRED: 'Restrições de provedor precisam do nome exato da ação.',
   AGENT_WORKFLOW_TOO_LONG: 'Um workflow pode ter no máximo 20 etapas.',
   AGENT_WORKFLOW_TOO_MANY_RULES: 'Um workflow pode ter no máximo 100 regras de módulo.',
   ATTACHMENTS_UNAVAILABLE: 'O armazenamento de arquivos não está configurado.',

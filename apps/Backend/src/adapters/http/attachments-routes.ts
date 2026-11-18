@@ -13,6 +13,7 @@ import {
   attachmentScopes,
   contentDisposition,
   detectAttachmentType,
+  readAttachmentContent,
   readAttachmentMeta,
   type Attachment,
   type AttachmentScope,
@@ -63,6 +64,7 @@ const scopeModules: Readonly<Record<AttachmentScope, PermissionModule>> = {
   brain: 'brain',
   spec: 'specs',
   testcase: 'testplans',
+  e2e: 'e2e',
 };
 
 function workspaceId(request: Request): string {
@@ -283,9 +285,9 @@ export function createAttachmentsRouter(
           createdAt: new Date().toISOString(),
         };
         const workspace = workspaceId(request);
-        await store.put(attachmentContentKey(workspace, meta.id), bytes);
+        await store.put(attachmentContentKey(workspace, meta.id, meta.kind), bytes);
         await store.put(
-          attachmentMetaKey(workspace, meta.id),
+          attachmentMetaKey(workspace, meta.id, meta.kind),
           Buffer.from(JSON.stringify(meta), 'utf8'),
         );
         const attachment: Attachment = {
@@ -312,7 +314,7 @@ export function createAttachmentsRouter(
       const meta = await readAttachmentMeta(store, workspace, id);
       if (!meta) throw new ApplicationError('ATTACHMENT_NOT_FOUND', 'File not found.', 404);
       requireModule(request, meta.scope, 'view');
-      const bytes = await store.get(attachmentContentKey(workspace, id));
+      const bytes = await readAttachmentContent(store, workspace, id, meta.kind);
       if (!bytes) throw new ApplicationError('ATTACHMENT_NOT_FOUND', 'File not found.', 404);
       sendFile(response, bytes, meta.mimeType, meta.name, 'private, max-age=3600, immutable');
     } catch (error) {

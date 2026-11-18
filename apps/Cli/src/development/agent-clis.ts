@@ -45,6 +45,10 @@ export class Progress {
   public error: string | null = null;
   private events: ProgressEvent[] = [];
   private usedTokens: number | undefined;
+  private spentInput = 0;
+  private spentOutput = 0;
+  private spentModel = '';
+  private readonly spentRequests = new Set<string>();
   private readonly subagents = new Map<string, Subagent>();
   private dirty = false;
 
@@ -65,6 +69,30 @@ export class Progress {
   public setUsedTokens(tokens: number): void {
     this.usedTokens = tokens;
     this.dirty = true;
+  }
+
+  /**
+   * Tokens the session spent, summed over every request it made (the context size above is only
+   * the last one). A request seen twice, under the same `requestId`, counts once.
+   */
+  public addSpend(spend: { input: number; output: number; model?: string }, requestId = ''): void {
+    if (requestId) {
+      if (this.spentRequests.has(requestId)) return;
+      this.spentRequests.add(requestId);
+    }
+    this.spentInput += spend.input;
+    this.spentOutput += spend.output;
+    if (spend.model) this.spentModel = spend.model;
+  }
+
+  /** Everything the session spent so far; null when the CLI reported no usage. */
+  public spend(): { inputTokens: number; outputTokens: number; model?: string } | null {
+    if (this.spentInput === 0 && this.spentOutput === 0) return null;
+    return {
+      inputTokens: this.spentInput,
+      outputTokens: this.spentOutput,
+      ...(this.spentModel ? { model: this.spentModel } : {}),
+    };
   }
 
   public setSubagent(subagent: Subagent): void {
@@ -100,6 +128,8 @@ export interface Invocation {
 }
 
 export interface AgentCli {
+  /** Provider whose rates price this CLI's model, as in the workspace rate table. */
+  readonly provider: string;
   /** The prompt always goes through stdin, so no argument needs shell quoting. */
   invocation(autonomy: Autonomy, compactAtPercent: number): Invocation;
   /** Reads one line of the CLI's output into the progress. */
@@ -132,6 +162,7 @@ function toolLine(name: string, input: Json): string {
 
 /** Claude Code, `--output-format stream-json`. */
 export const claudeCli: AgentCli = {
+  provider: 'anthropic',
   invocation(autonomy, compactAtPercent) {
     return {
       command: 'claude',
@@ -157,6 +188,17 @@ export const claudeCli: AgentCli = {
       const message = record(event['message']);
       const parent = text(event['parent_tool_use_id']);
       const usage = record(message['usage']);
+      // Every request bills, subagents' included. Cached reads are left out: they cost a fraction
+      // of an input token and would swamp the total.
+      if (message['usage'])
+        progress.addSpend(
+          {
+            input: number(usage['input_tokens']) + number(usage['cache_creation_input_tokens']),
+            output: number(usage['output_tokens']),
+            model: text(message['model']),
+          },
+          text(message['id']),
+        );
       // The main conversation's last request is what fills its context window.
       if (!parent && message['usage'])
         progress.setUsedTokens(
@@ -217,6 +259,7 @@ export const claudeCli: AgentCli = {
 
 /** Codex, `exec --json`. */
 export const codexCli: AgentCli = {
+  provider: 'openai',
   invocation(autonomy) {
     return {
       command: 'codex',
@@ -252,6 +295,10 @@ export const codexCli: AgentCli = {
     } else if (type === 'turn.completed') {
       const usage = record(event['usage']);
       progress.setUsedTokens(number(usage['input_tokens']) + number(usage['output_tokens']));
+      progress.addSpend({
+        input: number(usage['input_tokens']),
+        output: number(usage['output_tokens']),
+      });
     } else if (type === 'turn.failed' || type === 'error') {
       progress.error =
         text(record(event['error'])['message']) || text(event['message']) || 'Codex failed.';
@@ -261,6 +308,7 @@ export const codexCli: AgentCli = {
 
 /** Gemini CLI prints plain text: every line is a message and the whole output is the summary. */
 export const geminiCli: AgentCli = {
+  provider: 'google',
   invocation(autonomy) {
     return { command: 'gemini', args: autonomy === 'auto' ? ['--yolo'] : [], env: {} };
   },

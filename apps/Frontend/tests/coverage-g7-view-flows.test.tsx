@@ -1,6 +1,7 @@
 import { fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TestPlansView } from '../src/features/testplans/TestPlansView.js';
+import { pickOption } from './helpers/pick-option.js';
 import { ApiClient } from '../src/lib/api-client.js';
 import type { SavedTestPlanDto, TestSuiteDto } from '../src/lib/api-client.js';
 
@@ -100,8 +101,8 @@ describe('TestPlansView flows through the suite tree', () => {
     await ui.findByTestId('test-suite-tree');
     fireEvent.click(ui.getByRole('button', { name: 'Ações: Regression' }));
     fireEvent.click(ui.getByRole('button', { name: 'Criar Test Plan' }));
-    expect(await ui.findByLabelText('Test suite')).toBeInTheDocument();
-    expect(ui.getByTestId('tab-create-test-plan')).toBeInTheDocument();
+    expect(await ui.findByRole('combobox', { name: 'Test suite' })).toBeInTheDocument();
+    expect(ui.getByTestId('panel-create-plan')).toBeInTheDocument();
   });
 
   it('reloads suites and plans after importing from a provider', async () => {
@@ -157,12 +158,10 @@ describe('TestPlansView creation tab with a saved plan', () => {
     const ui = view(api, 'create');
     await waitFor(() => expect(api.getTestSuites).toHaveBeenCalled());
     fireEvent.change(ui.getByLabelText('User story / requisito'), { target: { value: 'Story' } });
-    fireEvent.change(await ui.findByLabelText('Test suite'), { target: { value: 'suite-1' } });
+    await pickOption(await ui.findByRole('combobox', { name: 'Test suite' }), 'Regression');
     fireEvent.click(ui.getByRole('button', { name: 'Gerar testes' }));
     const result = await ui.findByTestId('test-result');
-    fireEvent.change(within(result).getByLabelText('Test Plans salvos'), {
-      target: { value: 'suite-2' },
-    });
+    await pickOption(within(result).getByRole('combobox', { name: 'Test Plans salvos' }), 'Smoke');
     fireEvent.click(within(result).getByRole('button', { name: 'Salvar alterações' }));
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith(

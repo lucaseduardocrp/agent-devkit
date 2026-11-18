@@ -238,3 +238,39 @@ describe('Gemini CLI', () => {
 it('knows the three CLIs a session can ask for', () => {
   expect(Object.keys(AGENT_CLIS)).toEqual(['claude', 'codex', 'gemini']);
 });
+
+describe('spend', () => {
+  it('sums every Claude request once, subagents included, leaving cached reads out', () => {
+    const request = (id: string, parent: string | null, usage: Record<string, number>) => ({
+      type: 'assistant',
+      parent_tool_use_id: parent,
+      message: { id, model: 'claude-sonnet-5-5', usage, content: [] },
+    });
+    const progress = feed(claudeCli, [
+      request('m1', null, {
+        input_tokens: 10,
+        cache_creation_input_tokens: 90,
+        cache_read_input_tokens: 5000,
+        output_tokens: 40,
+      }),
+      // The same message streamed again counts once.
+      request('m1', null, { input_tokens: 10, cache_creation_input_tokens: 90, output_tokens: 40 }),
+      request('m2', 'tool-1', { input_tokens: 20, output_tokens: 5 }),
+      { type: 'assistant', message: { content: [] } },
+    ]);
+    expect(progress.spend()).toEqual({
+      inputTokens: 120,
+      outputTokens: 45,
+      model: 'claude-sonnet-5-5',
+    });
+  });
+
+  it('sums Codex turns and reports nothing when a CLI gives no usage', () => {
+    const progress = feed(codexCli, [
+      { type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 10 } },
+      { type: 'turn.completed', usage: { input_tokens: 50, output_tokens: 5 } },
+    ]);
+    expect(progress.spend()).toEqual({ inputTokens: 150, outputTokens: 15 });
+    expect(feed(geminiCli, ['Hello']).spend()).toBeNull();
+  });
+});

@@ -427,11 +427,11 @@ export function Sidebar({
                 isTestChild,
                 () => setTestExpanded((prev) => !prev),
                 <>
+                  {item('testplans', 'ti-checklist', t('nav.testPlans'), { nested: true })}
                   {item('e2eSources', 'ti-map-2', t('nav.e2eSources'), {
                     nested: true,
                     testId: 'sidebar-e2eSources-button',
                   })}
-                  {item('testplans', 'ti-checklist', t('nav.testPlans'), { nested: true })}
                   {item('e2e', 'ti-player-play', t('nav.e2e'), {
                     nested: true,
                     testId: 'sidebar-e2e-button',

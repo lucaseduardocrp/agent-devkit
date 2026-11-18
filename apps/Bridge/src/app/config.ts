@@ -22,6 +22,8 @@ export interface BridgeConfig {
   /** Encrypts the users' credentials. Changing it makes the saved ones unreadable. */
   readonly encryptionKey: string | null;
   readonly runTimeoutMs: number;
+  /** Longest a single answer for the ADK (`POST /llm/stream`) may take. */
+  readonly llmTimeoutMs: number;
   readonly lang: Lang;
   readonly customClis: readonly CustomCliSpec[];
 }
@@ -33,6 +35,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): BridgeConfig {
   const timeout = Number(env.BRIDGE_RUN_TIMEOUT_MS || 30 * 60_000);
   if (!Number.isFinite(timeout) || timeout < 1000)
     throw new Error('BRIDGE_RUN_TIMEOUT_MS must be a number of milliseconds (at least 1000).');
+  const llmTimeout = Number(env.BRIDGE_LLM_TIMEOUT_MS || 3 * 60_000);
+  if (!Number.isFinite(llmTimeout) || llmTimeout < 1000)
+    throw new Error('BRIDGE_LLM_TIMEOUT_MS must be a number of milliseconds (at least 1000).');
   const ids = (env.BRIDGE_ALLOWED_USER_IDS ?? '')
     .split(',')
     .map((id) => id.trim())
@@ -57,6 +62,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): BridgeConfig {
       env.TELEGRAM_BOT_TOKEN?.trim() ||
       null,
     runTimeoutMs: timeout,
+    llmTimeoutMs: llmTimeout,
     lang: env.BRIDGE_LANG?.toLowerCase().startsWith('en') ? 'en' : 'pt',
     customClis: parseCustomClis(env.BRIDGE_CUSTOM_CLIS),
   };

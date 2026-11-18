@@ -124,6 +124,10 @@ export const excludedRoutes: Readonly<Record<string, string>> = {
     'Branch picker of the Design settings in the web app; e2e_list_branches lists the same branches.',
   'PUT /e2e/tests/:id/hook-instructions':
     "Guidance for ADK's own author of Before Run and After Run scripts, edited in the web app; an MCP host writes those scripts itself with e2e_update_script.",
+  'POST /agents/:id/chat':
+    'Server-sent events of the web chat with an agent, which streams the answer as the model writes it; a model calls agents_execute, which returns the whole answer.',
+  'GET /integrations/llm/clis':
+    'Feature detection of the AI CLI option in Connect (which CLIs the server can run, and where); not workspace data.',
   'GET /development/stream':
     'Server-sent events for the web app (pipeline and session board); a model asks development_pipeline or development_get_session when it needs the current state.',
   'GET /e2e/creations/:id/exploration/images/:page':

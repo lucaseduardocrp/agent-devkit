@@ -8,6 +8,7 @@ import { ResizableSidebar } from '../../components/layout/ResizableSidebar.js';
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog.js';
 import type { ApiClient } from '../../lib/api-client.js';
 import { AccessTokensPanel } from './AccessTokensPanel.js';
+import { CachePanel } from './CachePanel.js';
 import { PermissionGroupsPanel } from './PermissionGroupsPanel.js';
 import { WorkItemTypesPanel } from '../work-item-types/WorkItemTypesPanel.js';
 import { accessFor } from '../workspaces/permissions.js';
@@ -351,6 +352,8 @@ export function SettingsView({
               </div>
             </div>
           </div>
+
+          {settingsSection === 'general' && <CachePanel />}
 
           {settingsSection === 'types' && apiClient && (
             <div className="rounded-xl border border-border bg-surface-1 p-5 shadow-sm">

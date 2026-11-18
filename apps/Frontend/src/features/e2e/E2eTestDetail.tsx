@@ -3,22 +3,35 @@ import type { ApiClient } from '../../lib/api-client.js';
 import { cn } from '../../lib/utils.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import type { TranslationKey } from '../../lib/i18n/types.js';
+import { ResizableSidebar } from '../../components/layout/ResizableSidebar.js';
 import { Button } from '../../components/ui/button.js';
+import { Select } from '../../components/ui/select.js';
 import { FormattedContent } from '../../components/ui/formatted-content.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
+import { saveWithDrafts } from '../shared/media.js';
+import { useActivityRunner } from '../activities/ActivityCenter.js';
 import { E2ePlannedSteps, E2eSection } from './E2ePlannedSteps.js';
+import { E2eRegenerateDialog, type E2eRegenerateChoice } from './E2eRegenerateDialog.js';
+import { E2eStepFixDialog } from './E2eStepFixDialog.js';
+import { E2eFailureReason } from './E2eFailureReason.js';
+import { E2eResultControl } from './E2eResultControl.js';
 import { E2eScriptPanel } from './E2eScriptPanel.js';
 import { E2eTestStatusLabel } from './E2eStatus.js';
+import { E2eEvidencePlayer, Placeholder } from './E2eEvidencePlayer.js';
 import { E2eExecutedSteps, E2eLinkedCase } from './E2eTestEvidence.js';
+import { E2eEditSavedCase, E2eLinkedSavedCase, useSavedCaseLink } from './E2eLinkedSavedCase.js';
 import {
   ACTIVE_TEST_STATUSES,
   isQuickTunnelUrl,
   safeE2eOutput,
+  type E2eEnvironment,
   type E2ePriority,
   type E2eReporting,
+  type E2eStepResult,
   type E2eTestDetail as E2eTestDetailDto,
   formatDuration,
+  stepsNotRun,
   testStepTexts,
   type E2eVerdict,
 } from './e2e-types.js';
@@ -97,7 +110,31 @@ export function E2eTestDetail({
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<DetailTab>('preview');
   const [busy, setBusy] = useState(false);
+  // What the AI was just asked, until the request is accepted: the feedback of the click.
+  const [starting, setStarting] = useState<string | null>(null);
+  const { runActivity } = useActivityRunner();
   const [showLogs, setShowLogs] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  // The failed step whose fix with the AI is being written.
+  const [fixing, setFixing] = useState<E2eStepResult | null>(null);
+  const [environments, setEnvironments] = useState<readonly E2eEnvironment[]>([]);
+  // What the user picked and has not run yet; null while the select shows what the test holds.
+  const [environmentDraft, setEnvironmentDraft] = useState<string | null>(null);
+  const savedCase = useSavedCaseLink(apiClient, testId, test?.savedCase, setTest);
+
+  useEffect(() => {
+    let active = true;
+    // Promise.resolve first: a client or a server without environments means "none".
+    void Promise.resolve()
+      .then(() => apiClient.getE2eEnvironments())
+      .then((list) => {
+        if (active) setEnvironments(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [apiClient]);
 
   const load = useCallback(async () => {
     try {
@@ -119,18 +156,6 @@ export function E2eTestDetail({
     return () => window.clearInterval(timer);
   }, [active, load]);
 
-  const rerun = async (regenerate: boolean) => {
-    setBusy(true);
-    try {
-      await apiClient.rerunE2eTest(testId, regenerate);
-      await load();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t('e2e.actionFailed'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (!test) {
     return (
       <div className="flex flex-col gap-4" data-testid="e2e-test-detail">
@@ -149,9 +174,100 @@ export function E2eTestDetail({
     );
   }
 
+  /** Resolves with the test as soon as it is no longer queued or running. */
+  const untilIdle = async (): Promise<E2eTestDetailDto> => {
+    for (;;) {
+      const current = await apiClient.getE2eTest(testId);
+      if (!ACTIVE_TEST_STATUSES.includes(current.status)) return current;
+      await new Promise((resolve) => window.setTimeout(resolve, POLL_MS));
+    }
+  };
+
+  /**
+   * Sends one request that changes the test and reloads it. While the request is on its way the
+   * page says so (`starting`), and what the AI does afterwards is an activity of the notification
+   * center: running until the test stops, failed if the run ended in error. Failures to start are
+   * shown on the page.
+   */
+  const perform = async (
+    send: () => Promise<void>,
+    ai?: { readonly title: string; readonly starting: string },
+  ) => {
+    const begin = async () => {
+      setBusy(true);
+      setStarting(ai?.starting ?? null);
+      try {
+        await send();
+        await load();
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : t('e2e.actionFailed'));
+        throw reason;
+      } finally {
+        setBusy(false);
+        setStarting(null);
+      }
+    };
+    if (!ai) {
+      await begin().catch(() => undefined);
+      return;
+    }
+    await runActivity({ kind: 'agent', title: ai.title }, async () => {
+      await begin();
+      const finished = await untilIdle();
+      if (finished.status === 'error' || finished.status === 'cancelled')
+        throw new Error(finished.error ?? t('e2e.actionFailed'));
+    }).catch(() => undefined);
+  };
+
+  const rerun = (regenerate: boolean, choice?: E2eRegenerateChoice) =>
+    perform(
+      async () => {
+        const send = (guidance?: E2eRegenerateChoice) =>
+          // Empty means "inherit the run's environment", which clears the test's own.
+          environmentDraft !== null
+            ? apiClient.rerunE2eTest(testId, regenerate, guidance, environmentDraft || null)
+            : guidance
+              ? apiClient.rerunE2eTest(testId, regenerate, guidance)
+              : apiClient.rerunE2eTest(testId, regenerate);
+        // The images of the instructions were pasted as drafts: they are uploaded now, and removed
+        // again when the test cannot be started, so only a confirmed rewrite leaves files behind.
+        if (choice) await saveWithDrafts(apiClient, 'e2e', choice, send);
+        else await send();
+        setEnvironmentDraft(null);
+      },
+      regenerate
+        ? {
+            title: t('e2e.regenerateActivity', { test: test.code }),
+            starting: t('e2e.regenerateStarting'),
+          }
+        : undefined,
+    );
+
+  /** Rewrites one failed step with the AI (only that step of the script) and runs the test. */
+  const fixStep = (position: number, instructions: string) =>
+    perform(
+      // The images of the instructions are uploaded now and removed again if the AI cannot start.
+      () =>
+        saveWithDrafts(apiClient, 'e2e', { instructions }, (draft) =>
+          apiClient.fixE2eTestStep(testId, position, draft.instructions),
+        ),
+      {
+        title: t('e2e.fixStepActivity', { position, test: test.code }),
+        starting: t('e2e.fixStepStarting', { position }),
+      },
+    );
+
   const plannedSteps = testStepTexts(test);
+  const runEnvironment = environments.find((item) => item.id === test.creation.environmentId);
+  const selectedEnvironment = environmentDraft ?? test.environmentId ?? '';
+  // What the next execution uses: the test's own environment, else the run's.
+  const activeEnvironment = environments.find(
+    (item) => item.id === (test.environmentId ?? test.creation.environmentId),
+  );
   // The outcome of the run belongs to the run tabs; the script tabs are about the code alone.
   const showsRun = tab === 'preview' || tab === 'testCase';
+  // The user passed it by hand: the error and analysis of the run no longer describe the result.
+  const overruled = test.status === 'passed' && test.resultSource === 'manual';
 
   return (
     <div className="flex min-w-0 flex-col gap-4" data-testid="e2e-test-detail" aria-busy={active}>
@@ -168,11 +284,37 @@ export function E2eTestDetail({
             </span>
           </h2>
           {!isReadOnly && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {environments.length > 0 && (
+                <div className="flex items-center gap-2" title={t('e2e.testEnvironmentHint')}>
+                  <span className="text-xs text-[var(--text-secondary)]">
+                    {t('e2e.testEnvironment')}
+                  </span>
+                  <Select
+                    selectSize="sm"
+                    containerClassName="w-52"
+                    aria-label={t('e2e.testEnvironment')}
+                    value={selectedEnvironment}
+                    disabled={busy || active}
+                    onChange={(event) => setEnvironmentDraft(event.target.value)}
+                  >
+                    <option value="">
+                      {runEnvironment
+                        ? `${t('e2e.testEnvironmentInherit')} (${runEnvironment.name})`
+                        : t('e2e.testEnvironmentInherit')}
+                    </option>
+                    {environments.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              )}
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => void rerun(true)}
+                onClick={() => setRegenerating(true)}
                 disabled={busy || active}
               >
                 <i className="ti ti-sparkles" aria-hidden="true" />
@@ -185,12 +327,51 @@ export function E2eTestDetail({
             </div>
           )}
         </div>
+        {starting && (
+          <p
+            role="status"
+            className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] px-3 py-2 text-sm text-[var(--text-secondary)]"
+            data-testid="e2e-ai-starting"
+          >
+            <i
+              className="ti ti-loader-2 animate-spin text-[var(--text-accent)]"
+              aria-hidden="true"
+            />
+            {starting}
+          </p>
+        )}
         {error && (
           <p className="text-sm text-red-400" role="alert">
             {error}
           </p>
         )}
       </div>
+
+      <E2eRegenerateDialog
+        open={regenerating}
+        initialInstructions={test.scriptInstructions ?? ''}
+        hasLastRun={Boolean(test.scriptPath)}
+        busy={busy}
+        onCancel={() => setRegenerating(false)}
+        onConfirm={(choice) => {
+          // The rewrite goes on in the background: the dialog does not wait for the upload of the
+          // images, the request or the reload, and a failure is shown on the page.
+          setRegenerating(false);
+          void rerun(true, choice);
+        }}
+      />
+
+      {fixing && (
+        <E2eStepFixDialog
+          step={fixing}
+          onCancel={() => setFixing(null)}
+          onConfirm={(instructions) => {
+            // Same as the rewrite of the whole script: it goes on in the background.
+            setFixing(null);
+            void fixStep(fixing.position, instructions);
+          }}
+        />
+      )}
 
       {test.creation.mode === 'frontend' &&
         isQuickTunnelUrl(test.creation.baseUrl) &&
@@ -221,12 +402,12 @@ export function E2eTestDetail({
         </div>
         <div className="p-3" role="tabpanel">
           {tab === 'preview' &&
-            (active ? (
+            (active || starting ? (
               <Placeholder icon="ti-loader-2 animate-spin" text={t('e2e.inProgress')} />
-            ) : test.hasVideo ? (
-              <TestVideo
+            ) : test.hasVideo || test.stepResults.some((step) => step.hasScreenshot) ? (
+              <E2eEvidencePlayer
                 apiClient={apiClient}
-                testId={test.id}
+                test={test}
                 version={`${test.lastRunAt ?? ''}:${test.attempts}`}
               />
             ) : (
@@ -236,9 +417,15 @@ export function E2eTestDetail({
               />
             ))}
           {tab === 'testCase' && (
-            <div className="grid min-w-0 gap-6 p-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]">
-              <div className="flex min-w-0 flex-col gap-6">
-                <E2eSection icon="ti-notes" title={t('e2e.description')}>
+            <div className="flex min-w-0 flex-col gap-6 p-1 lg:flex-row lg:gap-0">
+              <div className="flex min-w-0 flex-1 flex-col gap-6 lg:pr-6">
+                <E2eSection
+                  icon="ti-notes"
+                  title={t('e2e.description')}
+                  action={
+                    <E2eEditSavedCase saved={savedCase} isReadOnly={isReadOnly} disabled={active} />
+                  }
+                >
                   <TestDescription content={test.description || test.title} />
                 </E2eSection>
                 <E2eSection icon="ti-list-numbers" title={t('e2e.steps')}>
@@ -249,7 +436,23 @@ export function E2eTestDetail({
                   )}
                 </E2eSection>
               </div>
-              <div className="flex min-w-0 flex-col gap-6">
+              <ResizableSidebar
+                resizeEdge="left"
+                defaultWidth={380}
+                minWidth={280}
+                maxWidth={720}
+                className="min-w-0 gap-6 border-l border-[var(--border)] lg:pl-6"
+                data-testid="e2e-test-case-side"
+              >
+                <E2eSection icon="ti-test-pipe" title={t('e2e.savedCaseTitle')}>
+                  <E2eLinkedSavedCase
+                    apiClient={apiClient}
+                    test={test}
+                    saved={savedCase}
+                    isReadOnly={isReadOnly}
+                    disabled={active}
+                  />
+                </E2eSection>
                 <E2eSection icon="ti-link" title={t('e2e.tmLinkedCase')}>
                   <E2eLinkedCase
                     apiClient={apiClient}
@@ -275,6 +478,14 @@ export function E2eTestDetail({
                         <dt className="text-[var(--text-muted)]">{t('e2e.browserOriginLabel')}</dt>
                         <dd className="break-all text-[var(--text-primary)]">
                           {test.creation.localOrigin}
+                        </dd>
+                      </>
+                    )}
+                    {activeEnvironment && (
+                      <>
+                        <dt className="text-[var(--text-muted)]">{t('e2e.testEnvironment')}</dt>
+                        <dd className="break-all text-[var(--text-primary)]">
+                          {activeEnvironment.name}
                         </dd>
                       </>
                     )}
@@ -304,7 +515,7 @@ export function E2eTestDetail({
                     )}
                   </dl>
                 </E2eSection>
-              </div>
+              </ResizableSidebar>
             </div>
           )}
           {(tab === 'code' || tab === 'beforeRun' || tab === 'afterRun') && (
@@ -324,11 +535,32 @@ export function E2eTestDetail({
         </div>
       </div>
 
-      {showsRun && !active && test.stepResults.length > 0 && (
-        <E2eExecutedSteps apiClient={apiClient} test={test} />
+      {showsRun && !active && <E2eFailureReason test={test} />}
+
+      {showsRun && !active && (
+        <E2eResultControl
+          apiClient={apiClient}
+          test={test}
+          isReadOnly={isReadOnly}
+          onChanged={setTest}
+        />
       )}
 
-      {showsRun && test.error && !active && (
+      {/* A run that never reached its steps shows them on the preview; the case tab lists them already. */}
+      {showsRun &&
+        !active &&
+        (test.stepResults.length > 0 || (tab === 'preview' && stepsNotRun(test).length > 0)) && (
+          <E2eExecutedSteps
+            apiClient={apiClient}
+            test={test}
+            isReadOnly={isReadOnly}
+            onChanged={setTest}
+            // Only a test with a script has a step to rewrite.
+            {...(test.scriptPath && !busy ? { onFixStep: setFixing } : {})}
+          />
+        )}
+
+      {showsRun && test.error && !active && !overruled && (
         <section className="rounded-lg border border-red-500/30 bg-red-950/40">
           <h3 className="border-b border-red-500/20 px-4 py-2 text-sm font-semibold text-red-300">
             {t('e2e.errorTitle')}
@@ -339,7 +571,7 @@ export function E2eTestDetail({
         </section>
       )}
 
-      {showsRun && test.analysis && !active && (
+      {showsRun && test.analysis && !active && !overruled && (
         <section className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)]">
           <h3 className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-2 text-sm font-semibold text-[var(--text-primary)]">
             <i className="ti ti-sparkles text-[var(--text-accent)]" aria-hidden="true" />
@@ -384,84 +616,6 @@ export function E2eTestDetail({
           )}
         </section>
       )}
-    </div>
-  );
-}
-
-function TestVideo({
-  apiClient,
-  testId,
-  version,
-}: {
-  readonly apiClient: ApiClient;
-  readonly testId: string;
-  readonly version: string;
-}) {
-  const { t } = useI18n();
-  const [video, setVideo] = useState<{ url: string; type: string } | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [unplayable, setUnplayable] = useState(false);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let objectUrl: string | null = null;
-    setVideo(null);
-    setFailed(false);
-    setUnplayable(false);
-    const load = async () => {
-      // Object storage: the player streams straight from a signed URL (no API download).
-      const signed = await apiClient.getE2eTestVideoUrl(testId, controller.signal);
-      if (signed) {
-        setVideo({ url: signed.url, type: signed.mimeType });
-        return;
-      }
-      const blob = await apiClient.getE2eTestVideo(testId, controller.signal);
-      objectUrl = URL.createObjectURL(blob);
-      setVideo({ url: objectUrl, type: blob.type });
-    };
-    load().catch(() => {
-      if (!controller.signal.aborted) setFailed(true);
-    });
-    return () => {
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [apiClient, testId, version]);
-
-  if (failed) return <Placeholder icon="ti-video-off" text={t('e2e.videoFailed')} />;
-  if (!video) return <Placeholder icon="ti-loader-2 animate-spin" text={t('e2e.videoLoading')} />;
-  // Without this, a browser that cannot decode the file shows a silent grey player.
-  if (unplayable)
-    return (
-      <div className="mx-auto flex aspect-video w-full max-w-2xl flex-col items-center justify-center gap-3 rounded-md bg-[var(--surface-0)] text-sm text-[var(--text-muted)]">
-        <i className="ti ti-video-off text-3xl" aria-hidden="true" />
-        {t('e2e.videoUnplayable')}
-        <a
-          href={video.url}
-          download={`${testId}.${video.type.includes('mp4') ? 'mp4' : 'webm'}`}
-          className="text-[var(--text-accent)] underline-offset-4 hover:underline"
-        >
-          {t('e2e.downloadVideo')}
-        </a>
-      </div>
-    );
-  return (
-    <video
-      src={video.url}
-      controls
-      playsInline
-      onError={() => setUnplayable(true)}
-      className="mx-auto block aspect-video w-full max-w-2xl rounded-md bg-black"
-      data-testid="e2e-video"
-    />
-  );
-}
-
-function Placeholder({ icon, text }: { readonly icon: string; readonly text: string }) {
-  return (
-    <div className="mx-auto flex aspect-video w-full max-w-2xl flex-col items-center justify-center gap-3 rounded-md bg-[var(--surface-0)] text-sm text-[var(--text-muted)]">
-      <i className={cn('ti text-3xl', icon)} aria-hidden="true" />
-      {text}
     </div>
   );
 }

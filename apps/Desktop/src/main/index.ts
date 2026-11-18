@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, watch as fsWatch } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   BrowserWindow,
@@ -14,7 +15,14 @@ import {
   type IpcMainInvokeEvent,
 } from 'electron';
 import { registerAppScheme, serveWebApp } from './app-protocol.js';
-import { APP_ORIGIN, apiUrl, backendEnvironment, mcpEnvironment, mcpUrl } from './env.js';
+import {
+  APP_ORIGIN,
+  apiUrl,
+  backendEnvironment,
+  mcpEnvironment,
+  mcpUrl,
+  storageEnvironment,
+} from './env.js';
 import { readEnvValue } from './backup-format.js';
 import {
   backupKind,
@@ -34,6 +42,13 @@ import {
   type CloudTarget,
   type SecretCipher,
 } from './cloud-database.js';
+import {
+  cacheStatus,
+  clearCache,
+  isCacheCategory,
+  type CacheCleared,
+  type CacheLocations,
+} from './cache.js';
 import { handleDevelopmentCalls } from './development-ipc.js';
 import { debounce, liveModeFromEnv } from './live.js';
 import { migrationNames } from './migrations.js';
@@ -75,6 +90,8 @@ let settings: DesktopSettings | undefined;
 let database: AdkDatabase | undefined;
 /** The hosted database in use, opened from the settings; undefined while the data is local. */
 let cloudUrl: string | undefined;
+/** The R2 settings the API runs with (live mode only); see storageEnvironment. */
+let storage: Record<string, string> = {};
 let backend: Service | undefined;
 let mcp: Service | undefined;
 let window: BrowserWindow | undefined;
@@ -289,6 +306,7 @@ function createBackend(current: DesktopSettings): Service {
     environment: backendEnvironment(current, {
       browsersPath: dirs.browsers,
       dataDir: userData,
+      storage,
       ...(live ? { frontendUrl: live.webOrigin } : {}),
       ...(cloudUrl && current.cloudDatabase
         ? {
@@ -320,6 +338,15 @@ function createMcp(current: DesktopSettings): Service {
 async function startServices(): Promise<void> {
   if (!settings) return;
   void window?.loadURL(loadingPage('Starting ADK…'));
+  // While developing, the files (videos, screenshots) stay where the apps/Backend .env says (R2).
+  if (live) {
+    storage = storageEnvironment(await readFile(join(backendDir, '.env'), 'utf8').catch(() => ''));
+    log(
+      storage['E2E_R2_URL']
+        ? '[live] Test videos and screenshots are read from R2 (apps/Backend/.env).'
+        : '[live] No R2 in apps/Backend/.env: the files stay in the database.',
+    );
+  }
   backend = createBackend(settings);
   backend.start();
   mcp = createMcp(settings);
@@ -709,6 +736,40 @@ function fromWebApp(event: IpcMainInvokeEvent): boolean {
   }
 }
 
+// ---- Cache cleanup, driven from Settings > General in the web app (see src/preload) ----
+
+function cacheLocations(): CacheLocations {
+  return {
+    userData,
+    tempDir: tmpdir(),
+    workspacesDir: join(backendDir, '.e2e-workspaces'),
+    browsersDir: dirs.browsers,
+  };
+}
+
+async function clearAppCache(ids: unknown): Promise<Outcome<CacheCleared>> {
+  const chosen = Array.isArray(ids) ? ids.filter(isCacheCategory) : [];
+  if (chosen.length === 0) return { ok: false, error: 'Choose what to delete.' };
+  if (chosen.includes('web')) {
+    // The web view holds its cache files open: ask it to let go before deleting them.
+    const session = window?.webContents.session;
+    await session?.clearCache().catch(() => undefined);
+    await session?.clearCodeCaches({}).catch(() => undefined);
+    await session?.clearStorageData({ storages: ['shadercache'] }).catch(() => undefined);
+  }
+  return { ok: true, ...(await clearCache(cacheLocations(), chosen)) };
+}
+
+function handleCacheCalls(): void {
+  const denied: Outcome = { ok: false, error: 'Not allowed.' };
+  ipcMain.handle('adk:cache-status', async (event) =>
+    fromWebApp(event) ? { ok: true, usage: await cacheStatus(cacheLocations()) } : denied,
+  );
+  ipcMain.handle('adk:cache-clear', (event, ids: unknown) =>
+    fromWebApp(event) ? clearAppCache(ids) : denied,
+  );
+}
+
 function handleStorageCalls(): void {
   const denied: Outcome = { ok: false, error: 'Not allowed.' };
   ipcMain.handle('adk:storage-status', (event) => (fromWebApp(event) ? storageStatus() : denied));
@@ -746,6 +807,7 @@ if (!app.requestSingleInstanceLock()) {
     event.returnValue = settings ? apiUrl(settings) : '';
   });
   handleStorageCalls();
+  handleCacheCalls();
   development = handleDevelopmentCalls({
     apiUrl: () => (settings ? apiUrl(settings) : ''),
     userData,

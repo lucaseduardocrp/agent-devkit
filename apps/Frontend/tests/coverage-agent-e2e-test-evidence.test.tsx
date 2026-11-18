@@ -25,6 +25,7 @@ const base: E2eTestDetail = {
   priority: 'high',
   beforeRunInstructions: null,
   afterRunInstructions: null,
+  scriptInstructions: null,
   scriptPath: 'tests/tc001.spec.ts',
   status: 'failed',
   error: null,
@@ -135,10 +136,10 @@ describe('E2eLinkedCase', () => {
         onChanged={onChanged}
       />,
     );
-    expect(screen.getByText('Nenhum test case vinculado.')).toBeInTheDocument();
+    expect(screen.getByText('Nenhum test case remoto vinculado.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Vincular' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
-    expect(screen.getByText('Nenhum test case vinculado.')).toBeInTheDocument();
+    expect(screen.getByText('Nenhum test case remoto vinculado.')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Vincular' }));
     const search = await screen.findByRole('combobox', { name: 'ID do test case' });

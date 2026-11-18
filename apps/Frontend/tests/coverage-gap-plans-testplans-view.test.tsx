@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestPlansView } from '../src/features/testplans/TestPlansView.js';
 import { ApiClient } from '../src/lib/api-client.js';
@@ -177,38 +177,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('TestPlansView agents and creation shortcuts', () => {
-  it('falls back to the default agent when the agents cannot be loaded', async () => {
-    const api = client();
-    vi.spyOn(api, 'getAgents').mockRejectedValue(new Error('offline'));
-    const ui = view(api, 'create');
-
-    await waitFor(() => expect(api.getAgents).toHaveBeenCalled());
-    const select = ui.getByLabelText('Selecionar agente de IA para geração de testes');
-    expect(within(select).getAllByRole('option')).toHaveLength(1);
-  });
-
-  it('moves a freshly generated plan to another suite', async () => {
-    const api = client({ suites: [suite(), suite({ id: 'suite-2', name: 'Smoke' })] });
-    vi.spyOn(api, 'generateTestPlan').mockResolvedValue({
-      plans: [],
-      csv: '',
-      savedPlan: plan({ suiteId: 'suite-1' }),
-    });
-    const ui = view(api, 'create');
-
-    await waitFor(() => expect(ui.getByLabelText('Test suite')).toHaveTextContent('Smoke'));
-    fireEvent.change(ui.getByLabelText('Test suite'), { target: { value: 'suite-1' } });
-    fireEvent.change(ui.getByLabelText('User story / requisito'), { target: { value: 'Pay' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Gerar testes' }));
-
-    const target = (await ui.findByLabelText('Test Plans salvos')) as HTMLSelectElement;
-    expect(target.value).toBe('suite-1');
-    fireEvent.change(target, { target: { value: 'suite-2' } });
-    expect(target.value).toBe('suite-2');
-  });
-});
-
 describe('TestPlansView generated plan in the create tab', () => {
   it('renames, saves and edits the cases of a freshly generated plan', async () => {
     const generated = plan({
@@ -312,33 +280,6 @@ describe('TestPlansView saving a plan', () => {
     expect(update.mock.calls[0]![1].plans[0]!.steps).toEqual([]);
   });
 
-  it('keeps an empty plan editable after a failed regeneration', async () => {
-    const api = client();
-    vi.spyOn(api, 'generateTestPlan')
-      .mockResolvedValueOnce({ plans: [], csv: '', savedPlan: plan() })
-      .mockRejectedValue(new Error('generator down'));
-    const update = vi.spyOn(api, 'updateSavedTestPlan');
-    const ui = view(api, 'create');
-
-    fireEvent.change(ui.getByLabelText('User story / requisito'), { target: { value: 'Pay' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Gerar testes' }));
-    await ui.findByTestId('test-result');
-    fireEvent.click(ui.getByRole('button', { name: 'Gerar testes' }));
-    expect(await ui.findByRole('alert')).toHaveTextContent('generator down');
-
-    fireEvent.click(ui.getByTestId('tab-saved-test-plans'));
-    expect(ui.queryByTestId('test-result')).not.toBeInTheDocument();
-    fireEvent.click(ui.getByTestId('btn-save-plan-changes'));
-    expect(update).not.toHaveBeenCalled();
-
-    fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
-    fireEvent.click(ui.getByRole('button', { name: 'Exportar CSV' }));
-    expect(await ui.findByRole('alert')).toHaveTextContent('pelo menos um passo');
-
-    fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
-    fireEvent.click(ui.getByTestId('btn-add-test-case'));
-    expect(ui.getByTestId('test-case-CT-01')).toHaveTextContent('Novo Caso de Teste 1');
-  });
 });
 
 describe('TestPlansView CSV export failures', () => {

@@ -1,4 +1,5 @@
 import { createDatabase } from '../adapters/persistence/database-factory.js';
+import { PrismaUsageStore } from '../modules/issues/usage-store.js';
 import { loadRuntimeConfig } from '../shared/config.js';
 import { resolveEncryptionKey } from '../shared/encryption.js';
 import {
@@ -17,7 +18,10 @@ import { E2eEnvironmentService } from '../modules/e2e/application/e2e-environmen
 import { PrismaE2eJobQueue } from '../modules/e2e/adapters/prisma-e2e-queue.js';
 import { PrismaE2eRunnerTaskStore } from '../modules/e2e/adapters/prisma-runner-task-store.js';
 import { LocalE2eRunner } from '../modules/e2e/application/local-runner.js';
-import { createE2eArtifactStore } from '../modules/e2e/adapters/artifact-store-factory.js';
+import {
+  createAttachmentStore,
+  createE2eArtifactStore,
+} from '../modules/e2e/adapters/artifact-store-factory.js';
 import { GitScriptRepository } from '../modules/e2e/adapters/git-script-repository.js';
 import { PlaywrightE2eRunner } from '../modules/e2e/adapters/playwright-runner.js';
 import {
@@ -59,6 +63,8 @@ const integrations = new IntegrationsService(
   new PrismaUserIntegrationStore(database.client as unknown as PrismaIntegrationsClient),
 );
 const providers = new DynamicProviderFactory(integrations);
+// The worker spends tokens too (E2E authoring); they land in the same dashboard as the API's.
+providers.setUsageRecorder(new PrismaUsageStore(database.client));
 const agents = new AgentService({
   agentRepository: new PrismaAgentRepository(database.client),
   workflowRepository: new PrismaAgentWorkflowRepository(
@@ -79,13 +85,18 @@ if (hostAlias)
   console.log(`[E2eWorker] localhost targets go to this computer through ${hostAlias}.`);
 const store = new PrismaE2eStore(database.client);
 // Same choice as the API (R2 or Postgres), so videos recorded here are served there.
-const artifacts = createE2eArtifactStore(process.env, database.client).store;
+const e2eArtifacts = createE2eArtifactStore(process.env, database.client);
+const artifacts = e2eArtifacts.store;
+// Images written in a PRD live with the attachments, apart from the videos.
+const attachments = createAttachmentStore(process.env, e2eArtifacts).store;
 
+const queue = new PrismaE2eJobQueue(database.client);
 const worker = new E2eWorker({
-  queue: new PrismaE2eJobQueue(database.client),
+  queue,
   concurrency: Number(process.env['E2E_WORKER_CONCURRENCY']) || 2,
   executor: new E2eExecutor({
     store,
+    queue,
     artifacts,
     scripts: new GitScriptRepository(integrations),
     runner: new PlaywrightE2eRunner({
@@ -102,6 +113,7 @@ const worker = new E2eWorker({
     author: new AgentE2eAuthor({
       agents,
       providers,
+      attachments,
       knowledge: createPrismaKnowledgeAdapters(database.client).search,
     }),
     environments: new E2eEnvironmentService(new PrismaE2eEnvironmentStore(database.client)),

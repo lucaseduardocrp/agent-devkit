@@ -347,19 +347,16 @@ describe('TestPlansView after a failed generation', () => {
     fireEvent.change(ui.getByLabelText('Título do Test Plan'), { target: { value: 'Renamed' } });
     expect(ui.getByLabelText('Título do Test Plan')).toHaveProperty('value', 'Renamed');
 
+    fireEvent.change(ui.getByLabelText('User story / requisito'), { target: { value: 'Story' } });
     fireEvent.click(ui.getByRole('button', { name: 'Gerar testes' }));
     expect(await ui.findByText('Generator down')).toBeInTheDocument();
-    // Back on the saved tab, the plan is still selected but its cases are gone.
-    fireEvent.click(ui.getByTestId('tab-saved-test-plans'));
+    // A failed attempt gives back what was typed.
+    expect(ui.getByLabelText('User story / requisito')).toHaveProperty('value', 'Story');
+    // The failure was about another generation: the plan on screen stays as it was.
+    expect(ui.getByTestId('test-result')).toBeInTheDocument();
+    expect(ui.getByLabelText('Título do Test Plan')).toHaveProperty('value', 'Renamed');
+    fireEvent.click(ui.getByTestId('btn-view-saved-plans'));
     expect(await ui.findByTestId('saved-plan-detail')).toBeInTheDocument();
-    // Saving with no cases does nothing.
-    const update = vi.spyOn(api, 'updateSavedTestPlan');
-    fireEvent.click(ui.getByTestId('btn-save-plan-changes'));
-    expect(update).not.toHaveBeenCalled();
-    // Exporting with no cases is refused.
-    fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
-    fireEvent.click(ui.getByRole('button', { name: 'Exportar CSV' }));
-    await waitFor(() => expect(ui.getAllByRole('alert').length).toBeGreaterThan(0));
     // Adding a case starts the list.
     fireEvent.click(ui.getByRole('button', { name: 'Ações' }));
     fireEvent.click(ui.getByTestId('btn-add-test-case'));

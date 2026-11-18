@@ -5,6 +5,7 @@ import { E2eImage } from '../src/features/e2e/E2eImage.js';
 import { E2eConfigForm } from '../src/features/e2e/E2eConfigForm.js';
 import type { ApiClient } from '../src/lib/api-client.js';
 import type { E2eEnvironment } from '../src/features/e2e/e2e-types.js';
+import { pickRepository } from './helpers/pick-repository.js';
 
 const staging: E2eEnvironment = {
   id: 'env1',
@@ -34,6 +35,8 @@ function api(list: readonly E2eEnvironment[] | Error = [staging, local]) {
     deleteE2eEnvironment: vi.fn().mockResolvedValue(undefined),
   };
 }
+const REPOSITORY_NAMES = { 'github:42': 'acme/app' };
+
 const asClient = (client: object) => client as unknown as ApiClient;
 
 describe('E2eEnvironments', () => {
@@ -301,10 +304,7 @@ describe('E2eConfigForm environments', () => {
     );
     fireEvent.change(view.getByLabelText('Nome da execução'), { target: { value: 'run' } });
     fireEvent.change(view.getByLabelText('Ou cole o conteúdo'), { target: { value: 'PRD' } });
-    await waitFor(() =>
-      expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBe(2),
-    );
-    fireEvent.change(view.getByLabelText('Repositório'), { target: { value: 'github:42' } });
+    await pickRepository(REPOSITORY_NAMES, 'github:42');
     await waitFor(() =>
       expect((view.getByLabelText('Branch base') as HTMLSelectElement).value).toBe('main'),
     );

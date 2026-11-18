@@ -17,7 +17,7 @@ export interface E2eBrainDocument {
   readonly content: string;
 }
 
-function documentTitle(chunks: readonly KnowledgeChunk[]): string {
+export function documentTitle(chunks: readonly KnowledgeChunk[]): string {
   const first = chunks[0]!;
   try {
     const url = new URL(first.source);

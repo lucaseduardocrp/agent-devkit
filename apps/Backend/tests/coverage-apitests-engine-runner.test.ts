@@ -196,7 +196,7 @@ describe('collection flow', () => {
             { name: 'T', passed: false, error: 'bad' },
             { name: 'U', passed: true },
           ],
-          logs: [{ level: 'log', message: 'hello', source: 'go' }],
+          logs: [{ level: 'log', message: 'hello', source: 'tests' }],
         }),
         second: () => undefined,
       },
@@ -614,7 +614,12 @@ describe('executeRun', () => {
   });
 
   it('reports errors of the run itself, whatever was thrown', async () => {
-    const asError = await executeRun({ ...integration([]), collection: null } as never, { report });
+    const asError = await executeRun(
+      { ...integration([]), collection: null } as unknown as RunPayload,
+      {
+        report,
+      },
+    );
     expect(asError).toMatchObject({ status: 'error', result: null });
     expect(asError.error).toMatch(/null/);
     const odd = integration([request('a')]);

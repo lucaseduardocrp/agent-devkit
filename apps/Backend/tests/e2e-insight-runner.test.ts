@@ -7,7 +7,12 @@ import {
   PlaywrightE2eRunner,
   defaultBrowsersPath,
 } from '../src/modules/e2e/adapters/playwright-runner.js';
-import type { E2eExploreEvent, E2eLiveFrame } from '../src/modules/e2e/application/e2e-runner.js';
+import type {
+  E2eAgentAction,
+  E2eAgentObservation,
+  E2eExploreEvent,
+  E2eLiveFrame,
+} from '../src/modules/e2e/application/e2e-runner.js';
 
 const browsersPath = process.env['PLAYWRIGHT_BROWSERS_PATH'] || defaultBrowsersPath();
 const browserInstalled =
@@ -50,6 +55,13 @@ describe.skipIf(!browserInstalled)('exploration and action trail (real browser)'
   let baseUrl: string;
   const workspaceRoot = fs.mkdtempSync(path.join(process.cwd(), '.e2e-workspaces-test-'));
   const runner = new PlaywrightE2eRunner({ workspaceRoot, timeoutMs: 120_000, settleMs: 150 });
+  // The scripted agents below take their decisions in order: one browser explores.
+  const single = new PlaywrightE2eRunner({
+    workspaceRoot,
+    timeoutMs: 120_000,
+    settleMs: 150,
+    explorers: 1,
+  });
 
   beforeAll(async () => {
     server = http.createServer((_request, response) => {
@@ -91,6 +103,7 @@ describe.skipIf(!browserInstalled)('exploration and action trail (real browser)'
       'sign_in:qa@example.com',
       'click:Issues',
       'click:Inbox',
+      'note:stopped_no_targets:2',
     ]);
     // Signing out, leaving the site and disabled controls are never clicked.
     expect(snapshot.pages.some((item) => item.title === 'signed-out')).toBe(false);
@@ -101,6 +114,159 @@ describe.skipIf(!browserInstalled)('exploration and action trail (real browser)'
     expect(events.filter((event) => event.kind === 'frame').length).toBeGreaterThanOrEqual(4);
     // The password is typed into the browser only; it never reaches the log.
     expect(JSON.stringify(log)).not.toContain('s3cret-pass');
+  }, 120_000);
+
+  it('lets an AI agent use the controls of the page like a person, never the ones that sign out', async () => {
+    const views: E2eAgentObservation[] = [];
+    const idOf = (view: E2eAgentObservation, label: string) =>
+      view.elements.find((element) => element.label.includes(label))!.id;
+    const decisions: ((view: E2eAgentObservation) => E2eAgentAction)[] = [
+      (view) => ({ kind: 'click', element: idOf(view, 'Issues'), reason: 'open issues' }),
+      (view) => ({
+        kind: 'type',
+        element: idOf(view, 'Search'),
+        value: 'login bug',
+        reason: 'filter the list',
+      }),
+      (view) => ({ kind: 'click', element: idOf(view, 'Sign out'), reason: 'leave' }),
+      () => ({ kind: 'finish', reason: 'covered' }),
+    ];
+    const events: E2eExploreEvent[] = [];
+    const snapshot = await single.explore({
+      mode: 'frontend',
+      url: `${baseUrl}/`,
+      credentials: { username: 'qa@example.com', password: 's3cret-pass' },
+      onProgress: (event) => events.push(event),
+      agent: (view) => {
+        views.push(view);
+        return Promise.resolve(decisions[views.length - 1]!(view));
+      },
+    });
+
+    const log = events.filter((event) => event.kind === 'log');
+    expect(log.map((entry) => [entry.action, entry.target, entry.reason])).toEqual([
+      ['navigate', `${baseUrl}/`, undefined],
+      ['sign_in', 'qa@example.com', undefined],
+      ['click', 'Issues', 'open issues'],
+      ['type', 'Search = login bug', 'filter the list'],
+      ['note', 'agent_done:2', 'covered'],
+    ]);
+    expect(snapshot.pages.map((item) => item.headings[0])).toEqual([
+      'Sign in',
+      'Dashboard',
+      'Issues',
+    ]);
+    // The agent reads numbered controls with their names, without the ones that are hidden.
+    expect(views[0]!.elements.map((element) => element.label)).toEqual(
+      expect.arrayContaining(['Issues', 'Inbox', 'Sign out', 'Search', 'State', 'Only mine']),
+    );
+    expect(views[0]!.elements.some((element) => element.label === 'Enter')).toBe(false);
+    expect(views[0]!.elements.some((element) => element.label === 'Disabled')).toBe(false);
+    // What it typed reaches the page, and the next screen shows it.
+    expect(views[2]!.text).toContain('login bug');
+    expect(views[2]!.history).toEqual([
+      '1. click "Issues" -> Issues',
+      '2. type "Search = login bug" -> Issues',
+    ]);
+    // Signing out was refused: the session is still open for the last step.
+    expect(views[3]!.history.at(-1)).toContain('not done');
+    expect(views[3]!.elements.some((element) => element.label === 'Sign out')).toBe(true);
+  }, 120_000);
+
+  it('explores with several browsers at once, each signed in and covering its own areas', async () => {
+    const views: E2eAgentObservation[] = [];
+    const clicked = new Set<number>();
+    const events: E2eExploreEvent[] = [];
+    const snapshot = await new PlaywrightE2eRunner({
+      workspaceRoot,
+      timeoutMs: 120_000,
+      settleMs: 150,
+      explorers: 2,
+    }).explore({
+      mode: 'frontend',
+      url: `${baseUrl}/`,
+      credentials: { username: 'qa@example.com', password: 's3cret-pass' },
+      onProgress: (event) => events.push(event),
+      agent: (view) => {
+        views.push(view);
+        const { worker, areas } = view.assignment!;
+        if (clicked.has(worker)) return Promise.resolve({ kind: 'finish', reason: 'done' });
+        clicked.add(worker);
+        const element = view.elements.find((item) => item.label === areas[0])!;
+        return Promise.resolve({ kind: 'click', element: element.id, reason: 'my area' });
+      },
+    });
+
+    // The navigation was dealt between two browsers.
+    const shares = new Map(views.map((view) => [view.assignment!.worker, view.assignment!.areas]));
+    expect([...shares.entries()].sort()).toEqual([
+      [1, ['Issues']],
+      [2, ['Inbox']],
+    ]);
+    expect(views.every((view) => view.assignment!.workers === 2)).toBe(true);
+    // Both were signed in (the second one on its own), and the screens of both are in the snapshot.
+    expect(views.filter((view) => view.step === 1).map((view) => view.page.headings[0])).toEqual([
+      'Dashboard',
+      'Dashboard',
+    ]);
+    expect(snapshot.pages.map((item) => item.headings[0]).sort()).toEqual([
+      'Dashboard',
+      'Inbox',
+      'Issues',
+      'Sign in',
+    ]);
+    // One sign-in and one closing note in the log, and the phase never goes back.
+    const log = events.filter((event) => event.kind === 'log');
+    expect(log.filter((entry) => entry.action === 'sign_in')).toHaveLength(1);
+    expect(log.filter((entry) => entry.action === 'note')).toHaveLength(1);
+    expect(events.filter((event) => event.kind === 'phase').map((event) => event.phase)).toEqual([
+      'signing_in',
+      'exploring',
+    ]);
+  }, 120_000);
+
+  it('chooses in a drop-down list and scrolls, like a person filling a form', async () => {
+    const views: E2eAgentObservation[] = [];
+    const idOf = (view: E2eAgentObservation, label: string) =>
+      view.elements.find((element) => element.label.includes(label))!.id;
+    const decisions: ((view: E2eAgentObservation) => E2eAgentAction)[] = [
+      (view) => ({ kind: 'select', element: idOf(view, 'State'), option: 'done', reason: 'pick' }),
+      () => ({ kind: 'scroll', direction: 'down', reason: 'look below' }),
+      (view) => ({ kind: 'click', element: idOf(view, 'Only mine'), reason: 'tick' }),
+      (view) => ({ kind: 'select', element: idOf(view, 'State'), option: 'Archived', reason: 'x' }),
+      () => ({ kind: 'finish', reason: 'covered' }),
+    ];
+    const events: E2eExploreEvent[] = [];
+    await single.explore({
+      mode: 'frontend',
+      url: `${baseUrl}/`,
+      credentials: { username: 'qa@example.com', password: 's3cret-pass' },
+      onProgress: (event) => events.push(event),
+      agent: (view) => {
+        views.push(view);
+        return Promise.resolve(decisions[views.length - 1]!(view));
+      },
+    });
+    const log = events.filter((event) => event.kind === 'log');
+    expect(log.map((entry) => [entry.action, entry.target])).toEqual([
+      ['navigate', `${baseUrl}/`],
+      ['sign_in', 'qa@example.com'],
+      // The choice is found by its text, whatever the case, and the control reports what it holds.
+      ['select', 'State = Done'],
+      ['scroll', 'down'],
+      ['click', 'Only mine'],
+      ['note', 'agent_done:3'],
+    ]);
+    const state = (view: E2eAgentObservation) =>
+      view.elements.find((element) => element.label === 'State')!;
+    expect(state(views[0]!).options).toEqual(['Open', 'Done']);
+    expect(state(views[1]!).value).toBe('Done');
+    expect(views[2]!.elements.find((element) => element.label === 'Only mine')!.checked).toBe(
+      false,
+    );
+    expect(views[3]!.elements.find((element) => element.label === 'Only mine')!.checked).toBe(true);
+    // A choice the list does not have is refused, and the agent is told.
+    expect(views[4]!.history.at(-1)).toContain('State has no choice "Archived"');
   }, 120_000);
 
   it('records the screens, elements and actions of a UI test and follows it live', async () => {

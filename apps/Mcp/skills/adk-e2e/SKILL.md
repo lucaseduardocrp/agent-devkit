@@ -172,6 +172,12 @@ On an existing run: `e2e_import_cases { runId, provider, planId?, suiteId?, case
 (`null` unlinks; update its spec so the steps match), and `e2e_set_reporting { runId, reporting }`
 chooses where results go.
 
+To tie tests to cases saved in ADK (kept in sync both ways: editing the case in Test Plans or with
+`testplans_update` updates the test, and a removed case unlinks it): `e2e_link_saved_cases
+{ runId, suiteId | planId, caseIds? }` links a whole suite or Test Plan to the run (adds the cases
+not yet linked, runs nothing) and `e2e_link_saved_case { testId, savedCase: { planId, caseId } }`
+links one test (`null` unlinks). After the case steps change, rewrite the spec so it follows them.
+
 ## Follow a run
 
 - Poll `e2e_get { runId }` every few seconds until `status` is `completed`, `failed` or

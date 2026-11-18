@@ -14,6 +14,7 @@ import {
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/utils.js';
 import { Input, inputVariants } from './input.js';
+import { SelectLoadingRows } from './select-loading-rows.js';
 import { useInfiniteList, type InfiniteListProps } from './use-infinite-list.js';
 import { useI18n } from '../../lib/i18n/index.js';
 
@@ -216,13 +217,7 @@ export function SearchableSelect({
     onQueryChange?.(deferredQuery);
   }, [deferredQuery, onQueryChange]);
   const loadingRow = loadingMore ? (
-    <li
-      role="status"
-      className="flex items-center gap-2 px-3 py-2 text-xs text-[var(--text-muted)]"
-    >
-      <i className="ti ti-loader-2 animate-spin" aria-hidden="true" />
-      {loadingMessage ?? t('common.loading')}
-    </li>
+    <SelectLoadingRows message={loadingMessage ?? t('common.loading')} />
   ) : null;
 
   // Always call the latest handler without giving the rows a new function each render.

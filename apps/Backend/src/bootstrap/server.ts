@@ -93,6 +93,7 @@ import {
 import { TelegramRunNotifier } from '../modules/messaging/application/run-notifier.js';
 import { HttpCliBridge } from '../modules/messaging/application/cli-bridge.js';
 import { AccessTokenMcpConnector } from '../modules/messaging/application/mcp-connector.js';
+import { McpToolAccess } from '../modules/agents/application/mcp-tool-access.js';
 import { TelegramGateway } from '../modules/messaging/telegram/telegram-gateway.js';
 import { TelegramPairingCodes } from '../modules/messaging/telegram/telegram-pairing.js';
 
@@ -198,6 +199,10 @@ const agentService = new AgentService({
   workflowRepository: agentWorkflowRepo,
   dynamicProviderFactory,
   knowledgeSearch: knowledge.search,
+  // An agent answered by an AI CLI gets the ADK's own tools, as the user who asked.
+  ...(process.env['ADK_MCP_URL']?.trim()
+    ? { mcpTools: new McpToolAccess(process.env['ADK_MCP_URL'].trim(), accessTokens) }
+    : {}),
 });
 // Telegram bots: long polling on a local install, a webhook when API_PUBLIC_URL is https.
 const messagingChats = database
@@ -264,6 +269,8 @@ const eventBus =
         resolve: async (workspaceId, type, key) => {
           // Development tells which change or session moved; the client reads it by id.
           if (type === 'development') return developmentEventFromKey(key);
+          // An issue event only tells which issue moved; the client reads it by id.
+          if (type === 'issue') return { issueId: key };
           const run = await runStore.get(workspaceId, key);
           return run ? runEventPayload(run) : null;
         },

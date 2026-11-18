@@ -447,6 +447,11 @@ const cases: Record<string, [unknown, string]> = {
     { testId: 't1', externalCase: { provider: 'azure_devops', caseId: '501' } },
     'PUT /e2e/tests/t1/external-case',
   ],
+  e2e_link_saved_case: [
+    { testId: 't1', savedCase: { planId: 'p1', caseId: 'k1' } },
+    'PUT /e2e/tests/t1/saved-case',
+  ],
+  e2e_link_saved_cases: [{ runId: 'c1', suiteId: 's1' }, 'POST /e2e/creations/c1/saved-cases'],
   e2e_set_reporting: [
     { runId: 'c1', reporting: { provider: 'testrail', planId: '3' } },
     'PUT /e2e/creations/c1/reporting',
@@ -1493,6 +1498,14 @@ describe('e2e tools', () => {
   it('sends regenerate and script content, and confirms deletions', async () => {
     const rerun = await call('e2e_run_test', { testId: 't1', regenerate: true });
     expect(rerun.api.calls[0]!.body).toEqual({ regenerate: true });
+    // The environment is only sent when it is chosen; null hands the test back to its run's.
+    const withEnvironment = await call('e2e_run_test', { testId: 't1', environmentId: 'env-2' });
+    expect(withEnvironment.api.calls[0]!.body).toEqual({
+      regenerate: false,
+      environmentId: 'env-2',
+    });
+    const inherited = await call('e2e_run_test', { testId: 't1', environmentId: null });
+    expect(inherited.api.calls[0]!.body).toEqual({ regenerate: false, environmentId: null });
     const update = await call('e2e_update_script', { testId: 't1', content: 'test("x")' });
     expect(update.api.calls[0]!.body).toEqual({ content: 'test("x")', kind: 'spec' });
     const cleanup = await call('e2e_update_script', {
@@ -1640,6 +1653,21 @@ describe('e2e tools', () => {
         { title: 'Valid login', description: '', priority: 'medium', steps: [], script: 'test()' },
       ],
     });
+    const linked = await call('e2e_save_plan', {
+      runId: 'c1',
+      tests: [
+        { title: 'Valid login', script: 'test()', savedCase: { planId: 'p1', caseId: 'k1' } },
+      ],
+    });
+    expect((linked.api.calls[0]!.body as any).tests[0].savedCase).toEqual({
+      planId: 'p1',
+      caseId: 'k1',
+    });
+    const unlinked = await call('e2e_save_plan', {
+      runId: 'c1',
+      tests: [{ title: 'Valid login', script: 'test()', savedCase: null }],
+    });
+    expect((unlinked.api.calls[0]!.body as any).tests[0].savedCase).toBeNull();
   });
 
   it('returns the signed video link or explains why there is none', async () => {
@@ -1718,6 +1746,25 @@ describe('e2e test management tools', () => {
     expect(link.data.test.steps).toContain('1. Open');
     const unlink = await call('e2e_link_case', { testId: 't1', externalCase: null });
     expect(unlink.api.calls[0]!.body).toEqual({ externalCase: null });
+
+    const savedLink = await call('e2e_link_saved_case', {
+      testId: 't1',
+      savedCase: { planId: 'p1', caseId: 'k1' },
+    });
+    expect(savedLink.api.calls[0]!.body).toEqual({ savedCase: { planId: 'p1', caseId: 'k1' } });
+    expect(savedLink.data.test.savedCase).toEqual({ planId: 'p1', caseId: 'k1' });
+    const savedUnlink = await call('e2e_link_saved_case', { testId: 't1', savedCase: null });
+    expect(savedUnlink.api.calls[0]!.body).toEqual({ savedCase: null });
+
+    const savedSuite = await call('e2e_link_saved_cases', {
+      runId: 'c1',
+      planId: 'p1',
+      caseIds: ['k1'],
+    });
+    expect(savedSuite.api.calls[0]!.body).toEqual({ planId: 'p1', caseIds: ['k1'] });
+    expect(savedSuite.data.result).toMatchObject({ imported: 2, skipped: 0 });
+    expect(savedSuite.data.result.creation.prd).toContain('<untrusted-content source="e2e-prd">');
+    await expect(call('e2e_link_saved_cases', { runId: 'c1' })).rejects.toThrow('suiteId');
 
     const reporting = await call('e2e_set_reporting', cases['e2e_set_reporting']![0]);
     expect(reporting.api.calls[0]!.body).toEqual({

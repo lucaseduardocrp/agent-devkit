@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { E2eConfigForm } from '../src/features/e2e/E2eConfigForm.js';
 import type { ApiClient } from '../src/lib/api-client.js';
 import type { E2eCreationDetail } from '../src/features/e2e/e2e-types.js';
+import { pickRepository } from './helpers/pick-repository.js';
 // jsdom lacks Blob.text(), which every supported browser provides.
 beforeAll(() => {
   Blob.prototype.text ??= function (this: Blob) {
@@ -184,15 +185,23 @@ function setup(
   return { client, view, onCreated, onCancel };
 }
 
+const REPOSITORY_NAMES = { 'github:42': 'acme/demo-app', 'azure_devops:guid-1': 'Finance/app' };
+
+/** Waits for the repositories to load: the searchable select is disabled until they are. */
+async function repositoriesLoaded(view: ReturnType<typeof render>) {
+  await waitFor(() =>
+    expect((view.getByRole('combobox', { name: 'Repositório' }) as HTMLInputElement).disabled).toBe(
+      false,
+    ),
+  );
+}
+
 async function chooseRepository(
   view: ReturnType<typeof render>,
   key = 'github:42',
   branch = 'main',
 ) {
-  await waitFor(() =>
-    expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBeGreaterThan(1),
-  );
-  fireEvent.change(view.getByLabelText('Repositório'), { target: { value: key } });
+  await pickRepository(REPOSITORY_NAMES, key);
   await waitFor(() =>
     expect((view.getByLabelText('Branch base') as HTMLSelectElement).value).toBe(branch),
   );
@@ -217,11 +226,7 @@ describe('E2eConfigForm', () => {
 
   it('requires a public URL for the ADK servers and checks that it is reachable', async () => {
     const { view, client } = setup();
-    await waitFor(() =>
-      expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBeGreaterThan(
-        1,
-      ),
-    );
+    await repositoriesLoaded(view);
     fireEvent.change(view.getByLabelText('URL base'), {
       target: { value: 'http://localhost:5173/login' },
     });
@@ -256,11 +261,7 @@ describe('E2eConfigForm', () => {
 
   it('warns about missing localhost origin when a Quick Tunnel URL is pasted', async () => {
     const { view } = setup();
-    await waitFor(() =>
-      expect(
-        view.getByRole('combobox', { name: /^Reposit/ }).querySelectorAll('option').length,
-      ).toBeGreaterThan(1),
-    );
+    await repositoriesLoaded(view);
     fireEvent.change(view.getByLabelText('URL base'), {
       target: { value: 'https://sample.trycloudflare.com' },
     });
@@ -290,11 +291,7 @@ describe('E2eConfigForm', () => {
 
   it('requires the local browser address to be an origin without a path', async () => {
     const { view } = setup();
-    await waitFor(() =>
-      expect(
-        view.getByRole('combobox', { name: /^Reposit/ }).querySelectorAll('option').length,
-      ).toBeGreaterThan(1),
-    );
+    await repositoriesLoaded(view);
     fireEvent.change(view.getByLabelText('URL base'), {
       target: { value: 'https://sample.trycloudflare.com' },
     });
@@ -474,6 +471,8 @@ describe('E2eConfigForm', () => {
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: 'c1' }));
     expect(client.createE2eCreation).toHaveBeenCalledWith({
+      // A new run is only saved: nothing starts until the user asks.
+      start: false,
       repository: { provider: 'github', id: '42', branch: 'feature/e2e', path: 'e2e/questions' },
       name: 'ama',
       agentId: 'doc',
@@ -500,7 +499,6 @@ describe('E2eConfigForm', () => {
     for (const message of [
       'Informe o nome da execução.',
       'Informe uma URL http(s) válida.',
-      'Envie ou cole o documento do produto.',
       'Cole ou carregue o diff do código.',
       'Selecione o repositório e a branch.',
     ])
@@ -511,8 +509,49 @@ describe('E2eConfigForm', () => {
 
     fireEvent.change(view.getByLabelText('Nome da execução'), { target: { value: 'x' } });
     expect(view.queryByText('Informe o nome da execução.')).toBeNull();
-    fireEvent.change(view.getByLabelText('Ou cole o conteúdo'), { target: { value: 'p' } });
+  });
+
+  it('saves a run without a product document: the tests are generated later', async () => {
+    const { view, client, onCreated } = setup();
+    await waitFor(() =>
+      expect((view.getByLabelText('Agente') as HTMLSelectElement).value).toBe('qa'),
+    );
+    // Neither the knowledge nor the document is required: they are optional context.
     expect(view.queryByText('Envie ou cole o documento do produto.')).toBeNull();
+    for (const title of ['Conhecimento do produto', 'Documento de especificação do produto'])
+      expect(within(view.getByText(title).parentElement!).getByText('(Opcional)')).toBeTruthy();
+
+    fireEvent.change(view.getByLabelText('Nome da execução'), { target: { value: 'ama' } });
+    fireEvent.change(view.getByLabelText('URL base'), {
+      target: { value: 'https://sample.trycloudflare.com' },
+    });
+    await chooseRepository(view);
+    fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(client.createE2eCreation).toHaveBeenCalledWith(
+      expect.objectContaining({ start: false, prd: '', prdFileNames: [] }),
+    );
+  });
+
+  it('counts the extra instructions and refuses ones the API would reject', async () => {
+    const { view, client } = setup();
+    await waitFor(() => expect(client.getAgents).toHaveBeenCalled());
+    const field = view.getByLabelText('Instruções extras');
+    const count = view.getByTestId('e2e-instructions-count');
+    expect(count).toHaveTextContent(/^0 \/ 20\.000$|^0 \/ 20,000$/);
+
+    fireEvent.change(field, { target: { value: 'a'.repeat(20_001) } });
+    expect(count.className).toContain('text-red-400');
+    fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
+    expect(
+      view.getByText(/As instruções extras são longas demais/, { selector: 'p' }),
+    ).toBeInTheDocument();
+    expect(client.createE2eCreation).not.toHaveBeenCalled();
+
+    // Shortening the text clears the error and the count stops warning.
+    fireEvent.change(field, { target: { value: 'a'.repeat(20_000) } });
+    expect(view.queryByText(/As instruções extras são longas demais/)).toBeNull();
+    expect(count.className).not.toContain('text-red-400');
   });
 
   it('submits a backend diff run with an uploaded patch', async () => {
@@ -570,12 +609,7 @@ describe('E2eConfigForm', () => {
       target: { value: 'https://sample.trycloudflare.com' },
     });
     fireEvent.change(view.getByLabelText('Ou cole o conteúdo'), { target: { value: 'PRD' } });
-    await waitFor(() =>
-      expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBe(3),
-    );
-    fireEvent.change(view.getByLabelText('Repositório'), {
-      target: { value: 'azure_devops:guid-1' },
-    });
+    await pickRepository(REPOSITORY_NAMES, 'azure_devops:guid-1');
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
     await waitFor(() => expect(client.createE2eCreation).toHaveBeenCalled());
     expect(client.createE2eCreation.mock.calls[0]![0].repository).toMatchObject({
@@ -706,40 +740,42 @@ describe('E2eConfigForm', () => {
         onCancel={vi.fn()}
       />,
     );
-    await waitFor(() =>
-      expect(
-        branchView.getByLabelText('Repositório').querySelectorAll('option').length,
-      ).toBeGreaterThan(1),
-    );
-    fireEvent.change(branchView.getByLabelText('Repositório'), { target: { value: 'github:42' } });
-    fireEvent.change(branchView.getByLabelText('Repositório'), {
-      target: { value: 'azure_devops:guid-1' },
-    });
+    await pickRepository(REPOSITORY_NAMES, 'github:42');
+    await pickRepository(REPOSITORY_NAMES, 'azure_devops:guid-1');
     branchView.unmount();
     resolveBranches([{ name: 'main', isDefault: true }]);
     rejectBranches(new Error('gone'));
     await Promise.resolve();
   });
 
-  it('filters long repository lists by name and keeps the chosen one listed', async () => {
+  it('searches long repository lists inside the select and keeps the chosen one', async () => {
     const { view } = setup();
-    const select = view.getByLabelText('Repositório');
-    const names = () => [...select.querySelectorAll('option')].map((option) => option.textContent);
-    await waitFor(() => expect(names()).toContain('Finance/app'));
+    await repositoriesLoaded(view);
     expect(
       view.getByText(/2 repositórios encontrados\. Faltou algum\? Verifique/),
     ).toBeInTheDocument();
-    const search = view.getByLabelText('Buscar repositórios');
-    fireEvent.change(search, { target: { value: '  FINANCE ' } });
-    expect(names()).toEqual(['Selecione um repositório', 'Finance/app']);
-    fireEvent.change(search, { target: { value: 'nothing' } });
-    expect(names()).toEqual(['Nenhum repositório corresponde à busca']);
+    const field = view.getByRole('combobox', { name: 'Repositório' }) as HTMLInputElement;
+    // There is no separate search box: typing in the select itself narrows the list.
+    expect(view.queryByLabelText('Buscar repositórios')).toBeNull();
+    fireEvent.focus(field);
+    expect(
+      within(view.getByRole('listbox'))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['acme/demo-app (GitHub)', 'Finance/app (Azure DevOps)']);
+    fireEvent.change(field, { target: { value: '  FINANCE ' } });
+    expect(
+      within(view.getByRole('listbox'))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Finance/app (Azure DevOps)']);
+    fireEvent.change(field, { target: { value: 'nothing' } });
+    expect(within(view.getByRole('listbox')).queryAllByRole('option')).toEqual([]);
+    expect(view.getByText('Nenhum repositório corresponde à busca')).toBeInTheDocument();
 
-    fireEvent.change(search, { target: { value: '' } });
-    await chooseRepository(view);
-    fireEvent.change(search, { target: { value: 'nothing' } });
-    expect(names()).toEqual(['Nenhum repositório corresponde à busca', 'acme/demo-app']);
-    expect((select as HTMLSelectElement).value).toBe('github:42');
+    fireEvent.change(field, { target: { value: '' } });
+    fireEvent.click(view.getByRole('option', { name: /^acme\/demo-app/ }));
+    await waitFor(() => expect(field.value).toBe('acme/demo-app (GitHub)'));
   });
 
   it('picks the first branch when none is marked as default', async () => {
@@ -770,6 +806,17 @@ describe('E2eConfigForm', () => {
     expect(onOpenIntegrations).toHaveBeenCalled();
     empty.view.unmount();
 
+    const unreadable = setup({
+      repositories: {
+        repositories: [],
+        warnings: [{ provider: 'azure_devops', code: 'CREDENTIALS_UNREADABLE' }],
+      },
+    });
+    expect(
+      await unreadable.view.findByText(/token salvo com esta chave de criptografia/),
+    ).toBeInTheDocument();
+    unreadable.view.unmount();
+
     const failed = setup({ repositories: new Error('Sem acesso') });
     expect(await failed.view.findByText(/Sem acesso/)).toBeInTheDocument();
     expect(failed.view.queryByRole('button', { name: 'Integrações' })).toBeNull();
@@ -795,12 +842,7 @@ describe('E2eConfigForm', () => {
     opaque.unmount();
 
     const branches = setup({ branches: new Error('Branch indisponível') });
-    await waitFor(() =>
-      expect(branches.view.getByLabelText('Repositório').querySelectorAll('option').length).toBe(3),
-    );
-    fireEvent.change(branches.view.getByLabelText('Repositório'), {
-      target: { value: 'github:42' },
-    });
+    await pickRepository(REPOSITORY_NAMES, 'github:42');
     expect(await branches.view.findByText('Branch indisponível')).toBeInTheDocument();
     // Without branch data the repository's default branch is still offered.
     await waitFor(() =>
@@ -810,23 +852,10 @@ describe('E2eConfigForm', () => {
 
     const opaqueBranches = setup({ branches: [] });
     opaqueBranches.client.getE2eBranches.mockRejectedValueOnce('boom');
-    await waitFor(() =>
-      expect(
-        opaqueBranches.view.getByLabelText('Repositório').querySelectorAll('option').length,
-      ).toBe(3),
-    );
-    fireEvent.change(opaqueBranches.view.getByLabelText('Repositório'), {
-      target: { value: 'azure_devops:guid-1' },
-    });
+    await pickRepository(REPOSITORY_NAMES, 'azure_devops:guid-1');
     expect(
       await opaqueBranches.view.findByText('Não foi possível carregar as branches.'),
     ).toBeInTheDocument();
-    fireEvent.change(opaqueBranches.view.getByLabelText('Repositório'), {
-      target: { value: '' },
-    });
-    expect((opaqueBranches.view.getByLabelText('Branch base') as HTMLSelectElement).disabled).toBe(
-      true,
-    );
   });
 
   it('edits an existing run, keeping its stored password unless retyped', async () => {
@@ -939,6 +968,12 @@ describe('E2eConfigForm', () => {
   });
 });
 
+/** Picks an option of a searchable select: its list is drawn on the page, not inside the field. */
+async function pickSaved(root: ReturnType<typeof within>, label: string, option: string) {
+  fireEvent.focus(root.getByRole('combobox', { name: label }));
+  fireEvent.click(await within(document.body).findByRole('option', { name: option }));
+}
+
 describe('E2eConfigForm with test cases saved in ADK', () => {
   async function fillRun(view: ReturnType<typeof render>) {
     await waitFor(() =>
@@ -958,7 +993,7 @@ describe('E2eConfigForm with test cases saved in ADK', () => {
       target: { value: 'saved' },
     });
     const picker = await view.findByTestId('e2e-saved-case-picker');
-    fireEvent.change(within(picker).getByLabelText('Suíte'), { target: { value: 'root' } });
+    await pickSaved(within(picker), 'Test Plan', 'Sprint 10');
     // The suite brings the cases of its child suites; cases without an id are left out.
     expect(within(picker).getByText('3 de 3 selecionados')).toBeInTheDocument();
     expect(within(picker).queryByText('Legacy')).toBeNull();
@@ -970,9 +1005,7 @@ describe('E2eConfigForm with test cases saved in ADK', () => {
       expect.objectContaining({ prd: '', savedCases: { suiteId: 'root', caseIds: ['c1', 'c2'] } }),
     );
 
-    fireEvent.change(within(picker).getByLabelText('Test Plan'), {
-      target: { value: 'plan-login' },
-    });
+    await pickSaved(within(picker), 'Test Suite', 'Login');
     expect(within(picker).getByText('2 de 2 selecionados')).toBeInTheDocument();
     fireEvent.click(within(picker).getByLabelText(/Todos os casos/));
     expect(within(picker).getByText('0 de 2 selecionados')).toBeInTheDocument();
@@ -987,7 +1020,10 @@ describe('E2eConfigForm with test cases saved in ADK', () => {
         expect.objectContaining({ savedCases: { planId: 'plan-login' } }),
       ),
     );
-    fireEvent.change(within(picker).getByLabelText('Test Plan'), { target: { value: '' } });
+    // Typing in the field clears the Test Plan, so the suite's cases are all back.
+    fireEvent.change(within(picker).getByRole('combobox', { name: 'Test Suite' }), {
+      target: { value: 'L' },
+    });
     expect(within(picker).getByText('3 de 3 selecionados')).toBeInTheDocument();
   });
 
@@ -999,10 +1035,14 @@ describe('E2eConfigForm with test cases saved in ADK', () => {
       (view.getByRole('combobox', { name: 'Origem dos testes' }) as HTMLSelectElement).value,
     ).toBe('saved');
     const picker = await view.findByTestId('e2e-saved-case-picker');
-    expect((within(picker).getByLabelText('Suíte') as HTMLSelectElement).value).toBe('login');
-    expect((within(picker).getByLabelText('Test Plan') as HTMLSelectElement).value).toBe(
-      'plan-login',
-    );
+    expect(
+      (
+        within(picker).getByRole('combobox', { name: 'Test Plan' }) as HTMLInputElement
+      ).value.trim(),
+    ).toBe('Login');
+    expect(
+      (within(picker).getByRole('combobox', { name: 'Test Suite' }) as HTMLInputElement).value,
+    ).toBe('Login');
     expect(within(picker).getByText('1 de 2 selecionados')).toBeInTheDocument();
     await fillRun(view);
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));

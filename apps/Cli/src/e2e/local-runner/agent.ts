@@ -190,25 +190,38 @@ export class LocalRunnerAgent {
       readonly waitSeconds?: number;
       readonly signal?: AbortSignal;
       readonly done?: () => Promise<boolean>;
+      /** Tasks executed at the same time, each in its own browser. Defaults to 1. */
+      readonly parallel?: number;
     } = {},
   ): Promise<void> {
-    let backoff = 0;
-    while (!options.signal?.aborted) {
-      try {
-        await this.poll({
-          ...(options.creationId ? { creationId: options.creationId } : {}),
-          ...(options.waitSeconds === undefined ? {} : { waitSeconds: options.waitSeconds }),
-          ...(options.signal ? { signal: options.signal } : {}),
-        });
-        backoff = 0;
-        if (await options.done?.()) return;
-      } catch (error) {
-        if (isAdkApiError(error) && [401, 403].includes(error.status)) throw error;
-        backoff = Math.min(backoff ? backoff * 2 : 2_000, 30_000);
-        this.emit({ type: 'offline', message: describe(error), retryInMs: backoff });
-        await this.sleep(backoff, options.signal);
+    const browsers = Math.max(1, Math.floor(options.parallel ?? 1));
+    let finished = false;
+    const browser = async (): Promise<void> => {
+      let backoff = 0;
+      while (!finished && !options.signal?.aborted) {
+        try {
+          await this.poll({
+            ...(options.creationId ? { creationId: options.creationId } : {}),
+            ...(options.waitSeconds === undefined ? {} : { waitSeconds: options.waitSeconds }),
+            ...(options.signal ? { signal: options.signal } : {}),
+          });
+          backoff = 0;
+          if (await options.done?.()) {
+            finished = true;
+            return;
+          }
+        } catch (error) {
+          if (isAdkApiError(error) && [401, 403].includes(error.status)) {
+            finished = true;
+            throw error;
+          }
+          backoff = Math.min(backoff ? backoff * 2 : 2_000, 30_000);
+          this.emit({ type: 'offline', message: describe(error), retryInMs: backoff });
+          await this.sleep(backoff, options.signal);
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: browsers }, browser));
   }
 
   private async execute(task: ClaimedTask, stop?: AbortSignal): Promise<void> {

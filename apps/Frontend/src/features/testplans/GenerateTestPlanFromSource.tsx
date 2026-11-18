@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '../../components/ui/button.js';
-import { Select } from '../../components/ui/select.js';
+import { SearchableSelect } from '../../components/ui/searchable-select.js';
 import { Toast } from '../../components/ui/toast.js';
 import type { ApiClient, TestSuiteDto } from '../../lib/api-client.js';
 import type { CustomAgentDto } from '../agents/agent-types.js';
@@ -34,6 +34,15 @@ export function GenerateTestPlanFromSource({
   const [agentId, setAgentId] = useState('');
   const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const suiteOptions = useMemo(
+    () => suites.map((suite) => ({ value: suite.id, label: suite.name })),
+    [suites],
+  );
+  const agentOptions = useMemo(
+    () => agents.map((agent) => ({ value: agent.id, label: agent.name })),
+    [agents],
+  );
 
   const start = async () => {
     setOpen(true);
@@ -109,32 +118,24 @@ export function GenerateTestPlanFromSource({
                 <p role="status">{t('common.loading')}</p>
               ) : (
                 <>
-                  <Select
-                    aria-label={t('testplans.testSuite')}
+                  <SearchableSelect
+                    label={t('testplans.testSuite')}
+                    options={suiteOptions}
                     value={suiteId}
                     disabled={pending}
-                    onChange={(event) => setSuiteId(event.target.value)}
-                  >
-                    <option value="">{t('testplans.selectSuite')}</option>
-                    {suites.map((suite) => (
-                      <option key={suite.id} value={suite.id}>
-                        {suite.name}
-                      </option>
-                    ))}
-                  </Select>
-                  <Select
-                    aria-label={t('testplans.selectGenerationAgent')}
+                    onChange={setSuiteId}
+                    placeholder={t('testplans.selectSuite')}
+                    emptyMessage={t('testplans.noSelectMatches')}
+                  />
+                  <SearchableSelect
+                    label={t('testplans.selectGenerationAgent')}
+                    options={agentOptions}
                     value={agentId}
                     disabled={pending}
-                    onChange={(event) => setAgentId(event.target.value)}
-                  >
-                    <option value="">{t('testplans.selectGenerationAgent')}</option>
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.name}
-                      </option>
-                    ))}
-                  </Select>
+                    onChange={setAgentId}
+                    placeholder={t('testplans.selectGenerationAgent')}
+                    emptyMessage={t('testplans.noSelectMatches')}
+                  />
                   {suites.length === 0 && (
                     <p className="text-sm text-muted">{t('testplans.noSuites')}</p>
                   )}

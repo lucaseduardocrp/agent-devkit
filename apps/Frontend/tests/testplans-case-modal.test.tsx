@@ -128,7 +128,9 @@ describe('TestCaseModal', () => {
       'https://dev.azure.com/acme/QA/_workitems/edit/50605',
     );
     expect(ui.getByText('50605')).toBeInTheDocument();
-    expect(ui.getByTestId('input-edit-test-scenario').innerHTML).toBe('<p>Pay the <b>cart</b></p>');
+    expect(ui.getByTestId('input-edit-test-scenario-formatted').innerHTML).toBe(
+      '<p>Pay the <strong>cart</strong></p>',
+    );
   });
 
   it('saves the edited case and starts an E2E run for it', () => {
@@ -154,7 +156,12 @@ describe('TestCaseModal', () => {
     expect(ui.queryByTestId('btn-add-step')).toBeNull();
     expect(ui.queryByRole('button', { name: 'Negrito' })).toBeNull();
     expect((ui.getByTestId('input-edit-test-title') as HTMLInputElement).disabled).toBe(true);
-    expect(ui.getByTestId('input-edit-test-scenario')).toHaveAttribute('aria-readonly', 'true');
+    expect(ui.getByTestId('input-edit-test-scenario-formatted')).toHaveAttribute(
+      'aria-readonly',
+      'true',
+    );
+    expect(ui.queryByTestId('editor-mode-code')).toBeNull();
+    expect(ui.queryByTestId('input-document-image')).toBeNull();
     fireEvent.click(ui.getByRole('button', { name: 'Fechar' }));
     expect(onClose).toHaveBeenCalled();
   });

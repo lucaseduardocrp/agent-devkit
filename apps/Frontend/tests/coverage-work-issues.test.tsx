@@ -150,6 +150,10 @@ function createApi(
     })),
     getAgentRuns: vi.spyOn(api, 'getAgentRuns').mockResolvedValue([]),
     updateInboxItem: vi.spyOn(api, 'updateInboxItem').mockResolvedValue(undefined),
+    // The inbox stream stays open and silent unless a test drives it.
+    streamInboxEvents: vi
+      .spyOn(api, 'streamInboxEvents')
+      .mockImplementation(() => new Promise(() => undefined)),
     createIssue: vi.spyOn(api, 'createIssue').mockResolvedValue(issues[0]!),
     updateIssue: vi.spyOn(api, 'updateIssue').mockResolvedValue(issues[0]!),
     deleteIssue: vi.spyOn(api, 'deleteIssue').mockResolvedValue(undefined),
@@ -542,6 +546,134 @@ describe('WorkView inbox', () => {
     await screen.findByRole('button', { name: '1 Prepare release' });
     expect(screen.getByRole('tab', { name: 'Não lidas' }).textContent).toBe('Não lidas');
   });
+
+  it('has no refresh or new issue button: it follows the server live', async () => {
+    const { api, spies } = createApi({ inbox });
+    renderView(api, { tab: 'inbox' });
+    await screen.findByRole('button', { name: '1 Alpha task' });
+    expect(screen.queryByRole('button', { name: 'Atualizar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Nova issue' })).toBeNull();
+    expect(spies.streamInboxEvents).toHaveBeenCalledOnce();
+  });
+
+  it('keeps both buttons on the issues list, which does not follow the server live', async () => {
+    const { api, spies } = createApi({ inbox });
+    renderView(api, { tab: 'issues' });
+    await screen.findByRole('button', { name: '1 Prepare release' });
+    expect(screen.getByRole('button', { name: 'Atualizar' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nova issue' })).toBeInTheDocument();
+    expect(spies.streamInboxEvents).not.toHaveBeenCalled();
+  });
+
+  it('reads the inbox again once per burst of events, and when the stream (re)connects', async () => {
+    const { api, spies } = createApi({ inbox: [inbox[0]!] });
+    let given!: Parameters<ApiClient['streamInboxEvents']>[0];
+    spies.streamInboxEvents.mockImplementation((handlers) => {
+      given = handlers;
+      return new Promise(() => undefined);
+    });
+    renderView(api, { tab: 'inbox' });
+    await screen.findByRole('button', { name: '1 Alpha task' });
+    expect(spies.getInbox).toHaveBeenCalledTimes(1);
+
+    spies.getInbox.mockResolvedValue([inbox[0]!, inbox[3]!]);
+    act(() => given.onReady());
+    await screen.findByRole('button', { name: '4 Delta task' });
+    expect(spies.getInbox).toHaveBeenCalledTimes(2);
+
+    spies.getInbox.mockResolvedValue([inbox[0]!, inbox[2]!, inbox[3]!]);
+    act(() => {
+      given.onRun({ issueId: 'c' });
+      given.onRun({ issueId: 'c' });
+      given.onRun({ issueId: 'a' });
+    });
+    await screen.findByRole('button', { name: '3 Gamma task' });
+    expect(spies.getInbox).toHaveBeenCalledTimes(3);
+  });
+
+  it('applies only the newest read when the answers arrive out of order', async () => {
+    const { api, spies } = createApi({ inbox: [] });
+    let given!: Parameters<ApiClient['streamInboxEvents']>[0];
+    spies.streamInboxEvents.mockImplementation((handlers) => {
+      given = handlers;
+      return new Promise(() => undefined);
+    });
+    renderView(api, { tab: 'inbox' });
+    await waitFor(() => expect(spies.getInbox).toHaveBeenCalledTimes(1));
+
+    const older = deferred<readonly InboxItem[]>();
+    const newer = deferred<readonly InboxItem[]>();
+    spies.getInbox.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    act(() => given.onReady());
+    act(() => given.onRun({ issueId: 'a' }));
+    await waitFor(() => expect(spies.getInbox).toHaveBeenCalledTimes(3));
+
+    await act(async () => newer.resolve([inbox[0]!]));
+    await screen.findByRole('button', { name: '1 Alpha task' });
+    await act(async () => older.resolve([]));
+    expect(screen.getByRole('button', { name: '1 Alpha task' })).toBeInTheDocument();
+  });
+
+  it('keeps the list on screen when a read fails', async () => {
+    const { api, spies } = createApi({ inbox: [inbox[0]!] });
+    let given!: Parameters<ApiClient['streamInboxEvents']>[0];
+    spies.streamInboxEvents.mockImplementation((handlers) => {
+      given = handlers;
+      return new Promise(() => undefined);
+    });
+    renderView(api, { tab: 'inbox' });
+    await screen.findByRole('button', { name: '1 Alpha task' });
+
+    spies.getInbox.mockRejectedValue(new Error('offline'));
+    act(() => given.onReady());
+    await waitFor(() => expect(spies.getInbox).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('button', { name: '1 Alpha task' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  describe('safety reads', () => {
+    const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+
+    it('reads once a minute while live', async () => {
+      vi.useFakeTimers();
+      try {
+        const { api, spies } = createApi({ inbox: [inbox[0]!] });
+        let given!: Parameters<ApiClient['streamInboxEvents']>[0];
+        spies.streamInboxEvents.mockImplementation((handlers) => {
+          given = handlers;
+          return new Promise(() => undefined);
+        });
+        renderView(api, { tab: 'inbox' });
+        await tick(0);
+        act(() => given.onReady());
+        await tick(0);
+        const reads = spies.getInbox.mock.calls.length;
+
+        await tick(59_000);
+        expect(spies.getInbox).toHaveBeenCalledTimes(reads);
+        await tick(1_000);
+        expect(spies.getInbox).toHaveBeenCalledTimes(reads + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('polls every ten seconds while the stream is down', async () => {
+      vi.useFakeTimers();
+      try {
+        const { api, spies } = createApi({ inbox: [inbox[0]!] });
+        spies.streamInboxEvents.mockRejectedValue(new Error('unreachable'));
+        renderView(api, { tab: 'inbox' });
+        await tick(0);
+        const reads = spies.getInbox.mock.calls.length;
+
+        await tick(10_000);
+        expect(spies.getInbox.mock.calls.length).toBeGreaterThan(reads);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
 
 describe('WorkView issue composer', () => {
@@ -561,10 +693,10 @@ describe('WorkView issue composer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Nova issue' }));
     const dialog = screen.getByRole('dialog');
     await waitFor(() =>
-      expect(within(dialog).getByRole('option', { name: 'carla@example.com' })).toBeInTheDocument(),
+      expect(within(dialog).getAllByRole('option', { name: 'carla@example.com' })).toHaveLength(2),
     );
-    expect(within(dialog).getByRole('option', { name: 'Bruno' })).toBeInTheDocument();
-    expect(within(dialog).getByRole('option', { name: 'user-d' })).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('option', { name: 'Bruno' })).toHaveLength(2);
+    expect(within(dialog).getAllByRole('option', { name: 'user-d' })).toHaveLength(2);
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Título' }), {
       target: { value: '  New thing  ' },
@@ -584,6 +716,9 @@ describe('WorkView issue composer', () => {
     fireEvent.change(within(dialog).getByRole('combobox', { name: 'Responsável' }), {
       target: { value: 'user-b' },
     });
+    fireEvent.change(within(dialog).getByRole('combobox', { name: 'Revisor' }), {
+      target: { value: 'user-c' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Criar issue' }));
 
     await waitFor(() =>
@@ -595,6 +730,7 @@ describe('WorkView issue composer', () => {
         type: '',
         assigneeAgentId: 'agent-a',
         assigneeUserId: 'user-b',
+        proofreaderUserId: 'user-c',
         attachments: [],
       }),
     );

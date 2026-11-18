@@ -94,8 +94,12 @@ function setup(extra: Record<string, unknown> = {}) {
         action: 'navigate',
         target: input.url,
         result: 'Issues',
+        screenshot: Buffer.from('explore-step'),
+        url: input.url,
+        worker: 2,
       });
       await gates.explore;
+      input.onProgress?.({ kind: 'video', worker: 1, video: Buffer.from('explore-video') });
       return { startUrl: input.url, pages: [pageSnapshot] };
     }),
     run: vi.fn(async (input: E2eRunInput): Promise<E2eRunResult> => {
@@ -167,6 +171,15 @@ async function waitForStatus(app: App, id: string, status: string) {
 
 const exploration = async (app: App, id: string) =>
   (await request(app).get(`/e2e/creations/${id}/exploration`).expect(200)).body.exploration;
+
+/** Creates a run that waits for the user, and explores it the way the user asks to. */
+async function exploredRun(app: App, body: Record<string, unknown> = {}) {
+  const id = (await createRun(app, { start: false })).body.creation.id as string;
+  await request(app).post(`/e2e/creations/${id}/explore`).send(body).expect(202);
+  return id;
+}
+const exploredAs = (app: App, id: string, status: string) =>
+  vi.waitFor(async () => expect((await exploration(app, id))?.status).toBe(status));
 
 describe('E2E environments routes', () => {
   it('manages the saved environments of a workspace', async () => {
@@ -324,21 +337,58 @@ describe('E2E environments routes', () => {
     expect(brief.body.brief.rules.script[0]).toContain('process.env.E2E_VAR_PLAN');
   });
 
-  it('refuses to edit a run into one with neither a PRD nor the Brain', async () => {
-    const { app } = setup();
-    const created = await createRun(app);
+  it('runs a single test with its own environment and falls back to its run’s', async () => {
+    const { app, runner } = setup();
+    const saved = async (name: string, username: string, role: string) =>
+      (
+        await request(app)
+          .post('/e2e/environments')
+          .send({
+            name,
+            baseUrl: 'http://localhost:4000',
+            username,
+            password: `${role}-password`,
+            variables: [{ key: 'ROLE', value: role }],
+          })
+          .expect(201)
+      ).body.environment;
+    const admin = await saved('Admin', 'admin@example.com', 'admin');
+    const viewer = await saved('Viewer', 'viewer@example.com', 'viewer');
+
+    const created = await createRun(app, { environmentId: admin.id });
+    const runId = created.body.creation.id as string;
+    await waitForStatus(app, runId, 'completed');
+    const [first, second] = (await request(app).get(`/e2e/creations/${runId}`)).body.creation.tests;
+    const lastRun = () => runner.run.mock.lastCall![0];
+
+    // The test gets another account; the run and its other test keep theirs.
     await request(app)
-      .put(`/e2e/creations/${created.body.creation.id}`)
-      .send({
-        name: 'Run',
-        agentId: created.body.creation.agentId,
-        mode: 'frontend',
-        scope: 'codebase',
-        baseUrl: 'http://localhost:4000',
-        prd: '',
-        repository,
-      })
-      .expect(400);
+      .post(`/e2e/tests/${first.id}/run`)
+      .send({ environmentId: viewer.id })
+      .expect(202);
+    await waitForStatus(app, runId, 'completed');
+    expect(lastRun()).toMatchObject({
+      credentials: { username: 'viewer@example.com', password: 'viewer-password' },
+      variables: { ROLE: 'viewer' },
+    });
+    const detail = (await request(app).get(`/e2e/tests/${first.id}`).expect(200)).body.test;
+    expect(detail).toMatchObject({
+      environmentId: viewer.id,
+      creation: { environmentId: admin.id },
+    });
+    await request(app).post(`/e2e/tests/${second.id}/run`).expect(202);
+    await waitForStatus(app, runId, 'completed');
+    expect(lastRun().variables).toEqual({ ROLE: 'admin' });
+
+    // Null inherits the run's again; an unknown environment is refused and nothing changes.
+    await request(app).post(`/e2e/tests/${first.id}/run`).send({ environmentId: null }).expect(202);
+    await waitForStatus(app, runId, 'completed');
+    expect((await request(app).get(`/e2e/tests/${first.id}`)).body.test.environmentId).toBeNull();
+    await request(app)
+      .post(`/e2e/tests/${first.id}/run`)
+      .send({ environmentId: 'missing' })
+      .expect(404);
+    await request(app).post(`/e2e/tests/${first.id}/run`).send({ environmentId: '' }).expect(400);
   });
 
   it('refuses environments when the service has none configured', async () => {
@@ -373,8 +423,12 @@ describe('E2E exploration routes', () => {
     const { app, gates } = setup();
     const gate = deferred();
     gates.explore = gate.promise;
-    const created = await createRun(app, { username: 'qa', password: 'pw' });
+    // Creating the run explores nothing: the user asks for it.
+    const created = await createRun(app, { username: 'qa', password: 'pw', start: false });
     const id = created.body.creation.id as string;
+    expect(created.body.creation.status).toBe('draft');
+    expect(await exploration(app, id)).toBeNull();
+    await request(app).post(`/e2e/creations/${id}/explore`).expect(202);
 
     await vi.waitFor(async () => expect((await exploration(app, id)).pages).toHaveLength(1));
     const live = await exploration(app, id);
@@ -392,12 +446,20 @@ describe('E2E exploration routes', () => {
     expect(page.headers['cache-control']).toBe('private, max-age=300');
     expect(page.body.toString()).toBe('explore-page');
     await request(app).get(`/e2e/creations/${id}/exploration/images/2`).expect(404);
+    // Each action of the agent keeps a picture, found by its position in the log.
+    expect(live.log[0]).toMatchObject({ hasScreenshot: true, worker: 2 });
+    const step = await request(app).get(`/e2e/creations/${id}/exploration/steps/1`).expect(200);
+    expect(step.headers['content-type']).toBe('image/jpeg');
+    expect(step.headers['cache-control']).toBe('private, max-age=300');
+    expect(step.body.toString()).toBe('explore-step');
+    await request(app).get(`/e2e/creations/${id}/exploration/steps/2`).expect(404);
+    await request(app).get(`/e2e/creations/${id}/exploration/steps/zero`).expect(400);
     await request(app).get(`/e2e/creations/${id}/exploration/images/zero`).expect(400);
     // Exploring again waits for the work in progress.
     await request(app).post(`/e2e/creations/${id}/explore`).expect(409);
 
     gate.release();
-    await waitForStatus(app, id, 'completed');
+    await exploredAs(app, id, 'ready');
     expect(await exploration(app, id)).toMatchObject({ status: 'ready', hasLiveFrame: false });
     await request(app).get(`/e2e/creations/${id}/exploration/images/live`).expect(404);
     await request(app).get('/e2e/creations/missing/exploration').expect(404);
@@ -408,16 +470,74 @@ describe('E2E exploration routes', () => {
     await vi.waitFor(async () => expect((await exploration(app, id)).status).toBe('ready'));
   });
 
+  it('shows the code of the exploration, keeps its edits and goes back to the generated one', async () => {
+    const { app, gates } = setup();
+    const gate = deferred();
+    gates.explore = gate.promise;
+    const id = await exploredRun(app);
+    await vi.waitFor(async () => expect((await exploration(app, id)).log).toHaveLength(1));
+    const code = `/e2e/creations/${id}/exploration/code`;
+    // While the agent explores there is nothing to show or save.
+    await request(app).get(code).expect(409);
+    await request(app).put(code).send({ code: 'x' }).expect(409);
+
+    gate.release();
+    await exploredAs(app, id, 'ready');
+    const generated = await request(app).get(code).expect(200);
+    expect(generated.body).toMatchObject({ edited: false });
+    expect(generated.body.code).toContain('await page.goto("http://localhost:4000/");');
+
+    const saved = await request(app).put(code).send({ code: '// mine' }).expect(200);
+    expect(saved.body).toEqual({ code: '// mine', edited: true });
+    expect((await request(app).get(code).expect(200)).body.code).toBe('// mine');
+    await request(app).put(code).send({ code: 1 }).expect(400);
+    await request(app).get('/e2e/creations/missing/exploration/code').expect(404);
+
+    // An empty code removes the edit.
+    const reset = await request(app).put(code).send({ code: '  ' }).expect(200);
+    expect(reset.body.edited).toBe(false);
+    // A new exploration drops the edits of the previous one.
+    await request(app).put(code).send({ code: '// again' }).expect(200);
+    await request(app).post(`/e2e/creations/${id}/explore`).expect(202);
+    await vi.waitFor(async () => expect((await exploration(app, id)).status).toBe('ready'));
+    expect((await request(app).get(code).expect(200)).body.edited).toBe(false);
+  });
+
+  it('plays the recording of each browser of a finished exploration', async () => {
+    const { app } = setup();
+    const id = await exploredRun(app);
+    await exploredAs(app, id, 'ready');
+    expect((await exploration(app, id)).videos).toEqual([{ worker: 1, mimeType: 'video/webm' }]);
+    const video = await request(app).get(`/e2e/creations/${id}/exploration/videos/1`).expect(200);
+    expect(video.headers['content-type']).toBe('video/webm');
+    expect(video.headers['content-length']).toBe(String('explore-video'.length));
+    expect(video.body.toString()).toBe('explore-video');
+    await request(app).get(`/e2e/creations/${id}/exploration/videos/2`).expect(404);
+    await request(app).get(`/e2e/creations/${id}/exploration/videos/0`).expect(400);
+    await request(app).get('/e2e/creations/missing/exploration/videos/1').expect(404);
+  });
+
+  it('has no code for a run that was never explored', async () => {
+    const { app, artifacts } = setup();
+    const id = (await createRun(app)).body.creation.id as string;
+    await waitForStatus(app, id, 'completed');
+    const creation = (await request(app).get(`/e2e/creations/${id}`)).body.creation;
+    await artifacts.removePrefix(`${creation.workspaceId ?? 'ws'}/${id}/exploration`);
+    await request(app).get(`/e2e/creations/${id}/exploration/code`).expect(409);
+  });
+
   it('keeps the script of each exploration, with the description it was asked for', async () => {
     const { app } = setup();
-    const created = await createRun(app);
+    const created = await createRun(app, { start: false });
     const id = created.body.creation.id as string;
-    await waitForStatus(app, id, 'completed');
     const listed = async (query = '') =>
       (await request(app).get(`/e2e/explorations${query}`).expect(200)).body.explorations;
-    // The exploration that came before planning is kept too, without a description.
+    // Planning the tests of a run never explores it: only an exploration the user asked for is kept.
+    expect(await listed()).toEqual([]);
+    await request(app).post(`/e2e/creations/${id}/explore`).expect(202);
     await vi.waitFor(async () => expect(await listed()).toHaveLength(1));
     expect((await listed())[0]).toMatchObject({ creationId: id, description: null });
+    await exploredAs(app, id, 'ready');
 
     const started = await request(app)
       .post(`/e2e/creations/${id}/explore`)
@@ -425,6 +545,7 @@ describe('E2E exploration routes', () => {
       .expect(202);
     expect(started.body.exploration.description).toBe('Only the issues screen');
     await vi.waitFor(async () => expect(await listed(`?creationId=${id}`)).toHaveLength(2));
+    await exploredAs(app, id, 'ready');
     const [latest] = await listed();
     expect(latest).toMatchObject({
       status: 'ready',
@@ -439,11 +560,33 @@ describe('E2E exploration routes', () => {
       .post(`/e2e/creations/${id}/explore`)
       .send({ description: 'x'.repeat(2_001) })
       .expect(400);
+    // The context is a list of PBIs, issues and Brain documents.
+    await request(app)
+      .post(`/e2e/creations/${id}/explore`)
+      .send({ context: [{ kind: 'wiki', id: '1' }] })
+      .expect(400);
+    await request(app)
+      .post(`/e2e/creations/${id}/explore`)
+      .send({
+        context: Array.from({ length: 21 }, (_, index) => ({ kind: 'pbi', id: `${index}` })),
+      })
+      .expect(400);
     await request(app).get('/e2e/explorations/missing').expect(404);
     await request(app).get('/e2e/explorations?creationId=missing').expect(404);
     await request(app).delete(`/e2e/explorations/${latest.id}`).expect(204);
     await request(app).delete(`/e2e/explorations/${latest.id}`).expect(404);
     expect(await listed()).toHaveLength(1);
+    // A valid choice of context is accepted (it is read when the exploration starts).
+    await request(app)
+      .post(`/e2e/creations/${id}/explore`)
+      .send({
+        context: [
+          { kind: 'pbi', id: 'p1' },
+          { kind: 'brain', id: 'b1' },
+        ],
+      })
+      .expect(202);
+    await vi.waitFor(async () => expect(await listed()).toHaveLength(2));
   });
 
   it('hands the description to the agent as its focus', async () => {
@@ -451,8 +594,8 @@ describe('E2E exploration routes', () => {
     const created = await createRun(app);
     const id = created.body.creation.id as string;
     await waitForStatus(app, id, 'completed');
-    // The exploration that precedes planning is open.
-    expect(runner.explore.mock.calls[0]![0].focus).toBeUndefined();
+    // Planning only reads the application: the agent is not asked to explore it.
+    expect(runner.explore.mock.calls[0]![0].agent).toBeUndefined();
     await request(app)
       .post(`/e2e/creations/${id}/explore`)
       .send({ description: 'Only the billing screens' })
@@ -465,14 +608,43 @@ describe('E2E exploration routes', () => {
     for (const test of tests) expect(focus).toContain(test.title);
   });
 
+  it('explores with the agent the user chose, and rejects one that does not exist', async () => {
+    const { app } = setup();
+    const id = (await createRun(app, { start: false })).body.creation.id as string;
+    const explorer = (
+      await request(app)
+        .post('/agents')
+        .send({ name: 'Explorer', instructions: 'Explore like a tester.' })
+        .expect(201)
+    ).body.agent;
+
+    const started = await request(app)
+      .post(`/e2e/creations/${id}/explore`)
+      .send({ agentId: explorer.id })
+      .expect(202);
+    expect(started.body.exploration.agent).toEqual({ id: explorer.id, name: 'Explorer' });
+    await exploredAs(app, id, 'ready');
+    expect((await exploration(app, id)).agent).toEqual({ id: explorer.id, name: 'Explorer' });
+
+    // Without a choice the agent of the run explores, and the exploration does not name one.
+    await request(app).post(`/e2e/creations/${id}/explore`).expect(202);
+    await exploredAs(app, id, 'ready');
+    expect(await exploration(app, id)).not.toHaveProperty('agent');
+
+    await request(app)
+      .post(`/e2e/creations/${id}/explore`)
+      .send({ agentId: 'missing' })
+      .expect(404);
+    await request(app).post(`/e2e/creations/${id}/explore`).send({ agentId: '' }).expect(400);
+  });
+
   it('keeps the script in the database only, even when asked for the repository', async () => {
     const { app, scripts } = setup();
-    const created = await createRun(app);
-    const id = created.body.creation.id as string;
-    await waitForStatus(app, id, 'completed');
+    const id = await exploredRun(app);
     const listed = async () =>
       (await request(app).get(`/e2e/explorations?creationId=${id}`).expect(200)).body.explorations;
     await vi.waitFor(async () => expect(await listed()).toHaveLength(1));
+    await exploredAs(app, id, 'ready');
     const writeFile = vi.spyOn(scripts, 'writeFile');
 
     await request(app)
@@ -986,7 +1158,15 @@ describe('E2E run view routes', () => {
       status: 'running',
       live: { step: 1, action: 'click', kind: 'button', name: 'Enter' },
     });
-    expect(map.tests[1].live).toBeNull();
+    // The tests of a run have a browser each: the other one is being watched too.
+    await vi.waitFor(async () => {
+      const next = (await request(app).get(`/e2e/creations/${id}/action-map`)).body.map;
+      expect(next.tests.map((test: { status: string }) => test.status)).toEqual([
+        'running',
+        'running',
+      ]);
+      expect(next.tests[1].live).toMatchObject({ action: 'click', name: 'Enter' });
+    });
 
     gate.release();
     await waitForStatus(app, id, 'completed');

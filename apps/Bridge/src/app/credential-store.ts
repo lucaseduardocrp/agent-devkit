@@ -14,6 +14,7 @@ export interface CliCredentials {
 type Vault = Record<string, Record<string, CliCredentials>>;
 
 const MCP_PREFIX = 'mcp:';
+const FINGERPRINT_PREFIX = 'fingerprint:';
 
 /** The strings inside a JSON file (a login file holds its tokens as values); the text itself otherwise. */
 function stringLeaves(content: string): string[] {
@@ -65,6 +66,23 @@ export class CredentialStore {
     } else {
       entry.files[input.path] = input.content;
     }
+    this.save();
+  }
+
+  /**
+   * Which token was last applied to a CLI, as a hash. A login file (Codex) is rewritten by the CLI
+   * when it refreshes its tokens, so the same token must not be written over it again. Stored under
+   * a reserved key like the MCP servers, for the same reason: the file format does not change.
+   */
+  getFingerprint(identity: string, cli: string): string | undefined {
+    return this.vault[identity]?.[`${FINGERPRINT_PREFIX}${cli}`]?.env.FINGERPRINT;
+  }
+
+  setFingerprint(identity: string, cli: string, fingerprint: string): void {
+    (this.vault[identity] ??= {})[`${FINGERPRINT_PREFIX}${cli}`] = {
+      env: { FINGERPRINT: fingerprint },
+      files: {},
+    };
     this.save();
   }
 

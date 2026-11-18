@@ -6,6 +6,8 @@ import { CredentialStore } from './app/credential-store.js';
 import { canSwitchUser, Sandbox } from './app/sandbox.js';
 import { StateStore } from './app/state-store.js';
 import { createCliRegistry } from './cli/index.js';
+import { LlmHost } from './app/llm-host.js';
+import { streamProcess } from './core/stream-process.js';
 import { AdkChannel } from './channels/adk/adk-channel.js';
 import { TelegramChannel } from './channels/telegram/telegram-channel.js';
 import { CliExecutor } from './core/cli-registry.js';
@@ -44,6 +46,20 @@ async function main(): Promise<void> {
     credentials,
     switchUser,
   });
+  const executor = new CliExecutor({ timeoutMs: config.runTimeoutMs });
+  // Answers the ADK's LLM requests (the "AI CLI" option of an integration), one identity per workspace.
+  const llm = new LlmHost({
+    registry,
+    executor,
+    sandbox,
+    credentials,
+    stream: streamProcess,
+    timeoutMs: config.llmTimeoutMs,
+    ownSecrets: () =>
+      [config.sharedToken, config.encryptionKey, config.telegramToken].filter(
+        (secret): secret is string => Boolean(secret),
+      ),
+  });
   // The channels are the only chat-app specific part: add another one here.
   const channels: Channel[] = [];
   if (config.sharedToken)
@@ -53,6 +69,10 @@ async function main(): Promise<void> {
         token: config.sharedToken,
         apiUrl: config.adkUrl,
         listClis: () => registry.list().map((a) => a.id),
+        llm: {
+          clis: (workspaceId) => llm.clis(workspaceId),
+          stream: (input, signal) => llm.stream(input, signal),
+        },
       }),
     );
   if (config.telegramToken) {
@@ -68,7 +88,7 @@ async function main(): Promise<void> {
     config,
     channels,
     registry,
-    executor: new CliExecutor({ timeoutMs: config.runTimeoutMs }),
+    executor,
     store: new StateStore(join(config.dataDir, 'state.json')),
     credentials,
     sandbox,

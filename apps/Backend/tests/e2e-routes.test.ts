@@ -9,19 +9,47 @@ import { FakeScriptRepository } from './helpers/fake-script-repository.js';
 const repository = { provider: 'github', id: '42', branch: 'main', path: 'tests/e2e' };
 
 const SCRIPT = `import { test, expect } from '@playwright/test';
-test('TC001', async ({ page }) => { await page.goto('/'); await expect(page).toHaveURL('/'); });`;
+test('TC001', async ({ page }) => {
+  await test.step('Step 1 - Open', async () => { await page.goto('/'); await expect(page).toHaveURL('/'); });
+});`;
+const STEP = `await test.step('Step 1 - Open', async () => { await page.goto('/x'); });`;
 
-function setup() {
+function setup(options: { chat?: boolean; fix?: boolean } = {}) {
+  const analyze = vi.fn().mockResolvedValue({
+    verdict: options.fix ? 'app_bug' : 'test_issue',
+    summary: 'Goal: ...',
+    criteriaMet: true,
+  });
+  const reviseCase = vi.fn().mockResolvedValue({
+    reply: 'Ajustei o caso.',
+    testCase: {
+      title: 'Open page',
+      description: 'd',
+      steps: [{ action: 'Abrir', expectedResult: '' }],
+    },
+  });
+  const fixStep = vi.fn().mockResolvedValue(STEP);
   const scripts = new FakeScriptRepository();
   const runner: E2eRunner = {
     explore: vi.fn().mockResolvedValue({ startUrl: 'x', pages: [] }),
     run: vi.fn().mockResolvedValue({
-      status: 'passed',
+      status: options.fix ? 'failed' : 'passed',
       durationMs: 5,
-      error: null,
+      error: options.fix ? 'Expected: 4 Received: 5' : null,
       logs: 'ok',
       video: Buffer.from('video-bytes'),
-      steps: [],
+      steps: options.fix
+        ? [
+            {
+              position: 1,
+              title: 'Step 1 - Open',
+              status: 'failed',
+              durationMs: 1,
+              error: 'Expected: 4 Received: 5',
+              screenshot: null,
+            },
+          ]
+        : [],
     }),
   };
   const author: E2eAuthor = {
@@ -30,7 +58,9 @@ function setup() {
       tests: [{ title: 'Open page', description: 'd', priority: 'high', steps: [] }],
     }),
     writeScript: vi.fn().mockResolvedValue(SCRIPT),
-    analyze: vi.fn(),
+    analyze,
+    ...(options.chat === false ? {} : { reviseCase }),
+    ...(options.fix ? { fixStep } : {}),
   };
   const app = createApp({
     e2eRunner: runner,
@@ -46,7 +76,7 @@ function setup() {
       locale: 'en-US',
     }),
   });
-  return { app, runner, scripts };
+  return { app, runner, scripts, analyze, reviseCase, fixStep };
 }
 
 async function createAgent(app: ReturnType<typeof setup>['app']) {
@@ -232,6 +262,13 @@ describe('E2E routes', () => {
       .send({ regenerate: true })
       .expect(202);
     await waitForStatus(app, id, 'completed');
+    await request(app)
+      .post(`/e2e/tests/${tests[0]!.id}/run`)
+      .send({ regenerate: true, instructions: 'Open it by its route', useLastRun: true })
+      .expect(202);
+    await waitForStatus(app, id, 'completed');
+    const guided = await request(app).get(`/e2e/tests/${tests[0]!.id}`).expect(200);
+    expect(guided.body.test).toMatchObject({ scriptInstructions: 'Open it by its route' });
     await request(app).post(`/e2e/creations/${id}/run`).expect(202);
     await waitForStatus(app, id, 'completed');
     await request(app).post(`/e2e/creations/${id}/cancel`).expect(409);
@@ -243,6 +280,240 @@ describe('E2E routes', () => {
     await request(app).put(`/e2e/creations/${id}`).send({ name: '' }).expect(400);
     await request(app).delete(`/e2e/creations/${id}`).expect(204);
     await request(app).get(`/e2e/creations/${id}`).expect(404);
+  });
+
+  it('talks about a test case with the AI ("Fix with AI") without saving or running anything', async () => {
+    const { app, runner, reviseCase } = setup();
+    const agentId = await createAgent(app);
+    const created = await request(app)
+      .post('/e2e/creations')
+      .send({
+        name: 'chat',
+        agentId,
+        mode: 'frontend',
+        baseUrl: 'http://localhost:5173',
+        path: 'e/1',
+        prd: 'x',
+        prdFileNames: [],
+        repository,
+      })
+      .expect(202);
+    const detail = await waitForStatus(app, created.body.creation.id as string, 'completed');
+    const testId = (detail['tests'] as { id: string }[])[0]!.id;
+    const runs = vi.mocked(runner.run).mock.calls.length;
+    const body = {
+      messages: [{ role: 'user', content: 'O fluxo começa pelo menu' }],
+      testCase: {
+        title: 'Open page',
+        description: 'd',
+        steps: [{ action: 'Abrir', expectedResult: 'x' }],
+      },
+    };
+
+    const answer = await request(app).post(`/e2e/tests/${testId}/fix-case`).send(body).expect(200);
+    expect(answer.body.revision).toMatchObject({ reply: 'Ajustei o caso.' });
+    expect(reviseCase).toHaveBeenCalledWith(
+      expect.objectContaining({ messages: body.messages, testCase: body.testCase, images: [] }),
+    );
+    // The test is the same afterwards and nothing ran.
+    expect(vi.mocked(runner.run).mock.calls).toHaveLength(runs);
+
+    // Images are looked up by id among the workspace's attachments; one that is not there is skipped.
+    await request(app)
+      .post(`/e2e/tests/${testId}/fix-case`)
+      .send({ ...body, imageIds: ['11111111-1111-4111-8111-111111111111'] })
+      .expect(200);
+
+    await request(app).post('/e2e/tests/missing/fix-case').send(body).expect(404);
+    await request(app)
+      .post(`/e2e/tests/${testId}/fix-case`)
+      .send({ ...body, messages: [{ role: 'assistant', content: 'oi' }] })
+      .expect(400);
+    await request(app)
+      .post(`/e2e/tests/${testId}/fix-case`)
+      .send({ ...body, messages: [] })
+      .expect(400);
+    await request(app)
+      .post(`/e2e/tests/${testId}/fix-case`)
+      .send({ ...body, imageIds: ['not-an-id'] })
+      .expect(400);
+    await request(app)
+      .post(`/e2e/tests/${testId}/fix-case`)
+      .set('x-test-role', 'VIEWER')
+      .send(body)
+      .expect(403);
+  });
+
+  it('fixes one failed step with the AI, then runs the test again', async () => {
+    const { app, runner, fixStep } = setup({ fix: true });
+    const agentId = await createAgent(app);
+    const created = await request(app)
+      .post('/e2e/creations')
+      .send({
+        name: 'fix step',
+        agentId,
+        mode: 'frontend',
+        baseUrl: 'http://localhost:5173',
+        path: 'e/1',
+        prd: 'x',
+        prdFileNames: [],
+        repository,
+      })
+      .expect(202);
+    const detail = await waitForStatus(app, created.body.creation.id as string, 'completed');
+    const testId = (detail['tests'] as { id: string }[])[0]!.id;
+    const runs = vi.mocked(runner.run).mock.calls.length;
+
+    // The instructions are optional; the test runs again with the step rewritten.
+    await request(app)
+      .post(`/e2e/tests/${testId}/steps/1/fix`)
+      .send({ instructions: 'Fill only the Documents filter' })
+      .expect(202);
+    await vi.waitFor(() => expect(vi.mocked(runner.run).mock.calls).toHaveLength(runs + 1));
+    expect(fixStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        step: { position: 1, title: 'Step 1 - Open' },
+        instructions: 'Fill only the Documents filter',
+      }),
+    );
+    await waitForStatus(app, created.body.creation.id as string, 'completed');
+    await request(app).post(`/e2e/tests/${testId}/steps/1/fix`).send({}).expect(202);
+    await waitForStatus(app, created.body.creation.id as string, 'completed');
+    expect(fixStep.mock.calls.at(-1)![0].instructions).toBe('');
+
+    await request(app).post(`/e2e/tests/${testId}/steps/9/fix`).send({}).expect(404);
+    await request(app).post('/e2e/tests/missing/steps/1/fix').send({}).expect(404);
+    await request(app).post(`/e2e/tests/${testId}/steps/0/fix`).send({}).expect(400);
+    await request(app)
+      .post(`/e2e/tests/${testId}/steps/1/fix`)
+      .send({ instructions: 'a'.repeat(20_001) })
+      .expect(400);
+    await request(app)
+      .post(`/e2e/tests/${testId}/steps/1/fix`)
+      .set('x-test-role', 'VIEWER')
+      .send({})
+      .expect(403);
+  });
+
+  it('does not offer to fix a step when the author cannot', async () => {
+    const { app } = setup();
+    const agentId = await createAgent(app);
+    const created = await request(app)
+      .post('/e2e/creations')
+      .send({
+        name: 'no fix',
+        agentId,
+        mode: 'frontend',
+        baseUrl: 'http://localhost:5173',
+        path: 'e/1',
+        prd: 'x',
+        prdFileNames: [],
+        repository,
+      })
+      .expect(202);
+    const detail = await waitForStatus(app, created.body.creation.id as string, 'completed');
+    const testId = (detail['tests'] as { id: string }[])[0]!.id;
+    const answer = await request(app).post(`/e2e/tests/${testId}/steps/1/fix`).send({}).expect(503);
+    expect(answer.body.code).toBe('E2E_STEP_FIX_UNAVAILABLE');
+  });
+
+  it('does not offer the chat when the author cannot rewrite a test case', async () => {
+    const { app } = setup({ chat: false });
+    const agentId = await createAgent(app);
+    const created = await request(app)
+      .post('/e2e/creations')
+      .send({
+        name: 'nochat',
+        agentId,
+        mode: 'frontend',
+        baseUrl: 'http://localhost:5173',
+        path: 'e/1',
+        prd: 'x',
+        prdFileNames: [],
+        repository,
+      })
+      .expect(202);
+    const detail = await waitForStatus(app, created.body.creation.id as string, 'completed');
+    const testId = (detail['tests'] as { id: string }[])[0]!.id;
+    const response = await request(app)
+      .post(`/e2e/tests/${testId}/fix-case`)
+      .send({
+        messages: [{ role: 'user', content: 'x' }],
+        testCase: { title: 't', description: '', steps: [] },
+      })
+      .expect(503);
+    expect(response.body.code).toBe('E2E_CASE_CHAT_UNAVAILABLE');
+  });
+
+  it('lets the user set the success criteria and the result of a test, and review it', async () => {
+    const { app, analyze } = setup();
+    const agentId = await createAgent(app);
+    const created = await request(app)
+      .post('/e2e/creations')
+      .send({
+        name: 'perm',
+        agentId,
+        mode: 'frontend',
+        baseUrl: 'http://localhost:5173',
+        path: 'e/1',
+        prd: 'x',
+        prdFileNames: [],
+        repository,
+      })
+      .expect(202);
+    const detail = await waitForStatus(app, created.body.creation.id as string, 'completed');
+    const testId = (detail['tests'] as { id: string }[])[0]!.id;
+
+    const criteria = await request(app)
+      .put(`/e2e/tests/${testId}/success-criteria`)
+      .send({ criteria: ' Acesso negado ' })
+      .expect(200);
+    expect(criteria.body.test).toMatchObject({ successCriteria: 'Acesso negado' });
+    await request(app).put(`/e2e/tests/${testId}/success-criteria`).send({}).expect(400);
+
+    // A pass of the run itself has nothing to review.
+    await request(app).post(`/e2e/tests/${testId}/reevaluate`).expect(409);
+    const failed = await request(app)
+      .put(`/e2e/tests/${testId}/result`)
+      .send({ decision: 'failed', note: 'wrong screen' })
+      .expect(200);
+    expect(failed.body.test).toMatchObject({
+      status: 'failed',
+      resultSource: 'manual',
+      resultNote: 'wrong screen',
+    });
+    await request(app).put(`/e2e/tests/${testId}/result`).send({ decision: 'maybe' }).expect(400);
+
+    // The run of this test reported no steps, so there is none to decide.
+    await request(app)
+      .put(`/e2e/tests/${testId}/steps/1/result`)
+      .send({ decision: 'passed', note: 'fine' })
+      .expect(404);
+    await request(app)
+      .put(`/e2e/tests/${testId}/steps/1/result`)
+      .set('x-test-role', 'VIEWER')
+      .send({ decision: 'passed' })
+      .expect(403);
+    await request(app)
+      .put(`/e2e/tests/${testId}/steps/0/result`)
+      .send({ decision: 'passed' })
+      .expect(400);
+
+    const reviewed = await request(app).post(`/e2e/tests/${testId}/reevaluate`).expect(200);
+    expect(analyze).toHaveBeenCalledOnce();
+    expect(reviewed.body.test).toMatchObject({ status: 'passed', resultSource: 'criteria' });
+    const back = await request(app)
+      .put(`/e2e/tests/${testId}/result`)
+      .send({ decision: 'run' })
+      .expect(200);
+    expect(back.body.test).toMatchObject({ status: 'passed', resultSource: 'run' });
+
+    await request(app)
+      .put(`/e2e/tests/${testId}/result`)
+      .set('x-test-role', 'VIEWER')
+      .send({ decision: 'passed' })
+      .expect(403);
+    await request(app).post(`/e2e/tests/${testId}/run`).send({ successCriteria: '' }).expect(202);
   });
 
   it('lets the MCP host plan a run and save its specs', async () => {
@@ -324,6 +595,26 @@ describe('E2E routes', () => {
       .send({ name: 'x', agentId, mode: 'frontend', baseUrl: 'ftp://x', prd: 'p', repository })
       .expect(400);
     expect(invalidUrl.body.code).toBe('E2E_INVALID_URL');
+    // Extra instructions have room for long acceptance criteria, but not for unlimited text.
+    const withInstructions = (instructions: string) => ({
+      name: 'x',
+      agentId,
+      mode: 'frontend',
+      baseUrl: 'http://x',
+      prd: 'p',
+      repository,
+      start: false,
+      instructions,
+    });
+    const tooLong = await request(app)
+      .post('/e2e/creations')
+      .send(withInstructions('a'.repeat(20_001)))
+      .expect(400);
+    expect(tooLong.body.details).toEqual([expect.objectContaining({ field: 'instructions' })]);
+    await request(app)
+      .post('/e2e/creations')
+      .send(withInstructions('a'.repeat(20_000)))
+      .expect(202);
     await request(app)
       .post('/e2e/creations')
       .set('x-test-role', 'VIEWER')

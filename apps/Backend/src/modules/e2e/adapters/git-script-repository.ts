@@ -1,6 +1,10 @@
 import { ApplicationError } from '../../../shared/errors.js';
 import type { IntegrationsService } from '../../integrations/application/integrations-service.js';
-import type { E2eRepositoryProvider, E2eRepositoryRef } from '../domain/e2e.js';
+import type {
+  E2eRepositoryLocation,
+  E2eRepositoryProvider,
+  E2eRepositoryRef,
+} from '../domain/e2e.js';
 import type {
   E2eBranch,
   E2eRepository,
@@ -304,6 +308,7 @@ export class GitScriptRepository implements E2eScriptRepository {
     ref: E2eRepositoryRef,
     filePath: string,
   ): Promise<string | null> {
+    if (ref.provider === 'local') return null;
     let connection: Connection;
     try {
       connection = await this.connect(workspaceId, ref.provider);
@@ -390,8 +395,15 @@ export class GitScriptRepository implements E2eScriptRepository {
 
   private async requireConnection(
     workspaceId: string,
-    provider: E2eRepositoryProvider,
+    provider: E2eRepositoryLocation,
   ): Promise<Connection> {
+    // A folder of this computer is served by LocalScriptRepository, never by a Git host.
+    if (provider === 'local')
+      throw new ApplicationError(
+        'E2E_REPOSITORY_NOT_CONFIGURED',
+        'Local folders are only available in the desktop app.',
+        409,
+      );
     try {
       return await this.connect(workspaceId, provider);
     } catch {
@@ -409,11 +421,17 @@ export class GitScriptRepository implements E2eScriptRepository {
       (item) => item.providerId === providerId && item.isEnabled,
     );
     if (!integration) throw new MissingConnection('NOT_CONFIGURED');
-    const secret = await this.integrations.getDecryptedSecret(
-      workspaceId,
-      integration.category,
-      providerId,
-    );
+    let secret: string | null;
+    try {
+      secret = await this.integrations.getDecryptedSecret(
+        workspaceId,
+        integration.category,
+        providerId,
+      );
+    } catch {
+      // Saved under another encryption key (e.g. a cloud database opened without its key).
+      throw new MissingConnection('CREDENTIALS_UNREADABLE');
+    }
     if (!secret) throw new MissingConnection('CREDENTIALS_MISSING');
     if (provider === 'github')
       return {

@@ -562,22 +562,58 @@ export function AgentsView({
     setExecutionResult(null);
 
     try {
-      const res = await runActivity(
+      // The answer is shown as the model writes it. This is the same call a chat uses, and it
+      // works the same whether the workspace's LLM is an API key or a provider CLI.
+      const failure: { error: Error | null } = { error: null };
+      // What the screen shows is rebuilt from this local copy on every event.
+      let answer: ExecuteAgentResponse = {
+        agent: { id: selectedAgentId, name: selectedAgent?.name ?? '', role: 'CUSTOM' },
+        content: '',
+        chunksUsed: 0,
+      };
+      const show = (next: ExecuteAgentResponse) => {
+        answer = next;
+        setExecutionResult(next);
+      };
+      await runActivity(
         {
           kind: 'agent',
           title: t('agents.executingAgent', { name: selectedAgent?.name ?? '' }),
         },
         () =>
-          apiClient.executeAgent(selectedAgentId, {
-            prompt: trimmedPrompt,
-            useKnowledge,
-            ...(selectedLlmProvider ? { llmProvider: selectedLlmProvider } : {}),
-          }),
+          apiClient.streamAgentChat(
+            selectedAgentId,
+            {
+              prompt: trimmedPrompt,
+              useKnowledge,
+              ...(selectedLlmProvider ? { llmProvider: selectedLlmProvider } : {}),
+            },
+            {
+              onStart: (started) =>
+                show({
+                  ...answer,
+                  agent: {
+                    id: started.agent.id,
+                    name: started.agent.name,
+                    role: started.agent.role as ExecuteAgentResponse['agent']['role'],
+                  },
+                  provider: started.provider,
+                }),
+              onDelta: (text) => show({ ...answer, content: answer.content + text }),
+              // The verified answer replaces what was streamed (a guard may have changed it).
+              onDone: (done) => show({ ...answer, content: done.result, provider: done.provider }),
+              onError: (error) => {
+                failure.error = error;
+              },
+            },
+          ),
       );
-      setExecutionResult(res);
+      if (failure.error) throw failure.error;
     } catch (err) {
       const msg = err instanceof Error ? err.message : t('agents.executionFailed');
       setExecutionError(msg);
+      // Whatever was streamed before the failure is dropped, as a one-shot run would have.
+      setExecutionResult(null);
       if (
         msg.toLowerCase().includes('prompt injection') ||
         msg.toLowerCase().includes('segurança') ||
@@ -646,13 +682,13 @@ export function AgentsView({
   return (
     <div
       className={cn(
-        visibleTab === 'map' && 'flex min-h-full shrink-0 flex-col gap-4',
-        // The workflow fills the screen it is on, so the whole flow is in view without scrolling;
-        // only a screen too short for the flow falls back to the page scroll.
-        visibleTab === 'workflow' && 'flex h-full min-h-[520px] flex-col gap-3 p-4',
+        // The map and the workflow fill the screen they are on, so everything is in view without
+        // scrolling; only a screen too short for them falls back to the page scroll.
+        (visibleTab === 'map' || visibleTab === 'workflow') &&
+          'flex h-full min-h-[520px] flex-col gap-3',
         visibleTab !== 'map' &&
           visibleTab !== 'workflow' &&
-          'flex min-h-full shrink-0 flex-col gap-6 p-6',
+          'flex min-h-full shrink-0 flex-col gap-6',
         className,
       )}
       data-testid="agents-view"
@@ -1334,12 +1370,6 @@ export function AgentsView({
                     <i className="ti ti-robot mr-1 text-[var(--fill-accent)]" aria-hidden="true" />
                     {executionResult.agent.name}
                   </Badge>
-                  {executionResult.chunksUsed > 0 && (
-                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-xs text-emerald-400">
-                      <i className="ti ti-database text-xs" aria-hidden="true" />
-                      {executionResult.chunksUsed} {t('agents.contextChunksUsed')}
-                    </span>
-                  )}
                   {executionResult.provider && (
                     <span className="inline-flex items-center rounded-full border border-[var(--border)] px-2.5 py-0.5 text-xs">
                       {t('agents.provider')} {executionResult.provider}

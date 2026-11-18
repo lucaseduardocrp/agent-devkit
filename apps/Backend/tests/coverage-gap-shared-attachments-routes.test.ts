@@ -139,11 +139,11 @@ describe('attachment upload and download edges', () => {
       .send(Buffer.from('hello'));
     expect(upload.status).toBe(201);
     const id = upload.body.attachment.id as string;
-    const meta = JSON.parse((await store.get(attachmentMetaKey('ws-1', id)))!.toString('utf8'));
+    const meta = JSON.parse((await store.get(attachmentMetaKey('ws-1', id, 'document')))!.toString('utf8'));
     expect(meta.createdBy).toBeUndefined();
     const file = await request(app).get(`/attachments/files/${id}`);
     expect(file.headers['content-disposition']).toMatch(/^attachment;/);
-    await store.removePrefix(`attachments/ws-1/${id}/content`);
+    await store.removePrefix(`attachments/files/ws-1/${id}/content`);
     expect((await request(app).get(`/attachments/files/${id}`)).status).toBe(404);
   });
 
