@@ -17,7 +17,7 @@ import {
 /** A file uploaded by the browser, not yet claimed by any item. */
 async function upload(store: InMemoryE2eArtifactStore, id: string) {
   await store.put(
-    attachmentMetaKey('ws', id),
+    attachmentMetaKey('ws', id, 'image'),
     Buffer.from(
       JSON.stringify({
         id,

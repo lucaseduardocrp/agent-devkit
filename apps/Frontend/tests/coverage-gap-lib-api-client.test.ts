@@ -244,7 +244,10 @@ describe('ApiClient agents', () => {
 describe('ApiClient capabilities', () => {
   it('treats servers without the endpoint as having no capabilities', async () => {
     const { client } = setup({ status: 404 });
-    await expect(client.getCapabilities()).resolves.toEqual({ workersReachLocalhost: false });
+    await expect(client.getCapabilities()).resolves.toEqual({
+      workersReachLocalhost: false,
+      defaultExecutionTarget: 'remote',
+    });
   });
 });
 
@@ -473,7 +476,10 @@ describe('ApiClient remaining paths', () => {
 
   it('reads server capabilities and document attachments', async () => {
     const { client, last } = setup({ json: { workersReachLocalhost: true, attachments: [] } });
-    await expect(client.getCapabilities()).resolves.toEqual({ workersReachLocalhost: true });
+    await expect(client.getCapabilities()).resolves.toEqual({
+      workersReachLocalhost: true,
+      defaultExecutionTarget: 'remote',
+    });
     await expect(client.getDocumentAttachments('p 1')).resolves.toEqual([]);
     expect(last().url).toBe('http://api/knowledge/documents/p%201/attachments');
   });

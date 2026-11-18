@@ -16,6 +16,8 @@ import {
   PlaywrightE2eRunner,
   childEnvironment,
   defaultBrowsersPath,
+  isRendered,
+  isSettled,
   runProcess,
   runnerConfig,
   summarizeReport,
@@ -43,6 +45,7 @@ const creation: E2eCreation = {
   passwordSecret: 'cipher',
   prd: 'Users ask questions.',
   prdFileNames: [],
+  useBrain: false,
   diff: null,
   instructions: null,
   locale: 'pt-BR',
@@ -116,6 +119,109 @@ describe('AgentE2eAuthor', () => {
     expect(request.instruction).toContain('Scope: CODEBASE');
     expect(request.prompt).toContain('<untrusted_input');
     expect(request.prompt).toContain('"testAccountAvailable": true');
+  });
+
+  describe('Brain runs', () => {
+    const chunk = (
+      pageId: string,
+      chunkIndex: number,
+      content: string,
+      source = `app://local?title=${pageId}`,
+    ) => ({
+      source,
+      pageId,
+      chunkIndex,
+      content,
+      createdAt: '2026-01-01',
+    });
+    const brainAuthor = (search: ReturnType<typeof vi.fn> | undefined, text: string) => {
+      const base = author(text);
+      return {
+        complete: base.complete,
+        subject: new AgentE2eAuthor({
+          agents: {
+            getAgent: vi.fn().mockResolvedValue({ instructions: 'QA', model: 'm1' }),
+            getWorkflow: vi.fn().mockResolvedValue({ enabled: false, steps: [] }),
+          } as unknown as AgentService,
+          providers: base.providers,
+          ...(search ? { knowledge: { search } as never } : {}),
+        }),
+      };
+    };
+    const brainRun = { ...creation, useBrain: true, prd: '', instructions: 'voting' };
+
+    it('plans from Brain documents merged by page, with its rules', async () => {
+      const search = vi
+        .fn()
+        .mockResolvedValueOnce([chunk('Votes', 1, ' two.'), chunk('Votes', 0, 'One.')])
+        .mockResolvedValue([chunk('Votes', 0, 'One.'), chunk('Rules', 0, '# Rules\nA')]);
+      const { subject, complete } = brainAuthor(search, '{"summary":"s","tests":[{"title":"A"}]}');
+      await subject.plan({ creation: brainRun, snapshot: null });
+      expect(search.mock.calls[0]![1]).toMatchObject({ ownerId: 'owner', workspaceId: 'ws' });
+      const request = complete.mock.calls[0]![0] as { prompt: string; instruction: string };
+      expect(request.instruction).toContain('Brain');
+      expect(request.prompt).toContain('One. two.');
+      expect(request.prompt).toContain('"title": "Rules"');
+    });
+
+    it('fails when the Brain knows nothing and there is no PRD', async () => {
+      const { subject } = brainAuthor(vi.fn().mockResolvedValue([]), '{}');
+      await expect(subject.plan({ creation: brainRun, snapshot: null })).rejects.toMatchObject({
+        code: 'E2E_BRAIN_EMPTY',
+      });
+    });
+
+    it('survives a failed lookup and needs the Brain port', async () => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const search = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('down'))
+        .mockResolvedValue([
+          chunk('Wiki', 0, 'Body', 'https://x/_wiki?pagePath=%2FA%2FPage-One'),
+          chunk('Plain', 0, '# Heading\ntext', 'plain-source'),
+        ]);
+      const { subject, complete } = brainAuthor(search, 'export default 1');
+      await subject.writeScript({ creation: brainRun, test: testCase, snapshot: null });
+      const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+      expect(prompt).toContain('"title": "Page-One"');
+      expect(prompt).toContain('"title": "Heading"');
+      expect(log).toHaveBeenCalled();
+      log.mockRestore();
+      await subject.writeHook({
+        creation: brainRun,
+        test: testCase,
+        kind: 'beforeRun',
+        snapshot: null,
+      });
+      await expect(
+        brainAuthor(undefined, 'x').subject.plan({ creation: brainRun, snapshot: null }),
+      ).rejects.toMatchObject({ code: 'E2E_BRAIN_UNAVAILABLE' });
+    });
+
+    it('searches the Brain once for the spec and the hooks of a test, and again when it is stale', async () => {
+      const search = vi.fn().mockResolvedValue([chunk('Votes', 0, 'One.')]);
+      const { subject } = brainAuthor(search, 'export default 1');
+      const request = { creation: brainRun, test: testCase, snapshot: null };
+      await subject.writeScript(request);
+      const searches = search.mock.calls.length;
+      await subject.writeHook({ ...request, kind: 'beforeRun' });
+      await subject.writeHook({ ...request, kind: 'afterRun' });
+      expect(search).toHaveBeenCalledTimes(searches);
+
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 3 * 60_000);
+      await subject.writeScript(request);
+      vi.useRealTimers();
+      expect(search.mock.calls.length).toBe(searches * 2);
+    });
+
+    it('caps the Brain text handed to the AI', async () => {
+      const search = vi.fn().mockResolvedValue([chunk('Big', 0, 'x'.repeat(70_000))]);
+      const { subject, complete } = brainAuthor(search, '{"summary":"s","tests":[{"title":"A"}]}');
+      await subject.plan({ creation: { ...brainRun, prd: 'prd' }, snapshot: null });
+      const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+      expect(prompt.length).toBeLessThan(70_000);
+    });
   });
 
   it('rejects invalid plans', async () => {
@@ -244,6 +350,87 @@ describe('AgentE2eAuthor', () => {
     expect(second.prompt).not.toContain('beforeRunPreparesPreconditions');
   });
 
+  it('adapts a spec to the decisions of the user and strips fences', async () => {
+    const { author: subject, complete } = author(
+      "```ts\nimport { test } from '@playwright/test';\n```",
+    );
+    const script = await subject.adaptScript({
+      creation,
+      test: { ...testCase, successCriteria: 'The submenu is not shown' },
+      script: 'old script',
+      steps: [
+        {
+          position: 2,
+          title: 'Passo 2',
+          decided: 'passed',
+          ran: 'failed',
+          note: 'hidden is right',
+          error: 'Expected: 0',
+        },
+        {
+          position: 3,
+          title: 'Passo 3',
+          decided: 'failed',
+          ran: 'passed',
+          note: null,
+          error: null,
+        },
+      ],
+      result: { decided: 'passed', note: 'fine' },
+      hooks: { beforeRun: 'prepare()', afterRun: 'clean()' },
+    });
+    expect(script).toBe("import { test } from '@playwright/test';");
+    const request = complete.mock.calls[0]![0] as { prompt: string; instruction: string };
+    expect(request.instruction).toContain(
+      'Nothing may remain in the script that the user did not ask for',
+    );
+    expect(request.instruction).toContain('process.env.E2E_USERNAME');
+    expect(request.prompt).toContain('"script": "old script"');
+    expect(request.prompt).toContain('"userDecided": "passed"');
+    expect(request.prompt).toContain('"runReported": "failed"');
+    expect(request.prompt).toContain('"userNote": "hidden is right"');
+    expect(request.prompt).toContain('"runError": "Expected: 0"');
+    expect(request.prompt).toContain('"resultDecision"');
+    expect(request.prompt).toContain('"successCriteria": "The submenu is not shown"');
+    expect(request.prompt).toContain('"beforeRunPreparesPreconditions": "prepare()"');
+    expect(request.prompt).toContain('"afterRunCleansUp": "clean()"');
+  });
+
+  it('adapts a spec without result, notes, criteria or hooks to tell the AI about', async () => {
+    const { author: subject, complete } = author('code');
+    await subject.adaptScript({
+      creation,
+      test: { ...testCase, scriptInstructions: 'Use routes' },
+      script: 's',
+      steps: [
+        { position: 1, title: 'P', decided: 'failed', ran: 'passed', note: null, error: null },
+      ],
+    });
+    const request = complete.mock.calls[0]![0] as { prompt: string };
+    expect(request.prompt).toContain('"userInstructions": "Use routes"');
+    for (const absent of [
+      'resultDecision',
+      'userNote',
+      'runError',
+      'successCriteria',
+      'afterRunCleansUp',
+    ])
+      expect(request.prompt).not.toContain(absent);
+
+    // A decision about the whole test needs no note to be sent.
+    await subject.adaptScript({
+      creation,
+      test: testCase,
+      script: 's',
+      steps: [],
+      result: { decided: 'failed', note: null },
+    });
+    const second = complete.mock.calls[1]![0] as { prompt: string };
+    expect(second.prompt).toContain('"resultDecision"');
+    expect(second.prompt).toContain('"userDecided": "failed"');
+    expect(second.prompt).not.toContain('userNote');
+  });
+
   it('analyzes failures and falls back to raw text', async () => {
     const parsed = await author('{"verdict":"test_issue","summary":"Goal: x"}').author.analyze({
       creation,
@@ -253,6 +440,34 @@ describe('AgentE2eAuthor', () => {
       logs: 'l',
     });
     expect(parsed).toEqual({ verdict: 'test_issue', summary: 'Goal: x' });
+    // With success criteria the judge also answers whether they are met, and sees the screens.
+    const judge = author('{"verdict":"test_issue","summary":"Goal: x","criteriaMet":true}');
+    const judged = await judge.author.analyze({
+      creation,
+      test: { ...testCase, successCriteria: 'Acesso negado is shown' } as E2eTestCase,
+      script: 's',
+      error: 'e',
+      logs: 'l',
+      steps: [
+        { position: 1, title: 'Passo 1', status: 'failed', error: 'Expected: 0\nReceived: 1' },
+        { position: 2, title: 'Passo 2', status: 'passed', error: null },
+      ],
+      images: [{ mimeType: 'image/png', data: 'AAAA' }],
+    });
+    expect(judged).toEqual({ verdict: 'test_issue', summary: 'Goal: x', criteriaMet: true });
+    const request = judge.complete.mock.calls[0]![0] as unknown as {
+      prompt: string;
+      instruction: string;
+      images: unknown[];
+    };
+    expect(request.images).toEqual([{ mimeType: 'image/png', data: 'AAAA' }]);
+    expect(request.prompt).toContain('Acesso negado is shown');
+    expect(request.prompt).toContain('Expected: 0');
+    expect(request.instruction).toContain('criteriaMet');
+    const unsure = await author(
+      '{"verdict":"app_bug","summary":"s","criteriaMet":"maybe"}',
+    ).author.analyze({ creation, test: testCase, script: 's', error: 'e', logs: 'l' });
+    expect(unsure).toEqual({ verdict: 'app_bug', summary: 's' });
     const raw = await author('The app crashed.').author.analyze({
       creation,
       test: testCase,
@@ -263,19 +478,129 @@ describe('AgentE2eAuthor', () => {
     expect(raw).toEqual({ verdict: 'app_bug', summary: 'The app crashed.' });
   });
 
-  it('tells the analysis what Before Run and After Run already did', async () => {
-    const { author: subject, complete } = author('{"verdict":"app_bug","summary":"x"}');
-    await subject.analyze({
+  it('rewrites a test case from the conversation, seeing the images, and keeps the case when it has nothing to change', async () => {
+    const draft = {
+      title: 'Submit',
+      description: 'd',
+      steps: [{ action: 'Open', expectedResult: 'Opens' }],
+    };
+    const messages = [{ role: 'user' as const, content: 'The flow starts on the menu' }];
+    const fixed = author(
+      '{"reply":"Corrigi o fluxo.","testCase":{"title":" Submit ","description":null,"steps":[{"action":"Abrir o menu","expectedResult":null},{"action":"Enviar","expectedResult":"Enviado"}]}}',
+    );
+    const revision = await fixed.author.reviseCase({
       creation,
       test: testCase,
-      script: 's',
-      error: 'e',
-      logs: 'l',
-      hooks: { beforeRun: 'prepare()', afterRun: 'cleanUp()' },
+      testCase: draft,
+      messages,
+      script: 'old script',
+      lastRun: 'Error of the last run: timeout',
+      images: [{ mimeType: 'image/png', data: 'AAAA' }],
+    });
+    expect(revision).toEqual({
+      reply: 'Corrigi o fluxo.',
+      testCase: {
+        title: 'Submit',
+        description: '',
+        steps: [
+          { action: 'Abrir o menu', expectedResult: '' },
+          { action: 'Enviar', expectedResult: 'Enviado' },
+        ],
+      },
+    });
+    const sent = fixed.complete.mock.calls[0]![0] as unknown as {
+      prompt: string;
+      instruction: string;
+      images: unknown[];
+    };
+    expect(sent.images).toEqual([{ mimeType: 'image/png', data: 'AAAA' }]);
+    expect(sent.prompt).toContain('The flow starts on the menu');
+    expect(sent.prompt).toContain('old script');
+    expect(sent.prompt).toContain('Error of the last run: timeout');
+    expect(sent.instruction).toContain('single source of truth');
+
+    // A question is answered without touching the case; a case that cannot be read is ignored.
+    const asked = author('{"reply":"Qual tela?"}');
+    expect(
+      await asked.author.reviseCase({
+        creation,
+        test: testCase,
+        testCase: draft,
+        messages,
+        script: '',
+        lastRun: null,
+      }),
+    ).toEqual({ reply: 'Qual tela?', testCase: null });
+    expect((asked.complete.mock.calls[0]![0] as { prompt: string }).prompt).not.toContain(
+      'lastRun',
+    );
+    const broken = author('{"reply":"ok","testCase":{"title":"","steps":[]}}');
+    expect(
+      await broken.author.reviseCase({
+        creation,
+        test: testCase,
+        testCase: draft,
+        messages,
+        script: '',
+        lastRun: null,
+      }),
+    ).toEqual({ reply: 'ok', testCase: null });
+    // A case without a message still comes through; the screen words it.
+    const silent = author('{"testCase":{"title":"T","steps":[{"action":"A"}]}}');
+    expect(
+      await silent.author.reviseCase({
+        creation,
+        test: testCase,
+        testCase: draft,
+        messages,
+        script: '',
+        lastRun: null,
+      }),
+    ).toEqual({
+      reply: '',
+      testCase: { title: 'T', description: '', steps: [{ action: 'A', expectedResult: '' }] },
+    });
+    // Free text from the model still reaches the user.
+    const raw = author('Preciso de uma captura de tela.');
+    expect(
+      await raw.author.reviseCase({
+        creation,
+        test: testCase,
+        testCase: draft,
+        messages,
+        script: '',
+        lastRun: null,
+      }),
+    ).toEqual({ reply: 'Preciso de uma captura de tela.', testCase: null });
+  });
+
+  it('hands the success criteria and the way the user wants the script written to the AI', async () => {
+    const { author: subject, complete } = author('export default 1');
+    await subject.writeScript({
+      creation,
+      test: {
+        ...testCase,
+        successCriteria: ' Acesso negado is shown ',
+        scriptInstructions: 'Open the route directly',
+      } as E2eTestCase,
+      snapshot: null,
     });
     const request = complete.mock.calls[0]![0] as { prompt: string; instruction: string };
-    expect(request.prompt).toContain('"beforeRun": "prepare()"');
-    expect(request.prompt).toContain('"afterRun": "cleanUp()"');
+    expect(request.prompt).toContain('"successCriteria": " Acesso negado is shown "');
+    expect(request.prompt).toContain('"userInstructions": "Open the route directly"');
+    expect(request.instruction).toContain('When successCriteria is given');
+    expect(request.instruction).toContain('Keep every top-level step that passed');
+    expect(request.instruction).toContain('assert what the user sees');
+
+    complete.mockClear();
+    await subject.writeScript({
+      creation,
+      test: { ...testCase, successCriteria: '   ' } as E2eTestCase,
+      snapshot: null,
+    });
+    expect((complete.mock.calls[0]![0] as { prompt: string }).prompt).not.toContain(
+      'successCriteria',
+    );
   });
 
   it('uses the default LLM or reports missing providers and LLM errors', async () => {
@@ -488,7 +813,12 @@ describe('PlaywrightE2eRunner (simulated)', () => {
         .mockResolvedValueOnce(undefined)
         .mockRejectedValueOnce(new Error('404')),
       waitForLoadState: vi.fn().mockRejectedValue(new Error('busy')),
-      evaluate: vi.fn().mockImplementation(() => Promise.resolve(snapshots.shift())),
+      // The probes that wait for the page to draw its screen are not snapshots.
+      evaluate: vi
+        .fn()
+        .mockImplementation((fn: unknown) =>
+          Promise.resolve(fn === isRendered || fn === isSettled ? true : snapshots.shift()),
+        ),
     };
     const close = vi.fn().mockRejectedValue(new Error('already closed'));
     const loadPlaywright = () =>
@@ -611,13 +941,14 @@ describe('PlaywrightE2eRunner (simulated)', () => {
     delete process.env['DATABASE_URL'];
   });
 
-  it('keeps the Windows system variables the browser needs, when they are set', () => {
-    vi.stubEnv('SystemRoot', 'C:\\Windows');
-    vi.stubEnv('PATHEXT', '');
-    const env = childEnvironment('/w', runInput);
-    expect(env['SystemRoot']).toBe('C:\\Windows');
-    expect(env).not.toHaveProperty('PATHEXT');
-    vi.unstubAllEnvs();
+  it('runs the child as Node when this server runs on Electron (desktop app)', () => {
+    expect(childEnvironment('/w', runInput)).not.toHaveProperty('ELECTRON_RUN_AS_NODE');
+    Object.defineProperty(process.versions, 'electron', { value: '30.0.0', configurable: true });
+    try {
+      expect(childEnvironment('/w', runInput)['ELECTRON_RUN_AS_NODE']).toBe('1');
+    } finally {
+      delete (process.versions as Record<string, unknown>)['electron'];
+    }
   });
 
   it('knows the default browser cache per platform', () => {
@@ -677,4 +1008,82 @@ describe('PlaywrightE2eRunner (simulated)', () => {
       }),
     ).rejects.toThrow();
   }, 20_000);
+});
+
+describe('AgentE2eAuthor (hooks and workflow)', () => {
+  const hook = 'export default async function afterRun({ page }) {}';
+  const withInstructions = {
+    ...testCase,
+    beforeRunInstructions: 'Create the order first.',
+    afterRunInstructions: 'Delete the order.',
+  } as E2eTestCase;
+
+  it('gives the hook the instructions of the test case and its earlier attempt', async () => {
+    const { author: subject, complete } = author(hook);
+    await subject.writeHook({
+      creation,
+      test: withInstructions,
+      kind: 'afterRun',
+      snapshot: null,
+      previous: { script: 'old hook', problem: 'rejected' },
+    });
+    const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+    expect(prompt).toContain('"userInstructions": "Delete the order."');
+    expect(prompt).toContain('"previousAttempt": "old hook"');
+    expect(prompt).toContain('"problemToFix": "rejected"');
+  });
+
+  it('tells the script what both hooks already do', async () => {
+    const { author: subject, complete } = author("import { test } from '@playwright/test';");
+    await subject.writeScript({
+      creation,
+      test: testCase,
+      snapshot: null,
+      hooks: { beforeRun: 'prepare()', afterRun: 'cleanup()' },
+    });
+    const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+    expect(prompt).toContain('"beforeRunPreparesPreconditions": "prepare()"');
+    expect(prompt).toContain('"afterRunCleansUp": "cleanup()"');
+  });
+
+  it('shows the analysis what both hooks did', async () => {
+    const { author: subject, complete } = author('{"verdict":"test_issue","summary":"s"}');
+    await subject.analyze({
+      creation,
+      test: testCase,
+      script: 's',
+      error: 'e',
+      logs: 'l',
+      hooks: { beforeRun: 'prepare()', afterRun: 'cleanup()' },
+    });
+    const prompt = (complete.mock.calls[0]![0] as { prompt: string }).prompt;
+    expect(prompt).toContain('"beforeRun": "prepare()"');
+    expect(prompt).toContain('"afterRun": "cleanup()"');
+  });
+
+  it('runs the task through the agent when the workspace has a workflow', async () => {
+    const executeAgent = vi
+      .fn()
+      .mockResolvedValue({ result: '{"summary":"s","tests":[{"title":"t"}]}' });
+    const agents = {
+      getAgent: vi.fn().mockResolvedValue({ id: 'agent', instructions: 'x', model: null }),
+      getWorkflow: vi.fn().mockResolvedValue({ enabled: true, steps: [{ id: 's1' }] }),
+      executeAgent,
+    } as unknown as AgentService;
+    const subject = new AgentE2eAuthor({ agents });
+    const controller = new AbortController();
+    const plan = await subject.plan({ creation, snapshot: null, signal: controller.signal });
+    expect(plan.summary).toBe('s');
+    expect(executeAgent).toHaveBeenCalledWith(
+      'ws',
+      'agent',
+      expect.objectContaining({
+        prompt: expect.stringContaining('E2E task context:'),
+        includeKnowledge: false,
+        skipWorkflow: true,
+      }),
+      { requestId: 'e2e-agent-c', workspaceId: 'ws', ownerId: 'owner' },
+      controller.signal,
+    );
+  });
 });

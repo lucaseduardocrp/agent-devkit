@@ -4,8 +4,10 @@ import type { McpModule } from '../../core/registry.js';
 import { defineTool, json } from '../../core/tool.js';
 
 const category = z
-  .enum(['KNOWLEDGE', 'PROJECT_MANAGEMENT', 'LLM'])
-  .describe('KNOWLEDGE (wikis), PROJECT_MANAGEMENT (boards) or LLM (model providers).');
+  .enum(['KNOWLEDGE', 'PROJECT_MANAGEMENT', 'LLM', 'MESSAGING'])
+  .describe(
+    'KNOWLEDGE (wikis), PROJECT_MANAGEMENT (boards), LLM (model providers) or MESSAGING (chat bots such as Telegram).',
+  );
 const providerId = z
   .string()
   .trim()

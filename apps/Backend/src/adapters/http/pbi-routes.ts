@@ -76,6 +76,8 @@ const searchFields = z.object({
   externalId: z.string().trim().min(1).max(200).optional(),
   providerId: z.enum(['azure_devops', 'trello', 'github_projects', 'jira']).optional(),
   iterationPath: z.string().trim().min(1).max(500).optional(),
+  /** Text of the title, or the id the item has in its provider. */
+  q: z.string().trim().min(1).max(200).optional(),
   compact: z.enum(['true']).optional(),
   page: z.coerce.number().int().min(1).max(100000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
@@ -160,6 +162,7 @@ export function createPbiRouter(
                   kind: item.kind,
                   title: item.title,
                   status: item.status,
+                  type: typeof item.sourceData.type === 'string' ? item.sourceData.type : null,
                   iterationPath: item.sourceData.iterationPath ?? null,
                   links: item.links.map(({ providerId, externalId, externalUrl }) => ({
                     providerId,

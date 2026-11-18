@@ -9,6 +9,8 @@ import {
   remotePlanId,
   remoteSuiteId,
   reportingTarget,
+  savedCaseReference,
+  savedCaseSelection,
   runId,
   runPath,
   testId,
@@ -129,6 +131,45 @@ export const testManagementTools: readonly McpTool[] = [
         body: { externalCase },
       });
       return json({ test: guardTest(test) });
+    },
+  }),
+  defineTool({
+    name: 'e2e_link_saved_case',
+    title: 'Link E2E test to ADK test case',
+    description:
+      'Links an E2E test to a test case saved in ADK (Test Plans), or unlinks it with savedCase null. The test takes the case title, description and steps, and from then on every edit of the case (in Test Plans or testplans_update) updates the test. The run must be idle; rewrite the spec afterwards (e2e_get_script + e2e_update_script) so it follows the new steps. A case removed from its plan unlinks its tests.',
+    toolset: 'e2e',
+    access: 'write',
+    routes: ['PUT /e2e/tests/:id/saved-case'],
+    input: {
+      testId,
+      savedCase: savedCaseReference.nullable().describe('ADK case to link, or null to unlink.'),
+    },
+    run: async ({ testId: value, savedCase }, { api }) => {
+      const { test } = await api.request<{ test: TestDto }>({
+        method: 'PUT',
+        path: `${testPath(value)}/saved-case`,
+        body: { savedCase },
+      });
+      return json({ test: guardTest(test) });
+    },
+  }),
+  defineTool({
+    name: 'e2e_link_saved_cases',
+    openWorld: true,
+    title: 'Link ADK test cases to E2E run',
+    description:
+      'Links a whole ADK suite (with its child suites), a Test Plan or chosen cases to an idle E2E run: each case not yet linked in the run is added as a test without a spec (nothing is executed), kept in sync with the case. Cases imported from a platform adopt that platform as the run reporting target when the run has none. Write the specs with e2e_prepare + e2e_save_plan, or run it with e2e_run.',
+    toolset: 'e2e',
+    access: 'write',
+    routes: ['POST /e2e/creations/:id/saved-cases'],
+    input: { runId, ...savedCaseSelection },
+    run: async ({ runId: value, ...body }, { api }) => {
+      if (!body.suiteId && !body.planId) throw new Error('Provide a suiteId or a planId.');
+      const { result } = await api.request<{
+        result: { imported: number; skipped: number; creation: RunDto };
+      }>({ method: 'POST', path: `${runPath(value)}/saved-cases`, body });
+      return json({ result: { ...result, creation: guardRun(result.creation) } });
     },
   }),
   defineTool({

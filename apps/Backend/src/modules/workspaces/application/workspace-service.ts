@@ -18,7 +18,11 @@ import {
   type ModuleAccessMap,
   type WorkspacePermissionKey,
 } from '../domain/permissions.js';
-import type { UserWorkspaceMembership, WorkspaceRepository } from './workspace-repository.js';
+import type {
+  MemberSearch,
+  UserWorkspaceMembership,
+  WorkspaceRepository,
+} from './workspace-repository.js';
 
 export function slugify(text: string): string {
   const base = text
@@ -160,6 +164,50 @@ export class WorkspaceService {
   ): Promise<WorkspaceEntity> {
     await this.requirePermission(workspaceId, actorUserId, 'editWorkspace');
     return this.workspaceRepository.renameWorkspace(workspaceId, this.validateName(name));
+  }
+
+  /** The name of a workspace, for messages the system writes. Null when it does not exist. */
+  public async workspaceName(workspaceId: string): Promise<string | null> {
+    return (await this.workspaceRepository.findById(workspaceId))?.name ?? null;
+  }
+
+  /**
+   * The name and e-mail of a member, for the system to reach them (notifications). Null for
+   * someone who is not a member of the workspace. Not an API for people: it has no actor.
+   */
+  public async memberContact(
+    workspaceId: string,
+    userId: string,
+  ): Promise<{ readonly id: string; readonly name: string; readonly email: string } | null> {
+    const member = await this.workspaceRepository.findMember(workspaceId, userId);
+    if (!member) return null;
+    // Repositories that do not join the user (the in-memory one) leave it to the user records.
+    const user = member.user ?? (await this.authRepository.findById(userId));
+    return user ? { id: user.id, name: user.name, email: user.email } : null;
+  }
+
+  /**
+   * One page of the people of a workspace, by name or e-mail, for the notifications screen to
+   * show. Like memberContact it has no actor: the caller has already checked who may ask.
+   */
+  public async searchMemberContacts(
+    workspaceId: string,
+    query: MemberSearch,
+  ): Promise<{
+    readonly people: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly email: string;
+    }[];
+    readonly total: number;
+  }> {
+    const { members, total } = await this.workspaceRepository.searchMembers(workspaceId, query);
+    const people = [];
+    for (const member of members) {
+      const user = member.user ?? (await this.authRepository.findById(member.userId));
+      if (user) people.push({ id: user.id, name: user.name, email: user.email });
+    }
+    return { people, total };
   }
 
   public async listMembers(

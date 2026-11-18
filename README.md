@@ -8,15 +8,80 @@ ADK is a QA and product-delivery platform driven by AI assistants. It brings tog
 base, specifications, test plans, agents, design prototypes and E2E automation in shared
 workspaces, and exposes all of it to Claude, Codex and other assistants through an MCP server.
 
-## Quick start
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/agent-devkit)
+
+There are three ways to run ADK:
+
+- **[Desktop app](#desktop-app)**: download, install and open. Everything is inside the app, with
+  no Docker and no terminal.
+- **[Deploy on Railway](#deploy-on-railway)**: one click, hosted in your Railway account and
+  reachable from anywhere.
+- **[Run on your own computer](#run-on-your-own-computer)**: Docker and a setup wizard in your
+  browser, on your computer or your own server.
+
+## Desktop app
+
+Download the installer for your system from the
+[releases page](https://github.com/lucaseduardocrp/agent-devkit/releases) (look for the
+`desktop-v*` releases): `.exe` for Windows, `.dmg` for macOS, `.AppImage` or `.deb` for Linux. Open
+the app and create your account; there is nothing else to install or configure.
+
+The app carries its own PostgreSQL database, the API, the web app and the MCP server, and starts
+and stops them with its window. Everything listens on this computer only. Your data lives in the
+app's data folder (**ADK → Open data folder**); updating or uninstalling the app keeps it.
+
+- **Backups:** **ADK → Back up data…** saves everything to one `.adkbackup` file while ADK keeps
+  running. The file also carries the key that reads your saved integrations, so keep it private.
+  **ADK → Restore data…** replaces the data with a backup; the current data is saved first in the
+  `backups` folder and put back if the restore fails. A backup from an older version of the app
+  restores and is then brought up to date; one from a newer version asks you to update first.
+- **Coming from the Docker install:** with both on the same ADK version, export the data in the
+  ADK folder and restore `adk.sql` in the app, choosing the Docker install's `.env` when asked so
+  saved integrations stay readable:
+
+  ```bash
+  docker compose exec database pg_dump -U adk -d adk --data-only --column-inserts --rows-per-insert=100 --exclude-table-data=_prisma_migrations -f /tmp/adk.sql
+  docker compose cp database:/tmp/adk.sql adk.sql
+  ```
+
+- **Assistants:** **ADK → Copy MCP server address**, then add it to Claude Code, Codex, VS Code or
+  Cursor as in [Using ADK from an AI assistant](#using-adk-from-an-ai-assistant).
+- **E2E tests:** **ADK → Install E2E browser…** downloads Chromium (about 150 MB) once; tests of
+  `localhost` apps run on this computer.
+- **Updates:** the app checks the releases when it opens, downloads a newer version in the
+  background and asks to restart (on macOS this needs a signed build).
+- **Not included:** the Telegram bridge (its AI CLIs need a container) and the local test inbox;
+  use the Docker install if you need them. Installers are not code signed yet, so Windows
+  SmartScreen and macOS Gatekeeper ask for confirmation on the first launch.
+
+To build the installers yourself: `cd apps/Desktop && npm ci && npm run dist`. The code is
+documented in [apps/Desktop/README.md](apps/Desktop/README.md).
+
+## Deploy on Railway
+
+The button above creates a complete ADK in your Railway account: PostgreSQL, Redis, the API, the
+web app, the remote MCP server and the test worker (E2E, integration and load), with every secret
+generated and the services connected over Railway's private network. When the deploy finishes:
+
+1. Open the `Web` service's URL and create your account and first workspace.
+2. Connect your assistant to `https://<MCP service URL>/mcp` (claude.ai, Claude Code, Codex and
+   other MCP clients sign in through OAuth). The CLI is optional:
+   `npm install -g @agent-devkit/cli`, then `devkit login --api-url https://<API service URL>`.
+3. Optional: set `SMTP_URL` on the `API` service for password-recovery emails, and the Google or
+   GitHub OAuth variables for social sign-in.
+
+The services, variables and how the template is maintained are documented in
+[docs/deploy/railway.md](docs/deploy/railway.md).
+
+## Run on your own computer
 
 All you need is [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker
 Engine with Compose v2) and about 5 GB of free disk space. Nothing else is installed on your
 computer: the database, the API, the web app, the E2E worker, the MCP server and the test inbox
 all run in containers. No terminal is needed.
 
-1. **Download ADK**: `git clone https://github.com/lucaseduardocrp/agent-devkit.git`, or use
-   **Code → Download ZIP** on GitHub and extract it.
+1. **Download ADK**: `git clone https://github.com/lucaseduardocrp/agent-devkit.git`,
+   or use **Code → Download ZIP** on GitHub and extract it.
 2. **Double-click the launcher** in the ADK folder:
 
    | Windows   | macOS         | Linux                         |
@@ -26,7 +91,6 @@ all run in containers. No terminal is needed.
    If Docker Desktop is installed but closed, the launcher opens it and waits for it; if it is
    not installed, the launcher opens the download page. On macOS, a copy downloaded as a ZIP may
    need **right-click → Open** the first time.
-
 3. **Configure it in your browser.** The setup wizard opens by itself at `http://localhost:4000`.
    Secure keys are generated for you, so the defaults are enough: click **Use recommended
    settings**, then **Save and start ADK**. The page follows the startup and shows the link to
@@ -51,14 +115,14 @@ the services of the machine it runs on.
 
 ### Everyday commands
 
-| What                                   | Windows        | macOS / Linux      |
-| -------------------------------------- | -------------- | ------------------ |
-| Start ADK                              | `adk.cmd`      | `./adk.sh`         |
-| Change the configuration (wizard)      | `adk setup`    | `./adk.sh setup`   |
-| Stop ADK (your data is kept)           | `adk stop`     | `./adk.sh stop`    |
-| Follow the logs                        | `adk logs`     | `./adk.sh logs`    |
-| See the services and their health      | `adk status`   | `./adk.sh status`  |
-| Update to the latest version           | `adk update`   | `./adk.sh update`  |
+| What                              | Windows      | macOS / Linux     |
+| --------------------------------- | ------------ | ----------------- |
+| Start ADK                         | `adk.cmd`    | `./adk.sh`        |
+| Change the configuration (wizard) | `adk setup`  | `./adk.sh setup`  |
+| Stop ADK (your data is kept)      | `adk stop`   | `./adk.sh stop`   |
+| Follow the logs                   | `adk logs`   | `./adk.sh logs`   |
+| See the services and their health | `adk status` | `./adk.sh status` |
+| Update to the latest version      | `adk update` | `./adk.sh update` |
 
 The launchers are thin wrappers around Docker Compose. Without them: run
 `docker compose -f setup/compose.yaml up`, finish the wizard at `http://localhost:4000`, then
@@ -66,15 +130,15 @@ The launchers are thin wrappers around Docker Compose. Without them: run
 
 ### What runs
 
-| Service    | Address                      | Notes                                                   |
-| ---------- | ---------------------------- | ------------------------------------------------------- |
-| Web app    | `http://localhost:8080`      | Always on                                               |
-| API        | `http://localhost:3000`      | Always on; applies database migrations when it starts   |
-| PostgreSQL | internal only                | Always on; data lives in the `agent-devkit_database-data` volume |
-| Redis      | internal only                | Always on; read cache, keeps nothing on disk            |
-| E2E worker | internal only                | On by default: Playwright and Chromium (about 2 GB); also runs integration and load tests |
-| MCP server | `http://localhost:3333/mcp`  | On by default: MCP for Claude Code, Codex, VS Code and other assistants |
-| Mailpit    | `http://localhost:8025`      | On by default: local inbox that catches password-recovery emails |
+| Service    | Address                     | Notes                                                            |
+| ---------- | --------------------------- | ---------------------------------------------------------------- |
+| Web app    | `http://localhost:8080`     | Always on                                                        |
+| API        | `http://localhost:3000`     | Always on; applies database migrations when it starts            |
+| PostgreSQL | internal only               | Always on; data lives in the `agent-devkit_database-data` volume |
+| Redis      | internal only               | Always on; read cache, keeps nothing on disk                     |
+| E2E worker | internal only               | On by default: Playwright and Chromium (about 2 GB); also runs integration and load tests |
+| MCP server | `http://localhost:3333/mcp` | On by default: MCP for Claude Code, Codex, VS Code and other assistants |
+| Mailpit    | `http://localhost:8025`     | On by default: local inbox that catches password-recovery emails |
 
 The recommended settings turn on every service; the wizard can turn the E2E worker, the MCP
 server and Mailpit off.
@@ -85,23 +149,90 @@ copy of that file: its `INTEGRATION_ENCRYPTION_KEY` is needed to read saved inte
 The [self-hosting guide](docs/self-hosting.md) covers HTTPS, backups, upgrades and
 troubleshooting.
 
-## Deploy on Railway
+## Features
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/agent-devkit)
+- **Brain** — workspace knowledge base with document relations, search and grounded answers.
+- **Specs** — specification drafting, templates and section-by-section editing.
+- **Test Plans** — test plan and suite generation, CSV export and publishing to test-management tools.
+- **PBI board** — pull and push backlog items from Azure DevOps and other providers.
+- **Agents and Issues** — agent hierarchy, issue inbox, runs, budgets and cost tracking.
+- **Design** — design systems and prototype projects.
+- **E2E Automation** — Playwright runs on ADK workers or on your own computer, with videos,
+  screenshots, per-test Before Run and After Run setup/cleanup and test-management reporting.
+- **Integration Tests** — API request collections with assertions and chained variables, generated
+  by AI from test plans, Brain, specs and PBIs or imported from Postman, Insomnia and OpenAPI;
+  exported to Postman, Insomnia and Bruno.
+- **Overload Tests** — load, stress, spike, soak and breakpoint tests with latency percentiles,
+  throughput, error rate and thresholds; exported to k6.
+- **Telegram**: talk to the workspace's agents from a paired chat and get notified when test runs
+  finish; works on a local install without a public address ([guide](docs/telegram.md)).
+- **Bridge**: a container with AI CLIs (Claude Code, Codex, Gemini, or your own) driven from
+  Telegram, with resumable conversations and scheduled 24/7 tasks ([guide](docs/bridge.md)).
+- **Release notes**, **audit history**, **workspaces**, **permission groups** and **integrations**.
+- **ADK Hub** — community and official skills and plugins for your assistant, installed with
+  `devkit skills install <name>` and `devkit plugins install <name>`. The catalog lives in its own
+  repository, [agent-devkit-hub](https://github.com/lucaseduardocrp/agent-devkit-hub).
 
-The button creates a complete ADK in your Railway account: PostgreSQL, Redis, the API, the web
-app, the remote MCP server and the test worker (E2E, integration and load), with every secret
-generated and the services connected over Railway's private network. When the deploy finishes:
+## Repository layout
 
-1. Open the `Web` service's URL and create your account and first workspace.
-2. Connect your assistant to `https://<MCP service URL>/mcp` (claude.ai, Claude Code, Codex and
-   other MCP clients sign in through OAuth). The CLI is optional:
-   `npm install -g @agent-devkit/cli`, then `devkit login --api-url https://<API service URL>`.
-3. Optional: set `SMTP_URL` on the `API` service for password-recovery emails, and the Google or
-   GitHub OAuth variables for social sign-in.
+| Path                                  | Contents                                                                  |
+| ------------------------------------- | ------------------------------------------------------------------------- |
+| [adk.cmd](adk.cmd), [adk.sh](adk.sh)  | Launchers: start, stop and configure the self-hosted stack                |
+| [compose.yaml](compose.yaml)          | The self-hosted stack (Docker Compose)                                    |
+| [setup](setup)                        | The setup wizard that writes `.env` (dependency-free Node server and page) |
+| [apps/Backend](apps/Backend)          | REST API and E2E worker (Node, Express 5, Prisma, PostgreSQL, Playwright) |
+| [apps/Frontend](apps/Frontend)        | Web app (React 19, Vite, Tailwind), served by nginx in production         |
+| [apps/Mcp](apps/Mcp)                  | `@agent-devkit/mcp`: MCP server for stdio and Streamable HTTP             |
+| [apps/Cli](apps/Cli)                  | `@agent-devkit/cli`: the `devkit` command, local E2E runner and tunnels    |
+| [apps/Desktop](apps/Desktop)          | Electron app: database, API, web app and MCP server in one installer       |
+| [infrastructure](infrastructure)      | Development Docker Compose stacks and runtime/environment documentation   |
+| [docs](docs)                          | ADRs, deployment and operations runbooks, QA reports, templates and design references |
+| [.agent](.agent)                      | Agent roles, skills and the task workflow                                 |
 
-The services, variables and how the template is maintained are documented in
-[docs/deploy/railway.md](docs/deploy/railway.md).
+## Requirements
+
+- Node.js 24 (the CLI alone supports Node.js 20 or newer)
+- PostgreSQL 17, or Docker to run it locally
+
+## Running from source
+
+To use ADK, [Run on your own computer](#run-on-your-own-computer) is simpler. The steps below
+are for working on the code.
+
+### Backend
+
+```bash
+cd apps/Backend
+cp .env.example .env        # then set DATABASE_URL and INTEGRATION_ENCRYPTION_KEY (openssl rand -hex 32)
+npm install
+npm start                   # builds, applies Prisma migrations and starts the API on :3000
+```
+
+The `.env.example` file documents every setting, including SMTP, OAuth (Google and GitHub),
+the integration encryption key and E2E storage (Cloudflare R2, Postgres or a local folder).
+Install the Playwright browser once with `npm run e2e:install-browsers`.
+
+### Frontend
+
+```bash
+cd apps/Frontend
+cp .env.example .env.local  # VITE_API_BASE_URL points to the API
+npm install
+npm run dev                 # http://localhost:5173
+```
+
+### Docker
+
+```bash
+# Local PostgreSQL + API (create the two secret files described in infrastructure/README.md first)
+docker compose -f infrastructure/docker/compose.yml up --build
+
+# API + E2E worker using apps/Backend/.env (no local database)
+docker compose -f infrastructure/docker/compose.dev.yml up -d --build
+```
+
+See [infrastructure/README.md](infrastructure/README.md) for the environment matrix, migrations,
+backups and the E2E worker setup.
 
 ## Using ADK from an AI assistant
 
@@ -123,72 +254,17 @@ in a browser on your desktop and opens tunnels to share local apps with a remote
 
 ```bash
 npm install -g @agent-devkit/cli
-devkit login --api-url http://localhost:3000   # or the address of your ADK API
+devkit login --api-url https://<your-adk-api>
 ```
 
 `devkit` registers the MCP server with Claude Code, Claude Desktop, Codex, Cursor, Gemini CLI,
 VS Code and other MCP clients. In host mode no LLM API key is needed: your assistant does the
 reasoning and ADK supplies context and stores the results. The CLI also runs E2E tests in your
-local browser (`devkit runner`) and opens tunnels to local apps (`devkit bridge`). The CLI is
-documented in [apps/Cli/README.md](apps/Cli/README.md) and the MCP server (clients, remote mode,
-tools) in [apps/Mcp/README.md](apps/Mcp/README.md).
-
-## Features
-
-- **Brain**: workspace knowledge base with document relations, search and grounded answers.
-- **Specs**: specification drafting, templates and section-by-section editing.
-- **Test Plans**: test plan and suite generation, CSV export and publishing to test-management tools.
-- **PBI board**: pull and push backlog items from Azure DevOps and other providers.
-- **Agents and Issues**: agent hierarchy, issue inbox, runs, budgets and cost tracking.
-- **Design**: design systems and prototype projects.
-- **E2E Automation**: Playwright runs on ADK workers or on your own computer, with videos,
-  screenshots, per-test Before Run and After Run setup/cleanup and test-management reporting.
-- **Integration Tests**: API request collections with assertions and chained variables, generated
-  by AI from test plans, Brain, specs and PBIs or imported from Postman, Insomnia and OpenAPI;
-  exported to Postman, Insomnia and Bruno.
-- **Overload Tests**: load, stress, spike, soak and breakpoint tests with latency percentiles,
-  throughput, error rate and thresholds; exported to k6.
-- **Release notes**, **audit history**, **workspaces**, **permission groups** and **integrations**.
-- **ADK Hub** — community and official skills and plugins for your assistant, installed with
-  `devkit skills install <name>` and `devkit plugins install <name>`. The catalog lives in its own
-  repository, [agent-devkit-hub](https://github.com/lucaseduardocrp/agent-devkit-hub).
-
-## Repository layout
-
-| Path                                   | Contents                                                                   |
-| -------------------------------------- | -------------------------------------------------------------------------- |
-| [adk.cmd](adk.cmd), [adk.sh](adk.sh)   | Launchers: start, stop and configure the self-hosted stack                  |
-| [compose.yaml](compose.yaml)           | The self-hosted stack (Docker Compose)                                     |
-| [setup](setup)                         | The setup wizard that writes `.env` (dependency-free Node server and page) |
-| [apps/Backend](apps/Backend)           | REST API and E2E worker (Node, Express 5, Prisma, PostgreSQL, Playwright)  |
-| [apps/Frontend](apps/Frontend)         | Web app (React 19, Vite, Tailwind), served by nginx in production          |
-| [apps/Mcp](apps/Mcp)                   | The MCP server (stdio, HTTP + OAuth), deployed to Railway and embedded in the CLI |
-| [apps/Cli](apps/Cli)                   | `@agent-devkit/cli`: the `devkit` command (sign-in, local E2E runner, tunnels) |
-| [infrastructure](infrastructure)       | Development Compose stack and runtime/environment documentation           |
-| [docs](docs)                           | Self-hosting and deployment guides, ADRs and templates                     |
-| [.agent](.agent)                       | Agent roles, skills and the task workflow                                  |
+local browser (`devkit runner`) and opens tunnels to local apps (`devkit bridge`). Full details
+are in [apps/Cli/README.md](apps/Cli/README.md); the server setup is in
+[apps/Mcp/README.md](apps/Mcp/README.md).
 
 ## Development
-
-Requirements: Node.js 24 (the CLI alone supports Node.js 20 or newer) and PostgreSQL 17, or Docker
-to run it.
-
-```bash
-# API on http://localhost:3000
-cd apps/Backend
-cp .env.example .env        # set DATABASE_URL and INTEGRATION_ENCRYPTION_KEY (openssl rand -hex 32)
-npm install
-npm start                   # builds, applies Prisma migrations and starts the API
-
-# Web app on http://localhost:5173 (proxies API calls to :3000)
-cd apps/Frontend
-npm install
-npm run dev
-```
-
-The `.env.example` files document every setting. Install the Playwright browser once with
-`npm run e2e:install-browsers` in `apps/Backend`. To run the API and E2E worker in containers
-against your own database, see [infrastructure/README.md](infrastructure/README.md).
 
 Each app has the same verification script, which runs formatting, lint, type checks, the i18n
 check (Backend and Frontend) and tests with coverage:
@@ -197,21 +273,17 @@ check (Backend and Frontend) and tests with coverage:
 npm run verify
 ```
 
-| Command                      | Where          | Purpose                              |
-| ---------------------------- | -------------- | ------------------------------------ |
-| `npm test`                   | every app      | Unit tests (Vitest)                  |
-| `npm test`                   | `setup`        | Setup wizard tests (`node --test`)   |
-| `npm run test:integration`   | `apps/Backend` | Integration tests against PostgreSQL |
+| Command                    | Where           | Purpose                              |
+| -------------------------- | --------------- | ------------------------------------ |
+| `npm test`                 | every app       | Unit tests (Vitest)                  |
+| `npm test`                 | `setup`         | Setup wizard tests (`node --test`)   |
+| `npm run test:integration` | `apps/Backend`  | Integration tests against PostgreSQL |
 | `npm run prisma:migrate:dev` | `apps/Backend` | Create and apply a new migration     |
-| `npm run parity`             | `apps/Mcp`     | Check MCP tools against API routes   |
+| `npm run parity`           | `apps/Mcp`      | Check MCP tools against API routes   |
 
-[CI](.github/workflows/ci.yml) runs `verify` and `build` for every app, the setup wizard tests
-and the backend integration tests (PostgreSQL) on every pull request, with 100% coverage required
-in all of them. CodeQL, dependency review and OpenSSF Scorecard watch security; Dependabot keeps
-dependencies up to date. [self-hosting-ci.yml](.github/workflows/self-hosting-ci.yml) starts the
-Compose stack, and [cli-release.yml](.github/workflows/cli-release.yml) publishes
-`@agent-devkit/cli`, with the MCP server embedded, to npm. The rules for `main` live in
-[.github/rulesets](.github/rulesets) and are applied with `scripts/github-settings.sh`.
+CI runs `verify` and `build` for the MCP server and CLI on every pull request that touches them,
+[self-hosting-ci.yml](.github/workflows/self-hosting-ci.yml) checks the setup wizard, the
+launchers and the Compose stack, and [cli-release.yml](.github/workflows/cli-release.yml) publishes `@agent-devkit/cli` to npm.
 
 ## Contributing
 

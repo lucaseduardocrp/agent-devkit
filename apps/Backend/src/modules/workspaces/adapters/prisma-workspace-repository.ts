@@ -6,6 +6,8 @@ import type {
   UpdateWorkspaceMemberInput,
   UserWorkspaceMembership,
   WorkspaceRepository,
+  MemberPage,
+  MemberSearch,
 } from '../application/workspace-repository.js';
 import { normalizeModuleAccess } from '../domain/permissions.js';
 import type {
@@ -111,6 +113,14 @@ interface WorkspaceDelegate {
   delete(arguments_: { where: { id: string } }): Promise<RawWorkspaceRecord>;
 }
 
+/** Members whose user's name or e-mail contains a text, whatever its case. */
+interface MemberUserFilter {
+  OR: readonly (
+    | { name: { contains: string; mode: 'insensitive' } }
+    | { email: { contains: string; mode: 'insensitive' } }
+  )[];
+}
+
 interface WorkspaceMemberDelegate {
   create(arguments_: {
     data: {
@@ -132,9 +142,12 @@ interface WorkspaceMemberDelegate {
     where: {
       workspaceId?: string;
       userId?: string;
+      user?: MemberUserFilter;
     };
     include?: { user?: boolean; workspace?: boolean };
-    orderBy?: Record<string, 'asc' | 'desc'>;
+    orderBy?: Record<string, 'asc' | 'desc'> | readonly Record<string, 'asc' | 'desc'>[];
+    skip?: number;
+    take?: number;
   }): Promise<readonly RawMemberWithUser[]>;
   update(arguments_: {
     where: { id: string };
@@ -145,7 +158,9 @@ interface WorkspaceMemberDelegate {
     include?: { user?: boolean; workspace?: boolean };
   }): Promise<RawMemberWithUser>;
   delete(arguments_: { where: { id: string } }): Promise<{ id: string }>;
-  count(arguments_: { where: { workspaceId: string; role?: WorkspaceRole } }): Promise<number>;
+  count(arguments_: {
+    where: { workspaceId: string; role?: WorkspaceRole; user?: MemberUserFilter };
+  }): Promise<number>;
 }
 
 export interface PrismaWorkspacesClient {
@@ -302,6 +317,35 @@ export class PrismaWorkspaceRepository implements WorkspaceRepository {
       orderBy: { createdAt: 'asc' },
     });
     return list.map((m) => this.mapMember(m));
+  }
+
+  public async searchMembers(workspaceId: string, query: MemberSearch): Promise<MemberPage> {
+    const text = query.search.trim();
+    const where = {
+      workspaceId,
+      ...(text
+        ? {
+            user: {
+              OR: [
+                { name: { contains: text, mode: 'insensitive' as const } },
+                { email: { contains: text, mode: 'insensitive' as const } },
+              ],
+            },
+          }
+        : {}),
+    };
+    const [list, total] = await Promise.all([
+      this.client.workspaceMemberRecord.findMany({
+        where,
+        include: { user: true },
+        // The id breaks ties, so a page never repeats or skips someone.
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        skip: query.offset,
+        take: query.limit,
+      }),
+      this.client.workspaceMemberRecord.count({ where }),
+    ]);
+    return { members: list.map((m) => this.mapMember(m)), total };
   }
 
   public async updateMember(

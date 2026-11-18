@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { parseArgs } from 'node:util';
@@ -34,8 +34,11 @@ import {
   loadRunnerIdentity,
   runnerHome,
 } from '../e2e/local-runner/playwright-setup.js';
-import { runLocally } from '../e2e/local-runner/run-command.js';
+import { DEFAULT_PARALLEL, runLocally } from '../e2e/local-runner/run-command.js';
 import { ApiTestRunnerAgent, formatApiRunnerEvent } from '../apitests/runner-agent.js';
+import { Git } from '../development/git.js';
+import { runStreaming } from '../development/process.js';
+import { DevelopmentRunner, formatDevelopmentEvent } from '../development/runner.js';
 import { runAgentsCommand } from '../hub/agents-command.js';
 import { runHubCommand } from '../hub/command.js';
 import { HubInstaller } from '../hub/install.js';
@@ -57,11 +60,17 @@ Usage:
                                    calls (APIs, SSO) with Cloudflare Tunnel until Ctrl+C
   devkit bridge --origin https://your-adk.vercel.app
                                    Let the ADK web app control local tunnels
-  devkit runner [--run ID] [--base-url URL]
+  devkit runner [--run ID] [--base-url URL] [--parallel N]
                                    Run the browser of your local E2E runs on this computer
-                                   (outbound HTTPS only, no tunnel) until Ctrl+C
+                                   (outbound HTTPS only, no tunnel) until Ctrl+C. The tests
+                                   of a run use up to N browsers at once (default 3).
+  devkit develop [--repo PATH] [--session ID] [--autonomy safe|auto] [--worktrees DIR] [--any-repo]
+                                   Execute your Development sessions here: one git worktree and
+                                   one coding agent (claude, codex or gemini) per session, with
+                                   progress and the diff sent to ADK for review, until Ctrl+C.
+                                   --autonomy auto also lets the agent run commands.
   devkit e2e setup                 Download Chromium ahead of time (otherwise done on first use)
-  devkit e2e run [ID] [--test TC001] [--base-url URL] [--scripts DIR] [--set-local]
+  devkit e2e run [ID] [--test TC001] [--base-url URL] [--scripts DIR] [--set-local] [--parallel N]
                                    Start a run, execute it here and send the results,
                                    videos and screenshots to ADK. Defaults come from
                                    ./adk-e2e.json ({ "run", "baseUrl", "scripts" }).
@@ -116,6 +125,15 @@ async function ask(question: string, hidden = false): Promise<string> {
   return answer.trim();
 }
 
+/** `--parallel N`: how many browsers run tests at once; 3 when not given. */
+function parallelOption(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_PARALLEL;
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > 16)
+    throw new Error('Use --parallel with a whole number from 1 to 16.');
+  return count;
+}
+
 async function main(): Promise<void> {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -129,10 +147,16 @@ async function main(): Promise<void> {
       scope: { type: 'string' },
       dir: { type: 'string' },
       run: { type: 'string' },
+      repo: { type: 'string' },
+      session: { type: 'string' },
+      autonomy: { type: 'string' },
+      worktrees: { type: 'string' },
+      'any-repo': { type: 'boolean' },
       test: { type: 'string' },
       'base-url': { type: 'string' },
       scripts: { type: 'string' },
       'set-local': { type: 'boolean' },
+      parallel: { type: 'string' },
       config: { type: 'string' },
       'hub-url': { type: 'string' },
       category: { type: 'string' },
@@ -215,9 +239,53 @@ async function main(): Promise<void> {
         onEvent: (event) => say(formatApiRunnerEvent(event)),
       });
       await Promise.all([
-        agent.serve({ ...(values.run ? { creationId: values.run } : {}), signal }),
+        agent.serve({
+          ...(values.run ? { creationId: values.run } : {}),
+          parallel: parallelOption(values.parallel),
+          signal,
+        }),
         values.run ? Promise.resolve() : apiTests.serve({ signal }),
       ]);
+      return;
+    }
+    case 'develop': {
+      const autonomy = values.autonomy ?? 'safe';
+      if (autonomy !== 'safe' && autonomy !== 'auto')
+        throw new Error('Use --autonomy safe or --autonomy auto.');
+      const version = packageVersion();
+      const { api, workspaceId, userName } = await signedInApi(config, `devkit/${version}`);
+      const identity = await loadRunnerIdentity(runnerHome(), version);
+      const git = new Git();
+      const repoRoot = resolve(await git.root(resolve(values.repo ?? '.')));
+      const worktreesDir = resolve(
+        values.worktrees ?? join(dirname(repoRoot), '.adk-worktrees', basename(repoRoot)),
+      );
+      const controller = new AbortController();
+      process.on('SIGINT', () => {
+        if (controller.signal.aborted) process.exit(130);
+        say('[devkit] Stopping… press Ctrl+C again to exit now.');
+        controller.abort();
+      });
+      say(
+        `[devkit] Runner "${identity.name}" signed in${userName ? ` as ${userName}` : ''} at ${config.apiUrl}${workspaceId ? ` (workspace ${workspaceId})` : ''}.`,
+      );
+      say(
+        `[devkit] Waiting for your Development sessions of ${repoRoot} (autonomy: ${autonomy}). Worktrees go to ${worktreesDir}. Keep this terminal open; press Ctrl+C to stop.`,
+      );
+      await new DevelopmentRunner({
+        api,
+        runnerName: identity.name,
+        repoRoot,
+        remoteUrl: await git.remote(repoRoot),
+        worktreesDir,
+        git,
+        runAgent: (invocation, options) =>
+          runStreaming(invocation.command, invocation.args, { ...options, env: invocation.env }),
+        autonomy,
+        ...(values.session ? { sessionId: values.session } : {}),
+        ...(values['any-repo'] ? { anyRepository: true } : {}),
+        onEvent: (event) => say(formatDevelopmentEvent(event)),
+      }).serve({ signal: controller.signal, ...(values.session ? { once: true } : {}) });
       return;
     }
     case 'e2e': {
@@ -242,6 +310,7 @@ async function main(): Promise<void> {
           ...(values.test ? { test: values.test } : {}),
           ...(scripts ? { scriptsDir: scripts } : {}),
           ...(values['set-local'] ? { setLocal: true } : {}),
+          ...(values.parallel ? { parallel: parallelOption(values.parallel) } : {}),
           signal,
         },
         say,

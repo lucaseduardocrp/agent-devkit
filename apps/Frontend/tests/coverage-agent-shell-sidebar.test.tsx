@@ -10,6 +10,10 @@ describe('Sidebar work and core navigation', () => {
     ['inbox', 'sidebar-inbox-button'],
     ['design', 'sidebar-design-button'],
     ['releaseNotes', 'sidebar-release-notes-button'],
+    ['developmentArtifacts', 'sidebar-development-artifacts-button'],
+    ['developmentReview', 'sidebar-development-review-button'],
+    ['developmentCode', 'sidebar-development-code-button'],
+    ['developmentPipeline', 'sidebar-development-pipeline-button'],
   ] as const)('marks %s as the current page and selects it on click', (tab, testId) => {
     const onSelect = vi.fn();
     const view = render(<Sidebar activeTab={tab as NavTab} onSelectTab={onSelect} />);

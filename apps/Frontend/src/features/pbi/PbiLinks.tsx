@@ -11,79 +11,6 @@ import {
   type PbiProviderId,
   type PbiRelation,
 } from './pbi-types.js';
-
-const copy = {
-  'pt-BR': {
-    links: 'Links',
-    addLink: 'Adicionar link',
-    existingItem: 'Item existente',
-    newItem: 'Novo item',
-    addingFrom: 'Você está adicionando um link a partir de:',
-    linkType: 'Tipo de link',
-    itemsToLink: 'Itens a vincular',
-    search: 'Buscar itens por ID ou título',
-    noResults: 'Nenhum item encontrado.',
-    selected: 'selecionado(s)',
-    removeSelection: 'Remover seleção',
-    title: 'Título',
-    cancel: 'Cancelar',
-    save: 'Adicionar link',
-    create: 'Criar e vincular',
-    remove: 'Remover link',
-    loading: 'Carregando links...',
-    loadError: 'Não foi possível carregar os links.',
-    retry: 'Tentar novamente',
-    empty: 'Nenhum link neste item.',
-    readOnlySource: 'Lido de {provider}',
-    notImported: 'não importado',
-    types: {
-      parent: 'Pai',
-      child: 'Filho',
-      related: 'Relacionado',
-      predecessor: 'Predecessor',
-      successor: 'Sucessor',
-      duplicate: 'Duplicado',
-      duplicate_of: 'Duplicata de',
-      tests: 'Testa',
-      tested_by: 'Testado por',
-    } satisfies Record<PbiLinkType, string>,
-  },
-  'en-US': {
-    links: 'Links',
-    addLink: 'Add link',
-    existingItem: 'Existing item',
-    newItem: 'New item',
-    addingFrom: 'You are adding a link from:',
-    linkType: 'Link type',
-    itemsToLink: 'Items to link',
-    search: 'Search items by ID or title',
-    noResults: 'No items found.',
-    selected: 'selected',
-    removeSelection: 'Remove selection',
-    title: 'Title',
-    cancel: 'Cancel',
-    save: 'Add link',
-    create: 'Create and link',
-    remove: 'Remove link',
-    loading: 'Loading links...',
-    loadError: 'Could not load links.',
-    retry: 'Try again',
-    empty: 'No links on this item.',
-    readOnlySource: 'Read from {provider}',
-    notImported: 'not imported',
-    types: {
-      parent: 'Parent',
-      child: 'Child',
-      related: 'Related',
-      predecessor: 'Predecessor',
-      successor: 'Successor',
-      duplicate: 'Duplicate',
-      duplicate_of: 'Duplicate of',
-      tests: 'Tests',
-      tested_by: 'Tested by',
-    } satisfies Record<PbiLinkType, string>,
-  },
-} as const;
 const providerNames: Record<string, string> = {
   azure_devops: 'Azure DevOps',
   trello: 'Trello',
@@ -116,8 +43,8 @@ type Mode = 'existing' | 'new' | null;
  * create a new linked item. Parent/child links change the hierarchy; the others are N:N.
  */
 export function PbiLinks({ apiClient, item, items, isReadOnly, onOpenItem, onChanged }: Props) {
-  const { locale } = useI18n();
-  const c = copy[locale];
+  const { messages } = useI18n();
+  const c = messages.pbiLinks;
   const [relations, setRelations] = useState<PbiRelation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

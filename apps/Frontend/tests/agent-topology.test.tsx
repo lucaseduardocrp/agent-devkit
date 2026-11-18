@@ -92,8 +92,13 @@ describe('AgentTopology', () => {
 
     fireEvent.click(view.getByRole('button', { name: 'BDD Agent: Rodando' }));
     expect(view.getByTestId('agent-run-flow')).toHaveTextContent('1 execuções ativas');
-    fireEvent.click(view.getByRole('button', { name: 'Atualizar' }));
-    expect(onRefresh).toHaveBeenCalledOnce();
+    // The map follows the runs by itself: there is no manual refresh, and the legend explains
+    // the dashed lines of runs that are waiting.
+    expect(view.queryByRole('button', { name: 'Atualizar' })).not.toBeInTheDocument();
+    expect(view.getByLabelText('Legenda do mapa')).toHaveTextContent('Execução ativa');
+    expect(view.getByLabelText('Legenda do mapa')).toHaveTextContent(
+      'Execução na fila ou aguardando você',
+    );
   });
 
   it('excludes finished runs and shows queued status', () => {

@@ -8,18 +8,24 @@ import type { E2eStepText } from './e2e-types.js';
 export function E2eSection({
   icon,
   title,
+  action,
   children,
 }: {
   readonly icon: string;
   readonly title: string;
+  /** Control at the end of the heading, e.g. an edit button. */
+  readonly action?: ReactNode;
   readonly children: ReactNode;
 }) {
   return (
     <section className="flex min-w-0 flex-col gap-2">
-      <h3 className="flex items-center gap-2 border-b border-[var(--border)] pb-1.5 text-sm font-semibold text-[var(--text-primary)]">
-        <i className={cn('ti text-[var(--text-accent)]', icon)} aria-hidden="true" />
-        {title}
-      </h3>
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] pb-1.5">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+          <i className={cn('ti text-[var(--text-accent)]', icon)} aria-hidden="true" />
+          {title}
+        </h3>
+        {action}
+      </div>
       {children}
     </section>
   );

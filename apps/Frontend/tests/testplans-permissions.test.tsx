@@ -130,7 +130,6 @@ describe('Test plan permissions and per-case history', () => {
   it('leaves only reading and history to members who can view test plans', async () => {
     const view = renderView(client(), 'view', true);
     expect(view.queryByTestId('btn-new-test-plan')).not.toBeInTheDocument();
-    expect(view.queryByTestId('tab-create-test-plan')).not.toBeInTheDocument();
     expect(view.queryByTestId(`btn-delete-plan-${savedPlan.id}`)).not.toBeInTheDocument();
     await openPlan(view);
     expect(view.queryByTestId('btn-add-test-case')).not.toBeInTheDocument();

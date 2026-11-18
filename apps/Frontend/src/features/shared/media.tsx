@@ -10,7 +10,7 @@ import {
   type RefObject,
 } from 'react';
 import type { ApiClient } from '../../lib/api-client.js';
-import { useI18n } from '../../lib/i18n/index.js';
+import { formatMessage, getMessages, useI18n } from '../../lib/i18n/index.js';
 import type { Attachment, AttachmentScope } from './attachment-types.js';
 import { ATTACHMENT_LIMITS, fileKind } from './attachment-types.js';
 
@@ -62,7 +62,8 @@ function draftIds(value: unknown): string[] {
 /** Keeps a local file as a draft attachment of the item being edited. */
 export function createDraft(scope: AttachmentScope, file: File): Attachment {
   const kind = fileKind(file);
-  if (!kind) throw new Error(`${file.name}: unsupported file type`);
+  if (!kind)
+    throw new Error(formatMessage(getMessages().media.unsupportedFile, { name: file.name }));
   if (file.size > ATTACHMENT_LIMITS[kind])
     throw new Error(`${file.name}: max ${ATTACHMENT_LIMITS[kind] / 1024 / 1024} MB`);
   const id = crypto.randomUUID();
@@ -98,14 +99,11 @@ async function commitDrafts<T>(
   value: T,
 ): Promise<{ value: T; uploaded: Attachment[] }> {
   const uploaded: Attachment[] = [];
-  const ids = draftIds(value);
-  // Nothing to upload; also keeps values JSON cannot represent (e.g. undefined) intact.
-  if (!ids.length) return { value, uploaded };
-  let text = JSON.stringify(value);
+  let text = JSON.stringify(value) ?? '';
   try {
-    for (const id of ids) {
+    for (const id of draftIds(value)) {
       const draft = drafts.get(id);
-      if (!draft) throw new Error('A pasted file is no longer available; add it again.');
+      if (!draft) throw new Error(getMessages().media.draftUnavailable);
       const stored = await apiClient.uploadAttachment(scope, draft.file);
       uploaded.push(stored);
       text = text.replaceAll(`${DRAFT_PATH}${id}`, stored.url).replaceAll(id, stored.id);
@@ -162,7 +160,9 @@ export function resolveMedia(apiClient: ApiClient, src: string): Promise<string>
   if (!cache) objectUrls.set(apiClient, (cache = new Map<string, Promise<string>>()));
   if (src.startsWith(DRAFT_PATH)) {
     const draft = drafts.get(src.slice(DRAFT_PATH.length));
-    return draft ? Promise.resolve(draft.url) : Promise.reject(new Error('Draft discarded'));
+    return draft
+      ? Promise.resolve(draft.url)
+      : Promise.reject(new Error(getMessages().media.draftDiscarded));
   }
   let pending = cache.get(src);
   if (!pending) {
@@ -280,7 +280,7 @@ export function resolveInlineImages(root: HTMLElement, apiClient: ApiClient): vo
           image.src = url;
         },
         () => {
-          image.alt ||= original.slice(original.lastIndexOf('/') + 1);
+          image.alt ||= original.split('/').pop()!;
           image.classList.add('opacity-40');
         },
       );
@@ -365,7 +365,7 @@ export function useMarkdownImageInput(
       );
       setState({ error: null });
     } catch (reason) {
-      setState({ error: (reason as Error).message });
+      setState({ error: reason instanceof Error ? reason.message : String(reason) });
     }
   };
   return {
@@ -430,7 +430,7 @@ export function useRichTextImageInput(
       place(draftImages(scope, files), at ?? currentRange(root));
       setState({ error: null });
     } catch (reason) {
-      setState({ error: (reason as Error).message });
+      setState({ error: reason instanceof Error ? reason.message : String(reason) });
     }
   };
   return {
@@ -457,18 +457,12 @@ export function useRichTextImageInput(
 
 /** Hint and errors of images pasted or dropped in a text field. */
 export function ImageInputStatus({ state }: { state: ImageInputState }) {
-  const { locale } = useI18n();
+  const c = useI18n().messages.media;
   if (state.error)
     return (
       <span role="alert" className="block text-xs text-red-300">
         {state.error}
       </span>
     );
-  return (
-    <span className="block text-xs text-[var(--text-muted)]">
-      {locale === 'pt-BR'
-        ? 'Cole ou arraste imagens para colocá-las no texto.'
-        : 'Paste or drop images to place them in the text.'}
-    </span>
-  );
+  return <span className="block text-xs text-[var(--text-muted)]">{c.pasteImagesHint}</span>;
 }

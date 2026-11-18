@@ -1,10 +1,12 @@
+import { getMessages } from '../../../lib/i18n/index.js';
+
 // Reads files picked in the settings (certificates, proto files, data files) in the browser.
 
 function read(file: Blob, as: 'text' | 'dataUrl'): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+    reader.onerror = () => reject(reader.error ?? new Error(getMessages().apiTests.fileReadError));
     if (as === 'text') reader.readAsText(file);
     else reader.readAsDataURL(file);
   });

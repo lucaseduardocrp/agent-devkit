@@ -2,6 +2,7 @@ import { fireEvent, render, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestPlansView } from '../src/features/testplans/TestPlansView.js';
 import { ApiClient } from '../src/lib/api-client.js';
+import { pickOption } from './helpers/pick-option.js';
 import { I18nProvider } from '../src/lib/i18n/index.js';
 import {
   type UserWorkspaceMembership,
@@ -13,12 +14,8 @@ import {
  * `<details>` nor fires `toggle`. This opens the disclosure the way a browser would and lets React
  * observe the `toggle` event the component listens for.
  */
-function openExportConfiguration(summary: HTMLElement): void {
-  fireEvent.click(summary);
-  const details = summary.closest('details');
-  if (!details) throw new Error('The export configuration disclosure was not found.');
-  details.open = true;
-  fireEvent(details, new Event('toggle'));
+function openExportConfiguration(button: HTMLElement): void {
+  fireEvent.click(button);
 }
 
 describe('TestPlansView', () => {
@@ -60,84 +57,90 @@ describe('TestPlansView', () => {
     );
   });
 
-  it('loads, reviews, edits, saves, and exports a persisted Test Plan', async () => {
-    const client = new ApiClient();
-    const history = vi
-      .spyOn(client, 'getAuditHistory')
-      .mockResolvedValue({ items: [], page: 1, total: 0, totalPages: 0 });
-    const saved = {
-      id: 'plan-1',
-      workspaceId: 'ws-1',
-      title: 'Saved checkout',
-      plans: [{ title: 'Pay', description: 'Complete payment', steps: [] }],
-      createdAt: '2026-01-01',
-      updatedAt: '2026-01-02',
-    };
-    vi.spyOn(client, 'getSavedTestPlans').mockResolvedValue({
-      items: [saved, { ...saved, id: 'plan-2', title: 'Another plan', plans: [] }],
-      page: 1,
-      pageSize: 8,
-      total: 2,
-      totalPages: 1,
-    });
-    const update = vi
-      .spyOn(client, 'updateSavedTestPlan')
-      .mockImplementation(async (_id, input) => ({ ...saved, ...input }));
-    vi.spyOn(client, 'getAzureDevOpsProjectMembers').mockResolvedValue({
-      configured: false,
-      organization: null,
-      project: null,
-      members: [],
-    });
-    vi.spyOn(client, 'getWorkspaceMembers').mockResolvedValue([]);
-    vi.spyOn(client, 'getAgents').mockResolvedValue([]);
-    vi.spyOn(client, 'generateTestPlanCsv').mockResolvedValue('csv');
-    const workspace = [
-      {
-        workspace: {
-          id: 'ws-1',
-          name: 'Workspace',
-          slug: 'workspace',
-          ownerId: 'u1',
-          createdAt: '',
+  it(
+    'loads, reviews, edits, saves, and exports a persisted Test Plan',
+    { timeout: 30000 },
+    async () => {
+      const client = new ApiClient();
+      const history = vi
+        .spyOn(client, 'getAuditHistory')
+        .mockResolvedValue({ items: [], page: 1, total: 0, totalPages: 0 });
+      const saved = {
+        id: 'plan-1',
+        workspaceId: 'ws-1',
+        title: 'Saved checkout',
+        plans: [{ title: 'Pay', description: 'Complete payment', steps: [] }],
+        createdAt: '2026-01-01',
+        updatedAt: '2026-01-02',
+      };
+      vi.spyOn(client, 'getSavedTestPlans').mockResolvedValue({
+        items: [saved, { ...saved, id: 'plan-2', title: 'Another plan', plans: [] }],
+        page: 1,
+        pageSize: 8,
+        total: 2,
+        totalPages: 1,
+      });
+      const update = vi
+        .spyOn(client, 'updateSavedTestPlan')
+        .mockImplementation(async (_id, input) => ({ ...saved, ...input }));
+      vi.spyOn(client, 'getAzureDevOpsProjectMembers').mockResolvedValue({
+        configured: false,
+        organization: null,
+        project: null,
+        members: [],
+      });
+      vi.spyOn(client, 'getWorkspaceMembers').mockResolvedValue([]);
+      vi.spyOn(client, 'getAgents').mockResolvedValue([]);
+      vi.spyOn(client, 'generateTestPlanCsv').mockResolvedValue('csv');
+      const workspace = [
+        {
+          workspace: {
+            id: 'ws-1',
+            name: 'Workspace',
+            slug: 'workspace',
+            ownerId: 'u1',
+            createdAt: '',
+          },
+          member: {
+            id: 'm1',
+            workspaceId: 'ws-1',
+            userId: 'u1',
+            role: 'ADMIN' as const,
+            permissions: {},
+            createdAt: '',
+          },
         },
-        member: {
-          id: 'm1',
-          workspaceId: 'ws-1',
-          userId: 'u1',
-          role: 'ADMIN' as const,
-          permissions: {},
-          createdAt: '',
-        },
-      },
-    ];
-    const view = render(
-      <TestPlansView apiClient={client} workspaces={workspace} activeWorkspaceId="ws-1" />,
-    );
-    fireEvent.click(view.getByTestId('tab-saved-test-plans'));
-    fireEvent.click(await view.findByRole('button', { name: 'Abrir Test Plan Saved checkout' }));
-    expect(view.queryByRole('button', { name: 'Histórico' })).toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Ações' }));
-    fireEvent.click(view.getByRole('button', { name: 'Histórico' }));
-    await waitFor(() =>
-      expect(history).toHaveBeenCalledWith('testplan', 1, expect.any(AbortSignal), 'plan-1'),
-    );
-    // Each case opens in its own window, with its description and steps.
-    expect(view.queryByText('Complete payment')).toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Abrir caso de teste CT-01' }));
-    expect(within(view.getByTestId('test-case-modal')).getByText('Complete payment')).toBeTruthy();
-    fireEvent.click(view.getByRole('button', { name: 'Fechar modal' }));
-    fireEvent.change(view.getByLabelText('Título do Test Plan'), { target: { value: '' } });
-    fireEvent.click(view.getByRole('button', { name: 'Salvar alterações' }));
-    await waitFor(() => expect(update).toHaveBeenCalled());
-    fireEvent.click(view.getByRole('button', { name: 'A\u00e7\u00f5es' }));
-    fireEvent.click(view.getByRole('button', { name: 'Exportar CSV' }));
-    expect(client.generateTestPlanCsv).not.toHaveBeenCalled();
-    expect(await view.findByRole('alert')).toHaveTextContent('pelo menos um passo');
-    fireEvent.click(view.getByTestId('btn-back-to-saved'));
-    fireEvent.click(view.getByRole('button', { name: 'Abrir Test Plan Another plan' }));
-    expect(view.getByText(/Nenhum caso de teste neste plano/)).toBeInTheDocument();
-  });
+      ];
+      const view = render(
+        <TestPlansView apiClient={client} workspaces={workspace} activeWorkspaceId="ws-1" />,
+      );
+      fireEvent.click(view.getByTestId('btn-view-saved-plans'));
+      fireEvent.click(await view.findByRole('button', { name: 'Abrir Test Plan Saved checkout' }));
+      expect(view.queryByRole('button', { name: 'Histórico' })).toBeNull();
+      fireEvent.click(view.getByRole('button', { name: 'Ações' }));
+      fireEvent.click(view.getByRole('button', { name: 'Histórico' }));
+      await waitFor(() =>
+        expect(history).toHaveBeenCalledWith('testplan', 1, expect.any(AbortSignal), 'plan-1'),
+      );
+      // Each case opens in its own window, with its description and steps.
+      expect(view.queryByText('Complete payment')).toBeNull();
+      fireEvent.click(view.getByRole('button', { name: 'Abrir caso de teste CT-01' }));
+      expect(
+        within(view.getByTestId('test-case-modal')).getByText('Complete payment'),
+      ).toBeTruthy();
+      fireEvent.click(view.getByRole('button', { name: 'Fechar modal' }));
+      fireEvent.change(view.getByLabelText('Título do Test Plan'), { target: { value: '' } });
+      fireEvent.click(view.getByRole('button', { name: 'Salvar alterações' }));
+      await waitFor(() => expect(update).toHaveBeenCalled());
+      fireEvent.click(view.getByRole('button', { name: 'A\u00e7\u00f5es' }));
+      fireEvent.click(view.getByRole('button', { name: 'Exportar CSV' }));
+      expect(client.generateTestPlanCsv).not.toHaveBeenCalled();
+      expect(await view.findByRole('alert')).toHaveTextContent('pelo menos um passo');
+      fireEvent.click(view.getByTestId('btn-back-to-saved'));
+      fireEvent.click(view.getByRole('button', { name: 'Abrir Test Plan Another plan' }));
+      expect(view.getByText(/Nenhum caso de teste neste plano/)).toBeInTheDocument();
+    },
+  );
 
   it('deletes a persisted plan and reloads the current page', async () => {
     const client = new ApiClient();
@@ -304,8 +307,11 @@ describe('TestPlansView', () => {
     fireEvent.change(criteriaInput, { target: { value: 'Criteria test' } });
     fireEvent.click(getByRole('button', { name: 'Gerar testes' }));
 
-    expect(storyInput.value).toBe('User story test');
-    expect(criteriaInput.value).toBe('Criteria test');
+    // The generation goes on in the background and the form is free for the next one.
+    expect(storyInput.value).toBe('');
+    expect(criteriaInput.value).toBe('');
+    fireEvent.change(storyInput, { target: { value: 'User story test' } });
+    fireEvent.change(criteriaInput, { target: { value: 'Criteria test' } });
 
     fireEvent.click(getByRole('button', { name: 'Limpar campos' }));
 
@@ -851,12 +857,12 @@ describe('TestPlansView', () => {
       expect(client.getAgents).toHaveBeenCalled();
     });
 
-    const agentSelect = getByLabelText(
-      'Selecionar agente de IA para geração de testes',
-    ) as HTMLSelectElement;
+    const agentSelect = getByRole('combobox', {
+      name: 'Selecionar agente de IA para geração de testes',
+    });
     expect(agentSelect).toBeInTheDocument();
-    fireEvent.change(agentSelect, { target: { value: 'agent-qa-custom' } });
-    expect(agentSelect.value).toBe('agent-qa-custom');
+    await pickOption(agentSelect, 'QA Master (QA)');
+    expect((agentSelect as HTMLInputElement).value).toBe('QA Master (QA)');
 
     fireEvent.change(getByLabelText('User story / requisito'), {
       target: { value: 'User story with agent' },
@@ -870,5 +876,131 @@ describe('TestPlansView', () => {
         agentId: 'agent-qa-custom',
       }),
     );
+  });
+
+  describe('context picked from PBIs, issues and the Brain', () => {
+    const workspaces: readonly UserWorkspaceMembership[] = [
+      {
+        workspace: { id: 'ws-1', name: 'Work 1', slug: 'w1', ownerId: 'u1', createdAt: '' },
+        member: {
+          id: 'm1',
+          workspaceId: 'ws-1',
+          userId: 'u1',
+          role: 'ADMIN',
+          permissions: {},
+          createdAt: '',
+        },
+      },
+    ];
+    const saved = {
+      id: 'saved-ctx',
+      workspaceId: 'ws-1',
+      title: 'Plan',
+      plans: [{ title: 'Plan', description: 'Desc', steps: [] }],
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    };
+
+    function contextClient() {
+      const client = new ApiClient();
+      vi.spyOn(client, 'getAgents').mockResolvedValue([]);
+      vi.spyOn(client, 'getWorkspaceMembers').mockResolvedValue([]);
+      vi.spyOn(client, 'searchPbiItems').mockResolvedValue({
+        items: [
+          {
+            id: 'p1',
+            title: 'Exportação detalhada',
+            status: 'Active',
+            links: [{ providerId: 'azure_devops', externalId: '48326', externalUrl: null }],
+          },
+          { id: 'p2', title: 'Outro item', status: 'New', links: [] },
+        ],
+        total: 2,
+      } as never);
+      vi.spyOn(client, 'searchIssues').mockResolvedValue({
+        issues: [{ id: 'i1', number: 7, title: 'Download falha', status: 'todo' }],
+        total: 1,
+      } as never);
+      vi.spyOn(client, 'searchKnowledgeDocuments').mockResolvedValue({
+        documents: [{ id: 'src:page', title: 'Regras de exportação', provider: 'azure_devops' }],
+        total: 1,
+      } as never);
+      const generate = vi
+        .spyOn(client, 'generateTestPlan')
+        .mockResolvedValue({ plans: saved.plans, csv: 'csv', savedPlan: saved });
+      return { client, generate };
+    }
+
+    const pick = async (view: ReturnType<typeof render>, list: string, option: RegExp) => {
+      fireEvent.focus(await view.findByRole('combobox', { name: list }));
+      fireEvent.click(await view.findByRole('option', { name: option }));
+    };
+
+    it('sends the chosen PBIs, issues and Brain documents when generating', async () => {
+      const { client, generate } = contextClient();
+      const view = render(
+        <TestPlansView apiClient={client} workspaces={workspaces} activeWorkspaceId="ws-1" />,
+      );
+
+      // The three lists are searchable multiple choices that start empty.
+      expect(
+        await view.findByText(/Escolha PBIs, issues e documentos do Brain/),
+      ).toBeInTheDocument();
+      await pick(view, 'PBIs', /Exportação detalhada/);
+      expect(view.getByRole('option', { name: /#48326 · Active/ })).toBeInTheDocument();
+      // More than one can be chosen from the same list.
+      fireEvent.click(view.getByRole('option', { name: /Outro item/ }));
+      await pick(view, 'Issues', /#7 · Download falha/);
+      await pick(view, 'Documentos do Brain', /Regras de exportação/);
+
+      fireEvent.change(view.getByLabelText('User story / requisito'), {
+        target: { value: 'Exportar documentos com detalhes' },
+      });
+      fireEvent.click(view.getByRole('button', { name: 'Gerar testes' }));
+
+      await view.findByText('1 casos de teste gerados');
+      expect(generate).toHaveBeenCalledWith(
+        'Exportar documentos com detalhes',
+        expect.objectContaining({
+          context: [
+            { kind: 'pbi', id: 'p1' },
+            { kind: 'pbi', id: 'p2' },
+            { kind: 'issue', id: 'i1' },
+            { kind: 'brain', id: 'src:page' },
+          ],
+        }),
+      );
+    });
+
+    it('sends no context when nothing was chosen', async () => {
+      const { client, generate } = contextClient();
+      const view = render(
+        <TestPlansView apiClient={client} workspaces={workspaces} activeWorkspaceId="ws-1" />,
+      );
+      fireEvent.change(await view.findByLabelText('User story / requisito'), {
+        target: { value: 'Exportar documentos' },
+      });
+      fireEvent.click(view.getByRole('button', { name: 'Gerar testes' }));
+
+      await view.findByText('1 casos de teste gerados');
+      expect(generate.mock.calls[0]?.[1]).not.toHaveProperty('context');
+    });
+
+    it('forgets the choices when the fields are cleared', async () => {
+      const { client } = contextClient();
+      const view = render(
+        <TestPlansView apiClient={client} workspaces={workspaces} activeWorkspaceId="ws-1" />,
+      );
+      await pick(view, 'Issues', /#7 · Download falha/);
+      expect(view.getByRole('button', { name: 'Remover #7 · Download falha' })).toBeInTheDocument();
+
+      fireEvent.click(view.getByRole('button', { name: 'Limpar campos' }));
+      expect(view.queryByRole('button', { name: /^Remover/ })).toBeNull();
+    });
+
+    it('offers no context lists without a connection to the API', () => {
+      const view = render(<TestPlansView />);
+      expect(view.queryByRole('combobox', { name: 'PBIs' })).toBeNull();
+    });
   });
 });

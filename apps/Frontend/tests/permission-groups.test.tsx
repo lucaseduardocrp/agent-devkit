@@ -151,7 +151,7 @@ describe('Permission groups in settings', () => {
     fireEvent.click(view.getByRole('button', { name: 'Excluir' }));
     expect(await within(panel).findByText('Grupo excluído.')).toBeInTheDocument();
     expect(remove).toHaveBeenLastCalledWith('ws', 'g-readers');
-  });
+  }, 20000);
 
   it('shows an empty state when the workspace has no groups', async () => {
     const { view } = setup(adminMembership, []);

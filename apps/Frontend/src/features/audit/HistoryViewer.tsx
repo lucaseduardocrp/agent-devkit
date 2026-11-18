@@ -175,6 +175,7 @@ export function HistoryViewer({
     assigneeAgentId: t('audit.fieldAgent'),
     adkAssigneeUserId: t('audit.fieldAssignee'),
     assigneeUserId: t('audit.fieldAssignee'),
+    proofreaderUserId: t('audit.fieldProofreader'),
     adkCardType: t('audit.fieldType'),
     links: t('audit.fieldLinks'),
     number: t('audit.fieldNumber'),

@@ -47,9 +47,11 @@ import type {
   Issue,
   IssueChanges,
   IssueComment,
+  InboxEvent,
   InboxItem,
   DashboardSummary,
   AgentRun,
+  AgentRunEvent,
   CostRate,
   CostSummary,
 } from '../features/issues/issue-types.js';
@@ -57,6 +59,7 @@ import type {
   PbiFields,
   PbiComment,
   PbiItem,
+  PbiOption,
   PbiProvider,
   PbiProviderId,
   PbiPullResult,
@@ -72,12 +75,32 @@ import type {
   ReleaseNoteFields,
 } from '../features/release-notes/release-note-types.js';
 import type {
+  ChangeAction,
+  ChangeChanges,
+  ChangeFields,
+  DevChange,
+  DevSession,
+  BranchOption,
+  DevelopmentStreamEvent,
+  Pipeline,
+  RepositoryOption,
+  SessionFields,
+} from '../features/development/development-types.js';
+import type {
+  E2eActionMap,
   E2eCreationDetail,
   E2eCreationInput,
+  E2eEnvironment,
+  E2eEnvironmentInput,
+  E2eExploration,
+  E2eExplorationCode,
+  E2eSourceState,
+  E2eSourceDocumentation,
   E2eCreationSummary,
   E2eExecutionTarget,
   E2eLocalRunner,
   E2eTestDetail,
+  E2eResultDecision,
   E2eBranch,
   E2ePullResult,
   E2eRepository,
@@ -89,12 +112,23 @@ import type {
   E2eImportCasesInput,
   E2eImportResult,
   E2eReportingInput,
+  E2eSavedCaseLink,
   ExternalCaseRef,
   ExternalTestCase,
   RemoteContainer,
   TestManagementProvider,
   TestManagementProviderId,
 } from '../features/e2e/e2e-types.js';
+import { createSseParser } from './sse.js';
+import type {
+  NotificationChannelDto,
+  NotificationContactDto,
+  NotificationPeoplePage,
+  NotificationDeliveryResultDto,
+  NotificationEventDto,
+  NotificationRuleDto,
+  NotificationRuleInput,
+} from '../features/notifications/notification-types.js';
 import { ptBR } from './i18n/locales/pt-BR.js';
 import { enUS } from './i18n/locales/en-US.js';
 import type {
@@ -108,6 +142,8 @@ import type {
 export interface ServerCapabilities {
   /** A local install: runs on the ADK workers reach http://localhost on the user's computer. */
   readonly workersReachLocalhost: boolean;
+  /** Where a new E2E run executes unless the form says otherwise. */
+  readonly defaultExecutionTarget: 'remote' | 'local';
 }
 
 export interface HealthResponse {
@@ -211,7 +247,99 @@ export interface KnowledgeRelationDto {
   readonly createdAt: string;
 }
 
-export type IntegrationCategory = 'KNOWLEDGE' | 'LLM' | 'PROJECT_MANAGEMENT' | 'CI_CD';
+export type IntegrationCategory =
+  'KNOWLEDGE' | 'LLM' | 'PROJECT_MANAGEMENT' | 'MESSAGING' | 'CI_CD';
+
+/** A provider CLI the server can run in place of an API key. */
+export interface LlmCliStatus {
+  readonly id: 'claude' | 'codex' | 'gemini';
+  readonly label: string;
+  readonly command: string;
+  readonly installed: boolean;
+  readonly version?: string;
+  /** Bridge only: where the user gets the token this CLI accepts. */
+  readonly hint?: string;
+}
+
+/** An account of a provider CLI on the machine of the API, and how to sign it in. */
+export interface LlmCliProfile {
+  readonly name: string;
+  /** Run once in a terminal to sign this account in. */
+  readonly loginCommand: string;
+}
+
+export interface LlmCliAvailability {
+  /** `false` when the server has no way to run a provider CLI (see ADK_LLM_CLI and the Bridge). */
+  readonly enabled: boolean;
+  /**
+   * Where the CLI runs: `local` is the machine of the API and uses its login; `bridge` is the
+   * Bridge container, which signs in with a token the workspace provides.
+   */
+  readonly transport?: 'local' | 'bridge';
+  /** Set when the Bridge could not be asked. */
+  readonly error?: string;
+  /** Whether the ADK's own tools (MCP) can be offered to the CLI: the server has ADK_MCP_URL. */
+  readonly mcp?: boolean;
+  /** By integration provider id (claude, openai, gemini). Missing for providers without a CLI. */
+  readonly providers: Readonly<Record<string, LlmCliStatus | undefined>>;
+}
+
+/** A test case as the "Fix with AI" chat reads and rewrites it. */
+export interface E2eCaseDraft {
+  readonly title: string;
+  readonly description: string;
+  readonly steps: readonly { readonly action: string; readonly expectedResult: string }[];
+}
+
+export interface E2eCaseChatMessage {
+  readonly role: 'user' | 'assistant';
+  readonly content: string;
+}
+
+export interface E2eCaseTurn {
+  /** The conversation so far; the last message is the user's. */
+  readonly messages: readonly E2eCaseChatMessage[];
+  /** The case as it is open in the editor now. */
+  readonly testCase: E2eCaseDraft;
+  readonly imageIds?: readonly string[];
+}
+
+export interface E2eCaseRevision {
+  readonly reply: string;
+  /** The case rewritten to reflect what the user asked; null when it stays as it is. */
+  readonly testCase: E2eCaseDraft | null;
+}
+
+export interface AgentChatTurn {
+  readonly role: 'user' | 'assistant';
+  readonly content: string;
+}
+
+export interface AgentChatRequest {
+  readonly prompt: string;
+  readonly history?: readonly AgentChatTurn[];
+  readonly useKnowledge?: boolean;
+  readonly llmProvider?: string;
+}
+
+export interface AgentChatStart {
+  readonly provider: string;
+  readonly agent: { readonly id: string; readonly name: string; readonly role: string };
+}
+
+export interface AgentChatDone {
+  readonly result: string;
+  readonly provider: string;
+  readonly model?: string;
+  readonly usage?: { readonly inputTokens: number; readonly outputTokens: number };
+}
+
+export interface AgentChatHandlers {
+  readonly onStart?: (start: AgentChatStart) => void;
+  readonly onDelta: (text: string) => void;
+  readonly onDone: (done: AgentChatDone) => void;
+  readonly onError: (error: Error) => void;
+}
 
 export interface UserIntegrationDto {
   readonly id: string;
@@ -227,6 +355,31 @@ export interface UserIntegrationDto {
 export interface ConnectivityProbeDto {
   readonly ok: boolean;
   readonly message: string;
+}
+
+/** A Telegram chat paired with the workspace's bot. */
+export interface TelegramChatDto {
+  readonly id: string;
+  readonly chatId: string;
+  readonly userId: string;
+  readonly displayName: string;
+  readonly agentId: string | null;
+  readonly notifications: boolean;
+  readonly createdAt: string;
+}
+
+export interface TelegramBotStatusDto {
+  readonly running: boolean;
+  readonly mode: 'polling' | 'webhook' | null;
+  readonly botUsername: string | null;
+  readonly error: string | null;
+}
+
+export interface TelegramPairingCodeDto {
+  readonly code: string;
+  readonly expiresAt: string;
+  readonly botUsername: string;
+  readonly deepLink: string;
 }
 
 export interface AzureDevOpsMemberDto {
@@ -381,6 +534,8 @@ export interface GenerateTestPlanOptions {
   readonly sourceType?: 'manual' | 'brain' | 'spec' | 'pbi';
   readonly sourceId?: string;
   readonly suiteId?: string | null;
+  /** PBIs, issues and Brain documents picked as context; only the kind and the id travel. */
+  readonly context?: readonly { readonly kind: 'pbi' | 'issue' | 'brain'; readonly id: string }[];
   readonly signal?: AbortSignal;
 }
 
@@ -460,10 +615,12 @@ const AGENT_WORKFLOW_TOOLSETS = new Set([
   'design',
   'e2e',
   'releasenotes',
+  'development',
   'integrationtests',
   'loadtests',
   'audit',
   'workspaces',
+  'notifications',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -679,6 +836,219 @@ export class ApiClient {
     return (await this.issueRequest<{ issues: Issue[] }>('/issues', { signal })).issues;
   }
 
+  /** One page of the issues whose title or number has the text, for a select that scrolls. */
+  public async searchIssues(
+    { q, page, pageSize }: { q: string; page: number; pageSize: number },
+    signal?: AbortSignal,
+  ): Promise<{ issues: readonly Issue[]; total: number }> {
+    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (q.trim()) query.set('q', q.trim());
+    return this.issueRequest(`/issues?${query}`, { signal });
+  }
+  /** One page of the backlog items whose title or provider id has the text. */
+  public async searchPbiItems(
+    { q, page, pageSize }: { q: string; page: number; pageSize: number },
+    signal?: AbortSignal,
+  ): Promise<{ items: readonly PbiOption[]; total: number }> {
+    const query = new URLSearchParams({
+      compact: 'true',
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    if (q.trim()) query.set('q', q.trim());
+    return this.issueRequest(`/pbi?${query}`, { signal });
+  }
+
+  private developmentRequest<T>(
+    path: string,
+    method = 'GET',
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.issueRequest<T>(`/development${path}`, {
+      method,
+      signal,
+      ...(body === undefined
+        ? {}
+        : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    });
+  }
+  private async developmentDelete(path: string): Promise<void> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/development${path}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) return this.handleErrorResponse(response);
+  }
+  public async getDevelopmentChanges(signal?: AbortSignal): Promise<DevChange[]> {
+    return (
+      await this.developmentRequest<{ changes: DevChange[] }>('/changes', 'GET', undefined, signal)
+    ).changes;
+  }
+  public async createDevelopmentChange(fields: ChangeFields): Promise<DevChange> {
+    return (await this.developmentRequest<{ change: DevChange }>('/changes', 'POST', fields))
+      .change;
+  }
+  public async updateDevelopmentChange(id: string, changes: ChangeChanges): Promise<DevChange> {
+    return (
+      await this.developmentRequest<{ change: DevChange }>(
+        `/changes/${encodeURIComponent(id)}`,
+        'PUT',
+        changes,
+      )
+    ).change;
+  }
+  /** Moves a change through its lifecycle: propose, approve, reject, reopen or archive. */
+  public async transitionDevelopmentChange(id: string, action: ChangeAction): Promise<DevChange> {
+    return (
+      await this.developmentRequest<{ change: DevChange }>(
+        `/changes/${encodeURIComponent(id)}/transition`,
+        'POST',
+        { action },
+      )
+    ).change;
+  }
+  public deleteDevelopmentChange(id: string): Promise<void> {
+    return this.developmentDelete(`/changes/${encodeURIComponent(id)}`);
+  }
+  public async getDevelopmentPipeline(signal?: AbortSignal): Promise<Pipeline> {
+    return (
+      await this.developmentRequest<{ stages: Pipeline }>('/pipeline', 'GET', undefined, signal)
+    ).stages;
+  }
+  public async getDevelopmentChange(id: string): Promise<DevChange> {
+    return (
+      await this.developmentRequest<{ change: DevChange }>(`/changes/${encodeURIComponent(id)}`)
+    ).change;
+  }
+  public async getDevelopmentSession(id: string): Promise<DevSession> {
+    return (
+      await this.developmentRequest<{ session: DevSession }>(`/sessions/${encodeURIComponent(id)}`)
+    ).session;
+  }
+  /**
+   * Follows the changes and sessions of Development as they move (server-sent events). Resolves
+   * when the server closes the stream and rejects when it cannot be opened; `signal` stops it.
+   */
+  public async streamDevelopmentEvents(
+    handlers: {
+      readonly onReady: () => void;
+      readonly onRun: (event: DevelopmentStreamEvent) => void;
+    },
+    signal: AbortSignal,
+  ): Promise<void> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/development/stream`, {
+      signal,
+      headers: { accept: 'text/event-stream' },
+    });
+    if (!response.ok) return this.handleErrorResponse(response);
+    if (!response.body) throw new Error(this.message('networkError'));
+    const decoder = new TextDecoder();
+    const parse = createSseParser(({ event, data }) => {
+      if (event === 'ready') handlers.onReady();
+      if (event !== 'development') return;
+      try {
+        handlers.onRun(JSON.parse(data) as DevelopmentStreamEvent);
+      } catch {
+        // A malformed event is skipped; the next reload corrects the screen.
+      }
+    });
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      parse(decoder.decode(value, { stream: true }));
+    }
+  }
+  public async getDevelopmentSessions(signal?: AbortSignal): Promise<DevSession[]> {
+    return (
+      await this.developmentRequest<{ sessions: DevSession[] }>(
+        '/sessions',
+        'GET',
+        undefined,
+        signal,
+      )
+    ).sessions;
+  }
+  /** The repositories of every connected Git provider (GitHub, Azure DevOps), joined. */
+  public async getDevelopmentRepositories(signal?: AbortSignal): Promise<RepositoryOption[]> {
+    return (
+      await this.developmentRequest<{ repositories: RepositoryOption[] }>(
+        '/repositories',
+        'GET',
+        undefined,
+        signal,
+      )
+    ).repositories;
+  }
+  public async getDevelopmentBranches(
+    provider: RepositoryOption['provider'],
+    repositoryId: string,
+    signal?: AbortSignal,
+  ): Promise<BranchOption[]> {
+    return (
+      await this.developmentRequest<{ branches: BranchOption[] }>(
+        `/repositories/branches?provider=${provider}&repositoryId=${encodeURIComponent(repositoryId)}`,
+        'GET',
+        undefined,
+        signal,
+      )
+    ).branches;
+  }
+  public async createDevelopmentSession(fields: SessionFields): Promise<DevSession> {
+    return (await this.developmentRequest<{ session: DevSession }>('/sessions', 'POST', fields))
+      .session;
+  }
+  /** A person's decision about a session: stop it, or queue it again after a failure. */
+  public async changeDevelopmentSession(
+    id: string,
+    action: 'cancel' | 'retry',
+  ): Promise<DevSession> {
+    return (
+      await this.developmentRequest<{ session: DevSession }>(
+        `/sessions/${encodeURIComponent(id)}/${action}`,
+        'POST',
+        {},
+      )
+    ).session;
+  }
+  public async reviewDevelopmentSession(
+    id: string,
+    verdict: 'approve' | 'request_changes',
+    note?: string,
+  ): Promise<DevSession> {
+    return (
+      await this.developmentRequest<{ session: DevSession }>(
+        `/sessions/${encodeURIComponent(id)}/review`,
+        'POST',
+        { verdict, ...(note ? { note } : {}) },
+      )
+    ).session;
+  }
+  public async addDevelopmentComment(id: string, body: string, path?: string): Promise<DevSession> {
+    return (
+      await this.developmentRequest<{ session: DevSession }>(
+        `/sessions/${encodeURIComponent(id)}/comments`,
+        'POST',
+        { body, ...(path ? { path } : {}) },
+      )
+    ).session;
+  }
+  public async resolveDevelopmentComment(
+    id: string,
+    commentId: string,
+    resolved: boolean,
+  ): Promise<DevSession> {
+    return (
+      await this.developmentRequest<{ session: DevSession }>(
+        `/sessions/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}`,
+        'PUT',
+        { resolved },
+      )
+    ).session;
+  }
+  public deleteDevelopmentSession(id: string): Promise<void> {
+    return this.developmentDelete(`/sessions/${encodeURIComponent(id)}`);
+  }
   public async getReleaseNotes(signal?: AbortSignal): Promise<ReleaseNote[]> {
     return (await this.issueRequest<{ releaseNotes: ReleaseNote[] }>('/release-notes', { signal }))
       .releaseNotes;
@@ -1117,6 +1487,143 @@ export class ApiClient {
     const query = issueId ? `?issueId=${encodeURIComponent(issueId)}` : '';
     return (await this.issueRequest<{ runs: AgentRun[] }>(`/runs${query}`)).runs;
   }
+  /**
+   * Follows the runs of the workspace as they change (server-sent events). Resolves when the server
+   * closes the stream and rejects when it cannot be opened; `signal` stops it. It uses fetch, not
+   * EventSource, because the session token and the workspace travel in headers.
+   */
+  public async streamRunEvents(
+    handlers: { readonly onReady: () => void; readonly onRun: (run: AgentRunEvent) => void },
+    signal: AbortSignal,
+  ): Promise<void> {
+    return this.followEvents('/runs/stream', 'run', handlers, signal);
+  }
+  /**
+   * Follows what can change the inbox of the user (server-sent events): each event names the issue
+   * concerned. The client reads the inbox again; the stream never carries another user's data.
+   */
+  public async streamInboxEvents(
+    handlers: { readonly onReady: () => void; readonly onRun: (event: InboxEvent) => void },
+    signal: AbortSignal,
+  ): Promise<void> {
+    return this.followEvents('/inbox/stream', 'inbox', handlers, signal);
+  }
+  /** Reads a server-sent stream of the issues API: `ready` once open, then the named events. */
+  private async followEvents<Event>(
+    path: string,
+    name: string,
+    handlers: { readonly onReady: () => void; readonly onRun: (event: Event) => void },
+    signal: AbortSignal,
+  ): Promise<void> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}${path}`, {
+      signal,
+      headers: { accept: 'text/event-stream' },
+    });
+    if (!response.ok) return this.handleErrorResponse(response);
+    if (!response.body) throw new Error(this.message('networkError'));
+    const decoder = new TextDecoder();
+    const parse = createSseParser(({ event, data }) => {
+      if (event === 'ready') handlers.onReady();
+      if (event !== name) return;
+      try {
+        handlers.onRun(JSON.parse(data) as Event);
+      } catch {
+        // A malformed event is skipped; the next snapshot corrects what it was about.
+      }
+    });
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      parse(decoder.decode(value, { stream: true }));
+    }
+  }
+  public async getNotificationChannels(
+    signal?: AbortSignal,
+  ): Promise<readonly NotificationChannelDto[]> {
+    return (
+      await this.issueRequest<{ channels: NotificationChannelDto[] }>('/notifications/channels', {
+        signal,
+      })
+    ).channels;
+  }
+  public async getNotificationEvents(
+    signal?: AbortSignal,
+  ): Promise<readonly NotificationEventDto[]> {
+    return (
+      await this.issueRequest<{ events: NotificationEventDto[] }>('/notifications/events', {
+        signal,
+      })
+    ).events;
+  }
+  public async getNotificationRules(signal?: AbortSignal): Promise<readonly NotificationRuleDto[]> {
+    return (
+      await this.issueRequest<{ rules: NotificationRuleDto[] }>('/notifications/rules', { signal })
+    ).rules;
+  }
+  /** Creates a rule, or replaces the one given in `id`. */
+  public async saveNotificationRule(
+    input: NotificationRuleInput,
+    id?: string,
+  ): Promise<NotificationRuleDto> {
+    return (
+      await this.issueRequest<{ rule: NotificationRuleDto }>(
+        id ? `/notifications/rules/${encodeURIComponent(id)}` : '/notifications/rules',
+        {
+          method: id ? 'PUT' : 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(input),
+        },
+      )
+    ).rule;
+  }
+  public async deleteNotificationRule(id: string): Promise<void> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/notifications/rules/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) return this.handleErrorResponse(response);
+  }
+  /** One page of the workspace's people by name or e-mail, with the addresses (admins only). */
+  public async getNotificationPeople(
+    query: { readonly search: string; readonly offset: number; readonly limit: number },
+    signal?: AbortSignal,
+  ): Promise<NotificationPeoplePage> {
+    const params = new URLSearchParams({
+      offset: String(query.offset),
+      limit: String(query.limit),
+    });
+    if (query.search) params.set('search', query.search);
+    return this.issueRequest<NotificationPeoplePage>(`/notifications/people?${params}`, { signal });
+  }
+  /** Sets (or, with an empty text, removes) the addresses of one member; returns all of theirs. */
+  public async saveNotificationContacts(
+    userId: string,
+    contacts: Readonly<Record<string, string>>,
+  ): Promise<readonly NotificationContactDto[]> {
+    return (
+      await this.issueRequest<{ contacts: NotificationContactDto[] }>(
+        `/notifications/contacts/${encodeURIComponent(userId)}`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ contacts }),
+        },
+      )
+    ).contacts;
+  }
+  /** Sends a test message to the signed-in person, on the spot. */
+  public async sendTestNotification(
+    channel: string,
+  ): Promise<readonly NotificationDeliveryResultDto[]> {
+    return (
+      await this.issueRequest<{ results: NotificationDeliveryResultDto[] }>('/notifications/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ channel }),
+      })
+    ).results;
+  }
   public async startIssueRun(issueId: string): Promise<AgentRun> {
     return (
       await this.issueRequest<{ run: AgentRun }>(`/issues/${encodeURIComponent(issueId)}/runs`, {
@@ -1232,10 +1739,7 @@ export class ApiClient {
   }
 
   private async fetchWithAuth(url: string, init: RequestInit = {}): Promise<Response> {
-    // The locale goes with every request; a caller's own header still wins.
     const headers: Record<string, string> = {
-      'x-locale': this.locale,
-      'Accept-Language': this.locale,
       ...(init.headers as Record<string, string> | undefined),
     };
     if (this.token && !headers['authorization']) {
@@ -1243,6 +1747,12 @@ export class ApiClient {
     }
     if (this.workspaceId && !headers['x-workspace-id']) {
       headers['x-workspace-id'] = this.workspaceId;
+    }
+    if (!headers['x-locale']) {
+      headers['x-locale'] = this.locale;
+    }
+    if (!headers['Accept-Language']) {
+      headers['Accept-Language'] = this.locale;
     }
     return this.fetcher(url, { ...init, headers });
   }
@@ -1298,9 +1808,12 @@ export class ApiClient {
   /** Servers older than the call answer 404: they have none of the capabilities. */
   public async getCapabilities(signal?: AbortSignal): Promise<ServerCapabilities> {
     const response = await this.fetchWithAuth(`${this.baseUrl}/capabilities`, { signal });
-    if (!response.ok) return { workersReachLocalhost: false };
+    if (!response.ok) return { workersReachLocalhost: false, defaultExecutionTarget: 'remote' };
     const body = (await response.json()) as Partial<ServerCapabilities>;
-    return { workersReachLocalhost: body.workersReachLocalhost === true };
+    return {
+      workersReachLocalhost: body.workersReachLocalhost === true,
+      defaultExecutionTarget: body.defaultExecutionTarget === 'local' ? 'local' : 'remote',
+    };
   }
 
   public async getReadiness(signal?: AbortSignal): Promise<ReadinessResponse> {
@@ -1376,6 +1889,7 @@ export class ApiClient {
     if (options?.sourceType) payload.sourceType = options.sourceType;
     if (options?.sourceId?.trim()) payload.sourceId = options.sourceId.trim();
     if (options?.suiteId !== undefined) payload.suiteId = options.suiteId;
+    if (options?.context?.length) payload.context = options.context;
 
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (options?.workspaceId?.trim()) {
@@ -1464,6 +1978,12 @@ export class ApiClient {
       throw new ApiClientError(502, this.message('invalidResponse'));
     }
     return body as SavedTestPlansPageDto;
+  }
+
+  public async getSavedTestPlan(id: string): Promise<SavedTestPlanDto> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/TestPlan/${encodeURIComponent(id)}`);
+    if (!response.ok) return this.handleErrorResponse(response);
+    return (await response.json()) as SavedTestPlanDto;
   }
 
   public async updateSavedTestPlan(
@@ -1865,6 +2385,21 @@ export class ApiClient {
       )
     ).creation;
   }
+  /**
+   * Writes the tests of a run the user asked for: planned from the PRD or the Brain, or, with
+   * `savedCases`, the test cases saved in Test Plans associated to the run and automated.
+   */
+  public async generateE2eTests(
+    id: string,
+    input: {
+      savedCases?: { suiteId?: string; planId?: string; caseIds?: readonly string[] };
+      /** A product document for this planning; it replaces the run's PRD. */
+      prd?: string;
+      prdFileNames?: readonly string[];
+    } = {},
+  ): Promise<void> {
+    await this.sendJson(`/e2e/creations/${encodeURIComponent(id)}/generate`, 'POST', input);
+  }
   public async rerunE2eCreation(id: string): Promise<void> {
     await this.sendJson(`/e2e/creations/${encodeURIComponent(id)}/run`, 'POST', {});
   }
@@ -1948,8 +2483,96 @@ export class ApiClient {
       })
     ).test;
   }
-  public async rerunE2eTest(id: string, regenerate = false): Promise<void> {
-    await this.sendJson(`/e2e/tests/${encodeURIComponent(id)}/run`, 'POST', { regenerate });
+  /**
+   * With regenerate, `guidance` tells the AI how to rewrite the script. `environmentId` sets the
+   * saved environment the test runs with; null goes back to its run's, and omitting it keeps it.
+   */
+  public async rerunE2eTest(
+    id: string,
+    regenerate = false,
+    guidance?: { readonly instructions?: string; readonly useLastRun?: boolean },
+    environmentId?: string | null,
+  ): Promise<void> {
+    await this.sendJson(`/e2e/tests/${encodeURIComponent(id)}/run`, 'POST', {
+      regenerate,
+      ...(regenerate && guidance ? guidance : {}),
+      ...(environmentId === undefined ? {} : { environmentId }),
+    });
+  }
+  /**
+   * Fixes one failed step: the AI rewrites only that step of the script from `instructions` and
+   * the last run, and the test runs again. `position` counts from 1.
+   */
+  public async fixE2eTestStep(id: string, position: number, instructions: string): Promise<void> {
+    await this.sendJson(`/e2e/tests/${encodeURIComponent(id)}/steps/${position}/fix`, 'POST', {
+      instructions,
+    });
+  }
+  /**
+   * One turn of "Fix with AI": talks to the AI about what the test does wrong and gets back its
+   * answer and the test case rewritten to match (null when the case stays). Nothing is saved or
+   * run. `imageIds` are images already uploaded as attachments.
+   */
+  public async reviseE2eTestCase(id: string, turn: E2eCaseTurn): Promise<E2eCaseRevision> {
+    return (
+      await this.sendJson<{ revision: E2eCaseRevision }>(
+        `/e2e/tests/${encodeURIComponent(id)}/fix-case`,
+        'POST',
+        turn,
+      )
+    ).revision;
+  }
+  /**
+   * Saves how the user decides the test passes. Nothing is rewritten or run: the next spec asserts
+   * it, and a failure that still meets it counts as a pass.
+   */
+  public async saveE2eSuccessCriteria(id: string, criteria: string): Promise<E2eTestDetail> {
+    return (
+      await this.sendJson<{ test: E2eTestDetail }>(
+        `/e2e/tests/${encodeURIComponent(id)}/success-criteria`,
+        'PUT',
+        { criteria },
+      )
+    ).test;
+  }
+  /** The user's own decision about a finished test; "run" gives back the status the run produced. */
+  public async setE2eTestResult(
+    id: string,
+    decision: E2eResultDecision,
+    note?: string,
+  ): Promise<E2eTestDetail> {
+    return (
+      await this.sendJson<{ test: E2eTestDetail }>(
+        `/e2e/tests/${encodeURIComponent(id)}/result`,
+        'PUT',
+        { decision, ...(note ? { note } : {}) },
+      )
+    ).test;
+  }
+  /** The user's own decision about one step; the test passes once no step counts as failed. */
+  public async setE2eStepResult(
+    id: string,
+    position: number,
+    decision: E2eResultDecision,
+    note?: string,
+  ): Promise<E2eTestDetail> {
+    return (
+      await this.sendJson<{ test: E2eTestDetail }>(
+        `/e2e/tests/${encodeURIComponent(id)}/steps/${position}/result`,
+        'PUT',
+        { decision, ...(note ? { note } : {}) },
+      )
+    ).test;
+  }
+  /** Judges the last execution against the success criteria with the AI, without running again. */
+  public async reevaluateE2eTest(id: string): Promise<E2eTestDetail> {
+    return (
+      await this.sendJson<{ test: E2eTestDetail }>(
+        `/e2e/tests/${encodeURIComponent(id)}/reevaluate`,
+        'POST',
+        {},
+      )
+    ).test;
   }
   /** Videos need the bearer token, so they are fetched as a Blob instead of a plain src URL. */
   /**
@@ -1972,6 +2595,146 @@ export class ApiClient {
       `${this.baseUrl}/e2e/tests/${encodeURIComponent(id)}/video`,
       { signal },
     );
+    if (!response.ok) return this.handleErrorResponse(response);
+    return response.blob();
+  }
+
+  // --- E2E environments, exploration and run view ---
+
+  public async getE2eEnvironments(signal?: AbortSignal): Promise<readonly E2eEnvironment[]> {
+    return (
+      await this.issueRequest<{ environments: E2eEnvironment[] }>('/e2e/environments', { signal })
+    ).environments;
+  }
+  /** Creates an environment, or changes the one with the given id. */
+  public async saveE2eEnvironment(
+    input: E2eEnvironmentInput,
+    id?: string,
+  ): Promise<E2eEnvironment> {
+    return (
+      await this.sendJson<{ environment: E2eEnvironment }>(
+        id ? `/e2e/environments/${encodeURIComponent(id)}` : '/e2e/environments',
+        id ? 'PUT' : 'POST',
+        input,
+      )
+    ).environment;
+  }
+  public async deleteE2eEnvironment(id: string): Promise<void> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/e2e/environments/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) return this.handleErrorResponse(response);
+  }
+  /** What the agent saw when it last explored the run's application; null when it never did. */
+  public async getE2eExploration(id: string, signal?: AbortSignal): Promise<E2eExploration | null> {
+    return (
+      await this.issueRequest<{ exploration: E2eExploration | null }>(
+        `/e2e/creations/${encodeURIComponent(id)}/exploration`,
+        { signal },
+      )
+    ).exploration;
+  }
+  /** The recording of one browser of the last exploration. */
+  public async getE2eExplorationVideo(
+    id: string,
+    worker: number,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/e2e/creations/${encodeURIComponent(id)}/exploration/videos/${worker}`,
+      { signal },
+    );
+    if (!response.ok) return this.handleErrorResponse(response);
+    return response.blob();
+  }
+  /** The Playwright code of the last exploration: the saved one, or the one made from the log. */
+  public async getE2eExplorationCode(id: string): Promise<E2eExplorationCode> {
+    return this.issueRequest<E2eExplorationCode>(
+      `/e2e/creations/${encodeURIComponent(id)}/exploration/code`,
+    );
+  }
+  /** Keeps the edited code of the exploration; an empty code goes back to the generated one. */
+  public async saveE2eExplorationCode(id: string, code: string): Promise<E2eExplorationCode> {
+    return this.sendJson<E2eExplorationCode>(
+      `/e2e/creations/${encodeURIComponent(id)}/exploration/code`,
+      'PUT',
+      { code },
+    );
+  }
+  /**
+   * `description` says what to explore (a feature, a bug…) and guides the agent. The script is
+   * kept in the database only.
+   */
+  public async exploreE2eCreation(
+    id: string,
+    options: {
+      description?: string;
+      /** PBIs, issues and Brain documents the agent reads for context. */
+      context?: readonly { kind: 'pbi' | 'brain' | 'issue'; id: string }[];
+      /** The agent that explores, with its instructions and skills; the run's own when omitted. */
+      agentId?: string;
+    } = {},
+  ): Promise<E2eExploration> {
+    return (
+      await this.sendJson<{ exploration: E2eExploration }>(
+        `/e2e/creations/${encodeURIComponent(id)}/explore`,
+        'POST',
+        {
+          ...(options.description ? { description: options.description } : {}),
+          ...(options.context?.length ? { context: options.context } : {}),
+          ...(options.agentId ? { agentId: options.agentId } : {}),
+        },
+      )
+    ).exploration;
+  }
+  /** The Source of the workspace with its flows; null before the first Source exploration. */
+  public async getE2eSource(signal?: AbortSignal): Promise<E2eSourceState> {
+    return this.issueRequest<E2eSourceState>('/e2e/source', { signal });
+  }
+  /**
+   * Explores the application of a saved environment to replace the Source of the workspace.
+   * `agentId` documents the system (the last one is kept when omitted).
+   */
+  public async exploreE2eSource(input: {
+    environmentId: string;
+    agentId?: string;
+    executionTarget?: E2eExecutionTarget;
+  }): Promise<E2eExploration> {
+    return (
+      await this.sendJson<{ exploration: E2eExploration }>('/e2e/source/explore', 'POST', input)
+    ).exploration;
+  }
+  /** Keeps the documentation of the Source the user edited; it replaces the one in use. */
+  public async saveE2eSourceDocumentation(
+    documentation: Pick<E2eSourceDocumentation, 'overview' | 'areas' | 'brainDocuments'>,
+  ): Promise<E2eSourceDocumentation> {
+    return (
+      await this.sendJson<{ documentation: E2eSourceDocumentation }>(
+        '/e2e/source/documentation',
+        'PUT',
+        documentation,
+      )
+    ).documentation;
+  }
+  /** Writes the documentation of the Source again, without exploring. */
+  public async documentE2eSource(): Promise<void> {
+    await this.sendJson('/e2e/source/document', 'POST', {});
+  }
+  public async getE2eActionMap(id: string, signal?: AbortSignal): Promise<E2eActionMap> {
+    return (
+      await this.issueRequest<{ map: E2eActionMap }>(
+        `/e2e/creations/${encodeURIComponent(id)}/action-map`,
+        { signal },
+      )
+    ).map;
+  }
+  /**
+   * An image of the E2E module by its path under `/e2e` (see `e2eImagePath`): a page of an
+   * exploration, a page or element of a test's trail, or the live frame of a running test.
+   */
+  public async getE2eImage(path: string, signal?: AbortSignal): Promise<Blob> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/e2e/${path}`, { signal });
     if (!response.ok) return this.handleErrorResponse(response);
     return response.blob();
   }
@@ -2064,6 +2827,32 @@ export class ApiClient {
         { externalCase },
       )
     ).test;
+  }
+  /** Links a test to a test case saved in ADK, or unlinks it with null. */
+  public async linkE2eTestSavedCase(
+    id: string,
+    savedCase: E2eSavedCaseLink | null,
+  ): Promise<E2eTestDetail> {
+    return (
+      await this.sendJson<{ test: E2eTestDetail }>(
+        `/e2e/tests/${encodeURIComponent(id)}/saved-case`,
+        'PUT',
+        { savedCase },
+      )
+    ).test;
+  }
+  /** Links saved test cases (a suite, a Test Plan or some of its cases) to a run without running them. */
+  public async linkE2eSavedCases(
+    id: string,
+    savedCases: { suiteId?: string; planId?: string; caseIds?: readonly string[] },
+  ): Promise<E2eImportResult> {
+    return (
+      await this.sendJson<{ result: E2eImportResult }>(
+        `/e2e/creations/${encodeURIComponent(id)}/saved-cases`,
+        'POST',
+        savedCases,
+      )
+    ).result;
   }
   /** Screenshots need the bearer token, so they are fetched as a Blob. */
   public async getE2eStepScreenshot(
@@ -2188,6 +2977,116 @@ export class ApiClient {
 
   // --- Integrations Endpoints ---
 
+  /** Which provider CLIs the server can use in place of an API key (and whether they are installed). */
+  public async getLlmClis(signal?: AbortSignal): Promise<LlmCliAvailability> {
+    const response = await this.fetchWithAuth(`${this.baseUrl}/integrations/llm/clis`, { signal });
+    if (!response.ok) {
+      return this.handleErrorResponse(response);
+    }
+    return (await response.json()) as LlmCliAvailability;
+  }
+
+  /** The accounts (login folders) the ADK keeps for a provider's CLI. */
+  public async getLlmCliProfiles(
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly LlmCliProfile[]> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/integrations/llm/${encodeURIComponent(providerId)}/profiles`,
+      { signal },
+    );
+    if (!response.ok) {
+      return this.handleErrorResponse(response);
+    }
+    return ((await response.json()) as { profiles: readonly LlmCliProfile[] }).profiles;
+  }
+
+  /** Creates an account for a provider's CLI; the ADK makes the folder, the client only names it. */
+  public async createLlmCliProfile(providerId: string, name: string): Promise<LlmCliProfile> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/integrations/llm/${encodeURIComponent(providerId)}/profiles`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name }),
+      },
+    );
+    if (!response.ok) {
+      return this.handleErrorResponse(response);
+    }
+    return (await response.json()) as LlmCliProfile;
+  }
+
+  /** Deletes an account of a provider's CLI, together with the login the CLI saved in its folder. */
+  public async deleteLlmCliProfile(providerId: string, name: string): Promise<void> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/integrations/llm/${encodeURIComponent(providerId)}/profiles/${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) {
+      return this.handleErrorResponse(response);
+    }
+  }
+
+  /**
+   * Chats with an agent and hands over its answer while it is written. The server uses the
+   * workspace's LLM integration, an API key or a provider CLI alike. `onDone` carries the verified
+   * answer, which replaces whatever `onDelta` accumulated.
+   */
+  public async streamAgentChat(
+    agentId: string,
+    request: AgentChatRequest,
+    handlers: AgentChatHandlers,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/agents/${encodeURIComponent(agentId)}/chat`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+        body: JSON.stringify(request),
+        signal,
+      },
+    );
+    if (!response.ok) return this.handleErrorResponse(response);
+    if (!response.body) throw new Error(this.message('networkError'));
+    const decoder = new TextDecoder();
+    let finished = false;
+    const parse = createSseParser(({ event, data }) => {
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(data) as Record<string, unknown>;
+      } catch {
+        return; // A malformed event is skipped.
+      }
+      if (event === 'start') handlers.onStart?.(payload as unknown as AgentChatStart);
+      else if (event === 'delta')
+        handlers.onDelta(typeof payload['text'] === 'string' ? payload['text'] : '');
+      else if (event === 'done') {
+        finished = true;
+        handlers.onDone(payload as unknown as AgentChatDone);
+      } else if (event === 'error') {
+        finished = true;
+        handlers.onError(
+          new ApiClientError(
+            502,
+            typeof payload['message'] === 'string' ? payload['message'] : 'The agent failed.',
+          ),
+        );
+      }
+    });
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parse(decoder.decode(value, { stream: true }));
+    }
+    // The connection closed with neither `done` nor `error`: the answer is incomplete.
+    if (!finished && !signal?.aborted) {
+      handlers.onError(new ApiClientError(502, this.message('networkError')));
+    }
+  }
+
   public async getIntegrations(signal?: AbortSignal): Promise<readonly UserIntegrationDto[]> {
     const response = await this.fetchWithAuth(`${this.baseUrl}/integrations`, { signal });
     if (!response.ok) {
@@ -2274,6 +3173,40 @@ export class ApiClient {
     }
 
     return (await response.json()) as ConnectivityProbeDto;
+  }
+
+  public async getTelegramChats(
+    signal?: AbortSignal,
+  ): Promise<{ status: TelegramBotStatusDto; chats: readonly TelegramChatDto[] }> {
+    return this.issueRequest('/integrations/MESSAGING/telegram/chats', { signal });
+  }
+
+  public async createTelegramPairingCode(): Promise<TelegramPairingCodeDto> {
+    return this.sendJson('/integrations/MESSAGING/telegram/pairing-code', 'POST', {});
+  }
+
+  public async updateTelegramChat(
+    id: string,
+    patch: { notifications?: boolean; agentId?: string | null },
+  ): Promise<TelegramChatDto> {
+    const response = await this.fetchWithAuth(
+      `${this.baseUrl}/integrations/MESSAGING/telegram/chats/${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    );
+    if (!response.ok) return this.handleErrorResponse(response);
+    return ((await response.json()) as { chat: TelegramChatDto }).chat;
+  }
+
+  public async removeTelegramChat(id: string): Promise<void> {
+    await this.sendJson(
+      `/integrations/MESSAGING/telegram/chats/${encodeURIComponent(id)}`,
+      'DELETE',
+      {},
+    );
   }
 
   public async getAzureDevOpsProjectMembers(
@@ -2403,6 +3336,20 @@ export class ApiClient {
 
     const body = (await response.json()) as { documents: readonly KnowledgeDocumentDto[] };
     return body.documents;
+  }
+
+  /** One page of the Brain documents whose title has the text, without their content. */
+  public async searchKnowledgeDocuments(
+    { q, page, pageSize }: { q: string; page: number; pageSize: number },
+    signal?: AbortSignal,
+  ): Promise<{ documents: readonly KnowledgeDocumentDto[]; total: number }> {
+    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (q.trim()) query.set('q', q.trim());
+    const response = await this.fetchWithAuth(`${this.baseUrl}/knowledge/documents?${query}`, {
+      signal,
+    });
+    if (!response.ok) return this.handleErrorResponse(response);
+    return (await response.json()) as { documents: readonly KnowledgeDocumentDto[]; total: number };
   }
 
   public async getKnowledgeRelations(

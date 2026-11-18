@@ -8,6 +8,19 @@ export const ptBR = {
   E2E_INVALID_ACCESS_TOKEN: 'As credenciais de acesso ao túnel são inválidas.',
   RELEASE_NOTE_NOT_FOUND: 'Nota de versão não encontrada.',
   RELEASE_NOTE_ITEMS_REQUIRED: 'Selecione pelo menos um item.',
+  DEVELOPMENT_CHANGE_NOT_FOUND: 'Change não encontrada.',
+  DEVELOPMENT_SESSION_NOT_FOUND: 'Sessão não encontrada.',
+  DEVELOPMENT_COMMENT_NOT_FOUND: 'Comentário não encontrado.',
+  DEVELOPMENT_CHANGE_SLUG_TAKEN: 'Já existe uma change com este identificador.',
+  DEVELOPMENT_CHANGE_LOCKED: 'Changes arquivadas ou rejeitadas não podem ser editadas.',
+  DEVELOPMENT_CHANGE_INVALID_TRANSITION:
+    'Uma change no estado "{status}" não aceita a ação "{action}".',
+  DEVELOPMENT_CHANGE_HAS_ACTIVE_SESSIONS:
+    'Conclua ou cancele as sessões desta change antes de arquivá-la.',
+  DEVELOPMENT_CHANGE_HAS_SESSIONS: 'Exclua as sessões desta change antes de excluí-la.',
+  DEVELOPMENT_CHANGE_NOT_APPROVED:
+    'A change precisa ser aprovada antes que os agentes comecem a trabalhar nela.',
+  DEVELOPMENT_SESSION_INVALID_STATE: 'Isso não é possível com a sessão no estado "{status}".',
   UNAUTHORIZED: 'Credenciais inválidas ou ausentes.',
   FORBIDDEN: 'Acesso negado.',
   MODULE_ACCESS_BLOCKED: 'Acesso ao módulo {module} bloqueado.',
@@ -29,6 +42,9 @@ export const ptBR = {
   LOAD_SCENARIO_NOT_FOUND: 'Cenário de carga não encontrado.',
   API_RUN_NOT_FOUND: 'Execução não encontrada.',
   API_RUN_ACTIVE: 'Cancele a execução antes de excluí-la.',
+  TELEGRAM_BOT_OFFLINE: 'Salve um token de bot válido antes de parear um chat.',
+  TELEGRAM_WEBHOOK_FORBIDDEN: 'Segredo do webhook inválido.',
+  MESSAGING_CHAT_NOT_FOUND: 'Chat não encontrado.',
   API_TEST_TARGET_LOCAL:
     '{host} não é acessível pelos workers do ADK. Execute no seu computador (com o devkit runner aberto).',
   LOAD_TEST_NOT_AUTHORIZED: 'Confirme que você tem autorização para gerar carga no sistema alvo.',
@@ -113,6 +129,10 @@ export const ptBR = {
     'A Requirement Based Suite é criada na publicação: escolha um novo Test Plan ou uma nova suite dentro da selecionada.',
   AGENT_LOAD_FAILED: 'Não foi possível carregar o agente selecionado.',
   AGENT_NOT_AVAILABLE: 'O agente selecionado não está disponível para este gerador.',
+  AGENT_WORKFLOW_AGENT_REQUIRED:
+    'Selecione um agente (ou defina um agente padrão no workspace) antes de gerar este plano de testes.',
+  AGENT_WORKFLOW_OUTPUT_INVALID:
+    'O agente não retornou casos de teste válidos. Tente novamente, detalhe o requisito ou reduza o contexto selecionado.',
   NOT_FOUND: 'Recurso não encontrado.',
   USER_ALREADY_EXISTS: 'Usuário com este e-mail já existe.',
   INVALID_CREDENTIALS: 'E-mail ou senha inválidos.',
@@ -165,6 +185,23 @@ export const ptBR = {
     'A cota ou o limite de uso do provedor de IA foi atingido. Verifique faturamento e limites antes de tentar novamente.',
   LLM_AUTHENTICATION_FAILED: 'O provedor de IA rejeitou a chave de API configurada.',
   LLM_MODEL_UNAVAILABLE: 'O modelo de IA configurado não está disponível para esta chave de API.',
+  LLM_CLI_NOT_INSTALLED:
+    'A CLI do provedor não está instalada onde deveria rodar (a máquina da API ou a Bridge).',
+  LLM_CLI_NOT_AUTHENTICATED:
+    'A CLI do provedor não está autenticada. Confira o token da CLI na integração, ou faça login na máquina que executa a CLI.',
+  LLM_CLI_BRIDGE_UNAVAILABLE:
+    'Não foi possível falar com a Bridge que executa a CLI do provedor. Confira se ela está no ar e se BRIDGE_URL e BRIDGE_SHARED_TOKEN estão corretos.',
+  LLM_CLI_UNSUPPORTED: 'A CLI do provedor não suporta esta solicitação. Use uma chave de API.',
+  LLM_CLI_DISABLED:
+    'As CLIs de provedores estão desligadas neste servidor. Peça ao administrador para definir ADK_LLM_CLI=true ou configurar a Bridge.',
+  LLM_CLI_INVALID_MODEL: 'O nome do modelo da CLI não é válido.',
+  LLM_CLI_PROFILE_INVALID:
+    'O nome da conta deve usar letras, números, "-" ou "_" (até 32 caracteres).',
+  LLM_CLI_PROFILES_UNSUPPORTED:
+    'Contas separadas da CLI só existem para Claude e Codex executados nesta máquina.',
+  LLM_CLI_INVALID_CONFIG_DIR:
+    'A pasta de login da CLI deve ser um caminho absoluto, como C:\\Users\\voce\\.claude-conta2.',
+  LLM_TIMEOUT: 'O provedor de IA demorou demais para responder.',
   SLUG_CONFLICT: 'Já existe um recurso com este identificador.',
   USER_NOT_FOUND: 'Usuário não encontrado.',
   WORKSPACE_ACCESS_DENIED: 'Você não tem acesso a este workspace.',
@@ -192,18 +229,36 @@ export const ptBR = {
   SESSION_TOKEN_REQUIRED:
     'Tokens de acesso só podem ser criados a partir de uma sessão autenticada.',
   E2E_INVALID_URL: 'Informe uma URL http(s) válida e permitida para a aplicação.',
+  AGENT_WORKFLOW_PROVIDER_ACTION_REQUIRED: 'Restrições de provedor precisam do nome exato da ação.',
+  E2E_SCRIPT_PATH_INVALID: 'O caminho sai da pasta.',
+  E2E_STEP_FIX_UNAVAILABLE: 'Corrigir um passo com IA não está disponível.',
+  E2E_STEP_NOT_FOUND: 'O teste não tem esse passo.',
+  E2E_EXPLORATION_NOT_READY: 'A exploração não tem código até terminar.',
+  E2E_TESTS_EXIST: 'Esta execução já tem testes.',
+  E2E_STEP_FIX_NO_SCRIPT: 'O teste ainda não tem script para corrigir; reescreva-o.',
+  E2E_PRD_REQUIRED:
+    'Um documento de produto é necessário para planejar os testes: anexe um ao gerá-los.',
   E2E_CREATION_NOT_FOUND: 'Execução E2E não encontrada.',
   E2E_TEST_NOT_FOUND: 'Teste E2E não encontrado.',
   E2E_ALREADY_RUNNING: 'Esta execução E2E já está em andamento.',
   E2E_NOT_RUNNING: 'Esta execução E2E não está em andamento.',
+  E2E_SUCCESS_CRITERIA_REQUIRED: 'Escreva o critério de sucesso antes de revisar o resultado.',
+  E2E_RESULT_NOT_REVIEWABLE:
+    'Este teste não tem um resultado finalizado para revisar. Execute-o primeiro.',
+  E2E_REVIEW_UNAVAILABLE: 'A revisão do resultado pela IA não está disponível no momento.',
+  E2E_CASE_CHAT_UNAVAILABLE: 'Corrigir o caso de teste com IA não está disponível no momento.',
   E2E_VIDEO_NOT_FOUND: 'Nenhum vídeo disponível para este teste.',
   E2E_PLAN_INVALID: 'A IA não retornou um plano de testes válido. Tente novamente.',
+  E2E_EXPLORE_ACTION_INVALID: 'A IA não retornou um passo válido para a exploração.',
+  E2E_SOURCE_INVALID: 'A IA não retornou uma documentação válida do sistema. Tente novamente.',
   E2E_TARGET_UNREACHABLE:
     'Não foi possível acessar a aplicação. Verifique se o servidor está rodando e acessível a partir do backend.',
   E2E_BROWSER_NOT_INSTALLED:
     'O Chromium do Playwright não está instalado no backend. Execute "npx playwright install chromium" em apps/Backend.',
   E2E_RUNNER_FAILED: 'O executor de testes E2E falhou.',
   E2E_SCRIPT_REJECTED: 'O script gerado foi bloqueado pelas verificações de segurança.',
+  E2E_LOCAL_FOLDER_UNAVAILABLE:
+    'Este servidor do ADK não lê pastas do seu computador. Pastas locais só funcionam pelo app desktop do ADK: use o endereço dele ("Copy MCP server address" no menu ADK, http://localhost:<porta>/mcp) em vez do endereço hospedado.',
   E2E_INTERRUPTED: 'O backend foi reiniciado durante a execução. Execute novamente.',
   E2E_LOCAL_RUNNER_UNAVAILABLE:
     'Nenhum executor local assumiu o teste. No seu computador, execute "devkit runner" conectado à sua conta do ADK e rode os testes novamente.',
@@ -223,6 +278,14 @@ export const ptBR = {
   E2E_SAVED_CASES_NOT_FOUND: 'Nenhum caso de teste salvo foi encontrado.',
   E2E_REPORTING_REQUIRED: 'Escolha a plataforma de gestão de testes que recebe esta execução.',
   E2E_EVIDENCE_NOT_FOUND: 'Nenhuma evidência disponível para este passo.',
+  E2E_ENVIRONMENT_NOT_FOUND: 'Ambiente não encontrado.',
+  E2E_SOURCE_AUTHOR_UNSUPPORTED:
+    'A IA do workspace não consegue documentar o sistema aqui. Escreva a documentação com o seu cliente de IA, usando as ferramentas e2e_prepare_source e e2e_save_source_documentation do ADK.',
+  E2E_AGENT_REQUIRED: 'Escolha o agente que documenta o sistema.',
+  E2E_SOURCE_NOT_FOUND: 'O workspace ainda não tem Source. Explore a aplicação primeiro.',
+  E2E_SOURCE_RUN_MISSING: 'A execução que explorou o Source não existe mais. Atualize o Source.',
+  E2E_INVALID_VARIABLE:
+    'Nomes de variáveis usam letras, dígitos e sublinhados, começam com letra e não se repetem.',
   TEST_MANAGEMENT_NOT_CONFIGURED:
     'Configure a integração da plataforma de gestão de testes (Azure DevOps, TestRail ou Xray).',
   TEST_MANAGEMENT_REQUEST_FAILED: 'A plataforma de gestão de testes retornou um erro.',
@@ -234,13 +297,9 @@ export const ptBR = {
   AGENT_TOO_MANY_SKILLS: 'Este agente tem mais skills do que o permitido.',
   AGENT_WORKFLOW_AGENT_IN_USE:
     'Este agente é usado pelo workflow ativo do workspace. Atualize o workflow antes de excluí-lo.',
-  AGENT_WORKFLOW_AGENT_REQUIRED:
-    'Selecione um agente no workflow ou no workspace antes de gerar este plano de teste.',
   AGENT_WORKFLOW_EMPTY: 'Um workflow ativo precisa de pelo menos uma etapa ou regra de módulo.',
   AGENT_WORKFLOW_INVALID_RULE: 'Uma regra de módulo do workflow é inválida.',
   AGENT_WORKFLOW_INVALID_STEP: 'Uma etapa do workflow é inválida.',
-  AGENT_WORKFLOW_OUTPUT_INVALID: 'O workflow de agentes não produziu passos de teste válidos.',
-  AGENT_WORKFLOW_PROVIDER_ACTION_REQUIRED: 'Restrições de provedor precisam do nome exato da ação.',
   AGENT_WORKFLOW_TOO_LONG: 'Um workflow pode ter no máximo 20 etapas.',
   AGENT_WORKFLOW_TOO_MANY_RULES: 'Um workflow pode ter no máximo 100 regras de módulo.',
   ATTACHMENTS_UNAVAILABLE: 'O armazenamento de arquivos não está configurado.',
@@ -256,6 +315,21 @@ export const ptBR = {
   HUB_SKILL_TOO_LARGE: 'Esta skill é grande demais para um agente.',
   IMAGE_NOT_FOUND: 'Imagem não encontrada.',
   WORKFLOW_ANSWER_REQUIRED: 'Uma resposta é obrigatória.',
+  REALTIME_UNAVAILABLE: 'As atualizações ao vivo não estão disponíveis.',
+  BRIDGE_BAD_CHAT: 'Id de chat inválido.',
+  BRIDGE_FORBIDDEN: 'Token do bridge inválido.',
+  NOTIFICATION_CHANNEL_UNKNOWN: 'Canal desconhecido: {channels}.',
+  NOTIFICATION_CONTACT_INVALID: '{detail}',
+  NOTIFICATION_EVENT_UNKNOWN: 'Este evento não existe.',
+  NOTIFICATION_RECIPIENT_INVALID: 'Este evento não tem uma pessoa a que se refira.',
+  NOTIFICATION_RULE_NOT_FOUND: 'Regra de notificação não encontrada.',
+  UNAUTHENTICATED: 'Entre para continuar.',
+  E2E_BRAIN_EMPTY:
+    'O Brain não tem documentos sobre esta execução. Sincronize ou escreva-os, ou use um PRD.',
+  E2E_BRAIN_UNAVAILABLE: 'O Brain não está disponível para a automação E2E.',
+  E2E_EXPLORATION_NOT_FOUND: 'Script de exploração não encontrado.',
+  NO_WORKFLOW: 'Esta execução não tem etapas de workflow para reportar.',
+  UNKNOWN_STEP: 'Esta etapa não faz parte do workflow da execução.',
 } as const;
 
 export type ErrorMessageCode = keyof typeof ptBR;

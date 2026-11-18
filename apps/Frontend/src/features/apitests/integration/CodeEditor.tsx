@@ -226,7 +226,6 @@ export const CodeEditor = forwardRef<
    * (`execCommand` is missing), the text is set directly and the selection restored after render.
    */
   const apply = (edit: Edit) => {
-    // Every caller runs while the editor is mounted, so the textarea is there.
     const element = textarea.current!;
     const next = applyEdit(element.value, edit);
     element.focus();
@@ -262,7 +261,8 @@ export const CodeEditor = forwardRef<
   }, [value]);
 
   const format = (): boolean => {
-    const element = textarea.current!;
+    const element = textarea.current;
+    if (!element) return false;
     const current = element.value;
     const formatted =
       language === 'json'
@@ -283,14 +283,16 @@ export const CodeEditor = forwardRef<
   useImperativeHandle(ref, () => ({
     format,
     insertMock(name) {
-      const element = textarea.current!;
+      const element = textarea.current;
+      if (!element) return;
       const { selectionStart: start, selectionEnd: end } = element;
       const inString = language === 'json' && insideJsonString(element.value, start);
       const text = mockSnippet(name, mockLanguage, inString);
       apply({ from: start, to: end, text, selection: [start + text.length, start + text.length] });
     },
     insertTemplate(body) {
-      const element = textarea.current!;
+      const element = textarea.current;
+      if (!element) return;
       const empty = !element.value.trim();
       const start = empty ? 0 : element.selectionStart;
       const end = empty ? element.value.length : element.selectionEnd;
@@ -365,29 +367,27 @@ export const CodeEditor = forwardRef<
 
   /** Replaces the word being typed by the chosen one. */
   const chooseWord = (word: WordCompletion) => {
-    // Only the open menu's items and its keyboard handler call this, so the editor and the menu exist.
     const element = textarea.current!;
-    /* v8 ignore next */
-    if (!menu) return;
+    // Only a shown list offers a choice.
+    const shown = menu!;
     const caret = element.selectionStart;
     const removed = /^\w*/.exec(element.value.slice(caret))![0].length;
     setMenu(null);
-    const end = menu.start + word.label.length;
-    apply({ from: menu.start, to: caret + removed, text: word.label, selection: [end, end] });
+    const end = shown.start + word.label.length;
+    apply({ from: shown.start, to: caret + removed, text: word.label, selection: [end, end] });
   };
 
   const choose = (suggestion: VariableSuggestion) => {
-    // Only the open menu's items and its keyboard handler call this, so the editor and the menu exist.
     const element = textarea.current!;
-    /* v8 ignore next */
-    if (!menu) return;
+    // Only a shown list offers a choice.
+    const shown = menu!;
     const caret = element.selectionStart;
-    if (menu.mode.kind === 'value') {
+    if (shown.mode.kind === 'value') {
       // `"name": "|` becomes `"name": "{{$randomFullName}}"`; a number replaces the quote.
       setMenu(null);
-      return apply(completeValue(element.value, menu.mode.opened, caret, suggestion.name));
+      return apply(completeValue(element.value, shown.mode.opened, caret, suggestion.name));
     }
-    if (menu.mode.kind === 'invoke') {
+    if (shown.mode.kind === 'invoke') {
       setMenu(null);
       const text = mockSnippet(
         suggestion.name,
@@ -408,16 +408,16 @@ export const CodeEditor = forwardRef<
     const plain =
       language !== 'json' ||
       suggestion.source !== 'dynamic' ||
-      insideJsonString(element.value, menu.start);
+      insideJsonString(element.value, shown.start);
     const text = plain
       ? `{{${suggestion.name}}}`
       : mockSnippet(suggestion.name, mockLanguage, false);
     setMenu(null);
     apply({
-      from: menu.start,
+      from: shown.start,
       to: caret + removed,
       text,
-      selection: [menu.start + text.length, menu.start + text.length],
+      selection: [shown.start + text.length, shown.start + text.length],
     });
   };
 

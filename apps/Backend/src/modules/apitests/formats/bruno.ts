@@ -54,7 +54,7 @@ const textBlock = (title: string, text: string | undefined) =>
 
 /** Keys with `:`, quotes, braces or spaces are quoted, as Bruno does. */
 const keyString = (key: string) =>
-  /[:"{} ]/.test(key) ? `"${key.replace(/[\\"]/g, '\\$&')}"` : key;
+  /[:"{} ]/.test(key) ? `"${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : key;
 /** Multi-line values go between `'''`. */
 const valueString = (value: string) =>
   /[\r\n]/.test(value) ? `'''\n${indent(value)}\n'''` : value;
@@ -368,7 +368,7 @@ export function requestFile(request: ApiRequestSpec, seq: number): string | null
   return parts.filter(Boolean).join('\n');
 }
 
-function environmentFile(variables: readonly Variable[]): string {
+export function environmentFile(variables: readonly Variable[]): string {
   const enabled = variables.filter((variable) => variable.enabled !== false);
   const plain = enabled.filter((variable) => !variable.secret);
   const secret = enabled.filter((variable) => variable.secret);
@@ -574,26 +574,20 @@ function outdent(lines: readonly string[], spaces: number): string {
   return lines.map((line) => line.replace(prefix, '')).join('\n');
 }
 
-/** A line of the file, or '' past its end, so the parsers below read without bound checks. */
-const at = (lines: readonly string[], index: number) => lines[index] ?? '';
-
-/** A capture group of a match, or '' when the group is part of an alternative that did not match. */
-const group = (match: RegExpExecArray, index: number) => match[index] ?? '';
-
 /** Splits a .bru file into its blocks (dictionaries, text blocks and lists). */
 export function parseBru(content: string): BruBlock[] {
   const lines = content.replace(/\r\n?/g, '\n').split('\n');
   const blocks: BruBlock[] = [];
   let index = 0;
   while (index < lines.length) {
-    const header = /^([\w:.@-]+)\s*([{[])\s*$/.exec(at(lines, index));
+    const header = /^([\w:.@-]+)\s*([{[])\s*$/.exec(lines[index]!);
     index += 1;
     if (!header) continue;
-    const name = group(header, 1);
+    const name = header[1]!;
     const close = header[2] === '[' ? ']' : '}';
     const body: string[] = [];
-    while (index < lines.length && at(lines, index).trimEnd() !== close) {
-      body.push(at(lines, index));
+    while (index < lines.length && lines[index]!.trimEnd() !== close) {
+      body.push(lines[index]!);
       index += 1;
     }
     index += 1;
@@ -618,7 +612,7 @@ export function parseBru(content: string): BruBlock[] {
 function parsePairs(lines: readonly string[]): BruPair[] {
   const pairs: BruPair[] = [];
   for (let index = 0; index < lines.length; index += 1) {
-    let rest = at(lines, index).trim();
+    let rest = lines[index]!.trim();
     // Annotations (`@description(...)`) decorate the next pair; ADK has no use for them.
     if (!rest || (rest.startsWith('@') && !rest.includes(':'))) continue;
     let enabled = true;
@@ -630,7 +624,7 @@ function parsePairs(lines: readonly string[]): BruPair[] {
     if (rest.startsWith('"')) {
       const end = /^"((?:[^"\\]|\\.)*)"\s*:/.exec(rest);
       if (!end) continue;
-      key = group(end, 1).replace(/\\"/g, '"');
+      key = end[1]!.replace(/\\(["\\])/g, '$1');
       rest = rest.slice(end[0].length);
     } else {
       const colon = rest.indexOf(':');
@@ -644,17 +638,17 @@ function parsePairs(lines: readonly string[]): BruPair[] {
     if (value.startsWith("'''")) {
       const collected: string[] = [];
       index += 1;
-      while (index < lines.length && !at(lines, index).trim().startsWith("'''")) {
-        collected.push(at(lines, index));
+      while (index < lines.length && !lines[index]!.trim().startsWith("'''")) {
+        collected.push(lines[index]!);
         index += 1;
       }
-      contentType = /@contentType\(([^)]*)\)/.exec(at(lines, index))?.[1];
+      contentType = /@contentType\(([^)]*)\)/.exec(lines[index] ?? '')?.[1];
       value = outdent(collected, 4);
     } else if (value === '[') {
       list = [];
       index += 1;
-      while (index < lines.length && at(lines, index).trim() !== ']') {
-        const item = at(lines, index).trim();
+      while (index < lines.length && lines[index]!.trim() !== ']') {
+        const item = lines[index]!.trim();
         if (item) list.push(item);
         index += 1;
       }
@@ -662,7 +656,7 @@ function parsePairs(lines: readonly string[]): BruPair[] {
     } else {
       const annotated = /^(.*?)\s*@contentType\(([^)]*)\)$/.exec(value);
       if (annotated) {
-        value = group(annotated, 1);
+        value = annotated[1]!;
         contentType = annotated[2];
       }
     }
@@ -830,13 +824,10 @@ function sourceOf(expression: string): Pick<Assertion, 'source' | 'path'> | unde
   const header =
     /^res\.headers(?:\.([\w-]+)|\[\s*["']([^"']+)["']\s*\])$/.exec(text) ??
     /^res\.getHeader\(\s*["']([^"']+)["']\s*\)$/.exec(text);
-  if (header)
-    return { source: 'header', path: (group(header, 1) || group(header, 2)).toLowerCase() };
+  if (header) return { source: 'header', path: (header[1] ?? header[2]!).toLowerCase() };
   const json = /^res\.body((?:\.[\w$]+|\[\d+\]|\[["'][^"']+["']\])+)$/.exec(text);
   if (json) {
-    const path = group(json, 1)
-      .replace(/\[["']([^"']+)["']\]/g, '.$1')
-      .replace(/^\./, '');
+    const path = json[1]!.replace(/\[["']([^"']+)["']\]/g, '.$1').replace(/^\./, '');
     return { source: 'json', path };
   }
   return undefined;
@@ -983,7 +974,7 @@ function bodyFrom(mode: string, document: BruDocument): RequestBody {
         fields: document.pairs('body:multipart-form').map((pair): FormField => {
           const file = /^@file\((.*)\)$/.exec(pair.value);
           // Bruno points at files on the user's disk: only the file name is kept.
-          const value = file ? group(file, 1).split('|').map(baseName).join(', ') : pair.value;
+          const value = file ? file[1]!.split('|').map(baseName).join(', ') : pair.value;
           return {
             key: pair.key,
             value,
@@ -1000,12 +991,11 @@ function bodyFrom(mode: string, document: BruDocument): RequestBody {
   }
 }
 
-/* v8 ignore next -- splitting a string always yields at least one part */
-const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+const baseName = (path: string) => path.split(/[\\/]/).pop()!;
 
 function messagesFrom(document: BruDocument, name: 'body:grpc' | 'body:ws'): OutgoingMessage[] {
   return document.all(name).map((message) => {
-    const pairs = message.pairs ?? [];
+    const pairs = message.pairs!;
     const type = valueOf(pairs, 'type');
     return {
       ...(valueOf(pairs, 'name') ? { name: valueOf(pairs, 'name') } : {}),
@@ -1064,8 +1054,7 @@ export function requestFromBru(content: string, fallbackName: string): ApiReques
       method: 'POST',
       url: valueOf(grpc, 'url'),
       body: { mode: 'none' },
-      /* v8 ignore next -- the mode is never empty here, so authFrom always answers */
-      auth: authFrom(valueOf(grpc, 'auth') || 'inherit', document) ?? { type: 'inherit' },
+      auth: authFrom(valueOf(grpc, 'auth') || 'inherit', document)!,
       grpc: {
         method: valueOf(grpc, 'method').replace(/^\//, ''),
         ...(protoPath ? { protoFile: protoPath.replace(/^(\.\/)?protos\//, '') } : {}),
@@ -1084,8 +1073,7 @@ export function requestFromBru(content: string, fallbackName: string): ApiReques
       method: 'GET',
       url: valueOf(ws, 'url'),
       body: { mode: 'none' },
-      /* v8 ignore next -- the mode is never empty here, so authFrom always answers */
-      auth: authFrom(valueOf(ws, 'auth') || 'inherit', document) ?? { type: 'inherit' },
+      auth: authFrom(valueOf(ws, 'auth') || 'inherit', document)!,
       websocket: { messages: messagesFrom(document, 'body:ws') },
     };
   }
@@ -1098,8 +1086,7 @@ export function requestFromBru(content: string, fallbackName: string): ApiReques
     url: valueOf(http, 'url'),
     ...(pathParams.length ? { pathParams } : {}),
     body: graphql ? { mode: 'none' } : bodyFrom(bodyMode, document),
-    /* v8 ignore next -- the mode is never empty here, so authFrom always answers */
-    auth: authFrom(valueOf(http, 'auth') || 'inherit', document) ?? { type: 'inherit' },
+    auth: authFrom(valueOf(http, 'auth') || 'inherit', document)!,
     ...(graphql
       ? {
           graphql: {

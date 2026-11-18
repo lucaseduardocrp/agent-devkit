@@ -16,6 +16,11 @@ import { E2eWorker } from '../src/modules/e2e/application/e2e-worker.js';
 import { LocalE2eDispatcher } from '../src/modules/e2e/adapters/e2e-dispatchers.js';
 import { FakeScriptRepository } from './helpers/fake-script-repository.js';
 import { snapshotKey } from '../src/modules/e2e/domain/e2e.js';
+import {
+  E2eEnvironmentService,
+  InMemoryE2eEnvironmentStore,
+} from '../src/modules/e2e/application/e2e-environments.js';
+import type { RunNotifier } from '../src/modules/messaging/application/run-notifier.js';
 
 const VALID = `import { test, expect } from '@playwright/test';
 test('TC001 - ok', async ({ page }) => {
@@ -63,6 +68,10 @@ function setup(
   overrides: Partial<E2eAuthor> = {},
   runResults: E2eRunResult[] = [passed],
   transcoder?: E2eVideoTranscoder,
+  notifier?: RunNotifier,
+  testConcurrency = 1,
+  environments?: E2eEnvironmentService,
+  workerConcurrency = 1,
 ) {
   const store = new InMemoryE2eStore();
   const artifacts = new InMemoryE2eArtifactStore();
@@ -91,15 +100,20 @@ function setup(
   const queue = new InMemoryE2eJobQueue();
   const worker = new E2eWorker({
     queue,
-    concurrency: 1,
+    concurrency: workerConcurrency,
     heartbeatMs: 5,
     executor: new E2eExecutor({
       store,
+      queue,
       artifacts,
       author: author as unknown as E2eAuthor,
       runner,
       transcoder,
       scripts,
+      notifier,
+      environments,
+      // Mocked results and commits are consumed in order unless a test asks for parallel runs.
+      testConcurrency,
     }),
   });
   const service = Object.assign(
@@ -111,6 +125,7 @@ function setup(
       agents: agents as never,
       transcoder,
       scripts,
+      environments,
     }),
     { idle: () => worker.idle() },
   );
@@ -264,6 +279,28 @@ describe('E2eService', () => {
     });
   });
 
+  it('writes the analysis of a rerun in the language of the person who reruns it', async () => {
+    const { service, author } = setup({}, [failed, failed, failed, failed]);
+    const created = await service.create(context, input);
+    await service.idle();
+    const analyzedIn = () => author.analyze.mock.lastCall?.[0].creation.locale;
+    expect(analyzedIn()).toBe('en-US');
+
+    await service.rerun('ws', created.id, 'user', 'pt-BR');
+    await service.idle();
+    expect(analyzedIn()).toBe('pt-BR');
+    expect((await service.get('ws', created.id)).locale).toBe('pt-BR');
+
+    // Without a language the run keeps the one it has; with one, a single test follows it too.
+    const [test] = (await service.get('ws', created.id)).tests;
+    await service.rerunTest('ws', test!.id);
+    await service.idle();
+    expect(analyzedIn()).toBe('pt-BR');
+    await service.rerunTest('ws', test!.id, false, 'user', {}, undefined, 'en-US');
+    await service.idle();
+    expect(analyzedIn()).toBe('en-US');
+  });
+
   it('records a failure without analysis when the analysis call fails', async () => {
     const { service } = setup({ analyze: vi.fn().mockRejectedValue(new Error('llm down')) }, [
       { ...failed, video: null },
@@ -412,72 +449,356 @@ export default async function afterRun({ request }: { request: APIRequestContext
     );
   });
 
-  it('asks the author to fix a hook its own security checks reject, once', async () => {
-    const fixed = `export default async function beforeRun() {}`;
-    const writeHook = vi
-      .fn()
-      .mockImplementation(({ kind, previous }: { kind: string; previous?: unknown }) => {
-        if (kind !== 'beforeRun') return Promise.resolve(null);
-        return Promise.resolve(previous ? fixed : 'not a hook at all');
-      });
-    const { service, scripts } = setup({ writeHook });
+  it('revises a test case in a conversation with the spec, its last run and the images the user sent', async () => {
+    const { service, store, artifacts, scripts, queue, worker, agents } = setup({}, [
+      { ...failed, error: 'locator not found' },
+    ]);
     const created = await service.create(context, input);
     await service.idle();
-    const forTc001 = (call: unknown[]) => {
-      const [request] = call as [{ kind: string; test: { code: string } }];
-      return request.kind === 'beforeRun' && request.test.code === 'TC001';
-    };
-    expect(writeHook.mock.calls.filter(forTc001).length).toBe(2);
-    const retry = writeHook.mock.calls.find((call) => call[0].previous)?.[0] as {
-      previous: { script: string; problem: string };
-    };
-    expect(retry.previous).toMatchObject({ script: 'not a hook at all' });
-    expect(retry.previous.problem).toContain('hook must export default async function');
-    expect(scripts.commits[0]).toMatchObject({ path: 'tests/e2e/tc001-submit-question.before.ts' });
     const [first] = (await service.get('ws', created.id)).tests;
-    expect(first?.status).not.toBe('error');
-    expect(await service.getScript('ws', first!.id, 'beforeRun')).toMatchObject({ content: fixed });
+    const reviseCase = vi.fn().mockResolvedValue({ reply: 'ok', testCase: null });
+    const chat = new E2eService({
+      store,
+      queue,
+      dispatcher: new LocalE2eDispatcher(worker),
+      artifacts,
+      agents: agents as never,
+      scripts,
+      author: { analyze: vi.fn(), reviseCase },
+    });
+    const turn = {
+      messages: [{ role: 'user' as const, content: 'Start from the menu' }],
+      testCase: { title: 'Submit', description: 'd', steps: [] },
+    };
+
+    // An image the user attached is read from the attachments of the workspace.
+    const imageId = '11111111-1111-4111-8111-111111111111';
+    await artifacts.put(
+      `attachments/images/ws/${imageId}/meta.json`,
+      Buffer.from(JSON.stringify({ kind: 'image', mimeType: 'image/png' })),
+    );
+    await artifacts.put(
+      `attachments/images/ws/${imageId}/content`,
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]),
+    );
+    await chat.reviseTestCase('ws', first!.id, { ...turn, imageIds: [imageId] }, 'pt-BR');
+    const sent = reviseCase.mock.calls[0]![0];
+    expect(sent.script).toBe(VALID);
+    expect(sent.lastRun).toContain('locator not found');
+    expect(sent.creation.locale).toBe('pt-BR');
+    expect(sent.images).toEqual([
+      {
+        mimeType: 'image/png',
+        data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]).toString(
+          'base64',
+        ),
+      },
+    ]);
+
+    // A spec that cannot be read, or a test that never ran, leaves the AI with the case alone.
+    vi.spyOn(scripts, 'readFile').mockRejectedValue(new Error('offline'));
+    await chat.reviseTestCase('ws', first!.id, turn);
+    expect(reviseCase.mock.calls[1]![0]).toMatchObject({ script: '', images: [] });
+    expect(reviseCase.mock.calls[1]![0].creation.locale).toBe('en-US');
+    await store.updateTest('ws', first!.id, { scriptPath: null, lastRunAt: null });
+    await chat.reviseTestCase('ws', first!.id, turn);
+    expect(reviseCase.mock.calls[2]![0]).toMatchObject({ script: '', lastRun: null });
+
+    await expect(service.reviseTestCase('ws', first!.id, turn)).rejects.toMatchObject({
+      code: 'E2E_CASE_CHAT_UNAVAILABLE',
+    });
+    await expect(chat.reviseTestCase('ws', 'missing', turn)).rejects.toMatchObject({
+      statusCode: 404,
+    });
   });
 
-  it('rejects the test when the retried hook is still unsafe', async () => {
-    const writeHook = vi
-      .fn()
-      .mockImplementation(({ kind }: { kind: string }) =>
-        Promise.resolve(kind === 'beforeRun' ? 'still not a hook' : null),
+  it('rewrites a spec with the user instructions and what its last run produced', async () => {
+    const { service, author, runner, store } = setup({}, [
+      { ...failed, error: 'link intercepts pointer events', logs: 'menu overlaps' },
+      passed,
+    ]);
+    const created = await service.create(context, input);
+    await service.idle();
+    const [first] = (await service.get('ws', created.id)).tests;
+    expect(await service.getTest('ws', first!.id)).toMatchObject({ status: 'failed' });
+    const calls = author.writeScript.mock.calls.length;
+
+    await service.rerunTest('ws', first!.id, true, undefined, {
+      instructions: '  Open the page by its route  ',
+      useLastRun: true,
+    });
+    await service.idle();
+    const rewrite = author.writeScript.mock.calls[calls]?.[0];
+    expect(rewrite.test.scriptInstructions).toBe('Open the page by its route');
+    expect(rewrite.previous.script).toBe(VALID);
+    expect(rewrite.previous.problem).toContain('link intercepts pointer events');
+    expect(rewrite.previous.problem).toContain('menu overlaps');
+    // The feedback is read once; the instructions stay for later rewrites.
+    expect(await service.getTest('ws', first!.id)).toMatchObject({
+      scriptInstructions: 'Open the page by its route',
+    });
+    expect((await store.getTest('ws', first!.id))?.regenerationFeedback).toBeNull();
+
+    await service.rerunTest('ws', first!.id, true);
+    await service.idle();
+    const plain = author.writeScript.mock.calls[calls + 1]?.[0];
+    expect(plain.previous).toBeUndefined();
+    expect(plain.test.scriptInstructions).toBe('Open the page by its route');
+
+    // Empty instructions clear them; a rerun without regeneration ignores the guidance.
+    await service.rerunTest('ws', first!.id, true, undefined, { instructions: ' ' });
+    await service.idle();
+    expect(await service.getTest('ws', first!.id)).toMatchObject({ scriptInstructions: null });
+    await service.rerunTest('ws', first!.id, false, undefined, { instructions: 'ignored' });
+    await service.idle();
+    expect(await service.getTest('ws', first!.id)).toMatchObject({ scriptInstructions: null });
+    expect(runner.run).toHaveBeenCalled();
+  });
+
+  it('keeps the pictures of the instructions of a test for as long as they show them', async () => {
+    const { store, artifacts, scripts, queue, worker, agents, service: plain } = setup();
+    const created = await plain.create(context, input);
+    await plain.idle();
+    const [first, second] = (await plain.get('ws', created.id)).tests;
+    const attachments = new InMemoryE2eArtifactStore();
+    const service = new E2eService({
+      store,
+      queue,
+      dispatcher: new LocalE2eDispatcher(worker),
+      artifacts,
+      attachments,
+      agents: agents as never,
+      scripts,
+    });
+    const uploaded = async (id: string) => {
+      const meta = {
+        id,
+        name: 'tela.png',
+        kind: 'image',
+        mimeType: 'image/png',
+        size: 1,
+        scope: 'e2e',
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      };
+      await attachments.put(
+        `attachments/images/ws/${id}/meta.json`,
+        Buffer.from(JSON.stringify(meta)),
       );
-    const { service, scripts } = setup({ writeHook });
-    const created = await service.create(context, input);
-    await service.idle();
-    const forTc001 = (call: unknown[]) => {
-      const [request] = call as [{ kind: string; test: { code: string } }];
-      return request.kind === 'beforeRun' && request.test.code === 'TC001';
+      await attachments.put(`attachments/images/ws/${id}/content`, Buffer.from('png'));
     };
-    expect(writeHook.mock.calls.filter(forTc001).length).toBe(2);
-    expect(scripts.commits.some((commit) => commit.path.endsWith('.before.ts'))).toBe(false);
-    const [first] = (await service.get('ws', created.id)).tests;
-    expect(first?.status).toBe('error');
-    expect(first?.error).toContain('Before Run: hook must export default async function');
+    const stateOf = async (id: string) =>
+      JSON.parse(
+        (await attachments.get(`attachments/images/ws/${id}/meta.json`))?.toString() ?? 'null',
+      ) as { status: string; owner?: string } | null;
+    const shown = '11111111-1111-4111-8111-111111111111';
+    const replaced = '22222222-2222-4222-8222-222222222222';
+    await uploaded(shown);
+    await uploaded(replaced);
+
+    // Saved with the instructions, the picture is claimed by the test: the cleanup of unsaved
+    // uploads leaves it alone.
+    await service.rerunTest('ws', first!.id, true, undefined, {
+      instructions: `Open it like this:\n\n![tela](/attachments/files/${replaced})`,
+    });
+    await plain.idle();
+    expect(await stateOf(replaced)).toMatchObject({
+      status: 'committed',
+      owner: `e2e-test:${first!.id}`,
+    });
+
+    // A new text that no longer shows it removes it; the one it shows is kept.
+    await service.rerunTest('ws', first!.id, true, undefined, {
+      instructions: `![tela](/attachments/files/${shown})`,
+    });
+    await plain.idle();
+    expect(await stateOf(replaced)).toBeNull();
+    expect(await stateOf(shown)).toMatchObject({ owner: `e2e-test:${first!.id}` });
+
+    // Another test, or a rewrite that leaves the instructions alone, does not take it away.
+    await service.rerunTest('ws', second!.id, true, undefined, { instructions: 'no pictures' });
+    await plain.idle();
+    await service.rerunTest('ws', first!.id, true);
+    await plain.idle();
+    expect(await stateOf(shown)).toMatchObject({ status: 'committed' });
+
+    // Deleting the run deletes the pictures with it.
+    await service.delete('ws', created.id);
+    expect(await stateOf(shown)).toBeNull();
+    expect(await attachments.listKeys('attachments')).toEqual([]);
   });
 
-  it('keeps no hook when the author gives up and answers nothing on the retry', async () => {
-    const writeHook = vi
-      .fn()
-      .mockImplementation(({ kind, previous }: { kind: string; previous?: unknown }) => {
-        if (kind !== 'beforeRun') return Promise.resolve(null);
-        return Promise.resolve(previous ? null : 'not a hook at all');
+  describe('environment of a single test', () => {
+    async function withEnvironments() {
+      const environments = new E2eEnvironmentService(new InMemoryE2eEnvironmentStore());
+      const admin = await environments.create('ws', {
+        name: 'Admin',
+        baseUrl: 'http://admin.local',
+        username: 'admin@example.com',
+        password: 'admin-pass',
+        variables: [{ key: 'role', value: 'admin' }],
       });
-    const { service, scripts, runner } = setup({ writeHook });
-    const created = await service.create(context, input);
-    await service.idle();
-    const forTc001 = (call: unknown[]) => {
-      const [request] = call as [{ kind: string; test: { code: string } }];
-      return request.kind === 'beforeRun' && request.test.code === 'TC001';
-    };
-    expect(writeHook.mock.calls.filter(forTc001).length).toBe(2);
-    expect(scripts.commits.some((commit) => commit.path.endsWith('.before.ts'))).toBe(false);
-    const [first] = (await service.get('ws', created.id)).tests;
-    expect(first?.status).not.toBe('error');
-    expect(runner.run.mock.calls[0]?.[0].hooks).toEqual({ beforeRun: null, afterRun: null });
+      const viewer = await environments.create('ws', {
+        name: 'Viewer',
+        baseUrl: 'http://viewer.local',
+        username: 'viewer@example.com',
+        password: 'viewer-pass',
+        variables: [{ key: 'role', value: 'viewer' }],
+      });
+      const harness = setup({}, [passed], undefined, undefined, 1, environments);
+      const created = await harness.service.create(context, {
+        ...input,
+        environmentId: admin.id,
+      });
+      await harness.service.idle();
+      const [first, second] = (await harness.service.get('ws', created.id)).tests;
+      harness.runner.run.mockClear();
+      const lastRun = () => harness.runner.run.mock.lastCall![0];
+      return {
+        ...harness,
+        environments,
+        admin,
+        viewer,
+        first: first!,
+        second: second!,
+        lastRun,
+      };
+    }
+
+    it("runs a test with its own environment while the others inherit the run's", async () => {
+      const { service, runner, environments, viewer, first, second, lastRun } =
+        await withEnvironments();
+
+      await service.rerunTest('ws', first.id, false, undefined, {}, viewer.id);
+      await service.idle();
+      expect(lastRun()).toMatchObject({
+        baseUrl: 'http://viewer.local',
+        credentials: { username: 'viewer@example.com', password: 'viewer-pass' },
+        variables: { ROLE: 'viewer' },
+      });
+      expect(await service.getTest('ws', first.id)).toMatchObject({
+        environmentId: viewer.id,
+        creation: { environmentId: expect.any(String) },
+      });
+
+      // Without a choice the test keeps its environment; another test of the run is untouched.
+      await service.rerunTest('ws', first.id);
+      await service.idle();
+      expect(lastRun().credentials.username).toBe('viewer@example.com');
+      runner.run.mockClear();
+      await service.rerunTest('ws', second.id);
+      await service.idle();
+      expect(lastRun()).toMatchObject({
+        baseUrl: 'http://localhost:5173',
+        credentials: { username: 'qa@example.com', password: 'secret-pass' },
+        variables: { ROLE: 'admin' },
+      });
+
+      // Null goes back to inheriting; an environment deleted since is inherited too.
+      await service.rerunTest('ws', first.id, false, undefined, {}, null);
+      await service.idle();
+      expect(await service.getTest('ws', first.id)).toMatchObject({ environmentId: null });
+      expect(lastRun().credentials.username).toBe('qa@example.com');
+      await service.rerunTest('ws', first.id, false, undefined, {}, viewer.id);
+      await service.idle();
+      await environments.delete('ws', viewer.id);
+      await service.rerunTest('ws', first.id);
+      await service.idle();
+      expect(lastRun().credentials.username).toBe('qa@example.com');
+    });
+
+    it('rejects an unknown environment and leaves the test as it was', async () => {
+      const { service, runner, first } = await withEnvironments();
+      await expect(
+        service.rerunTest('ws', first.id, false, undefined, {}, 'missing'),
+      ).rejects.toMatchObject({ code: 'E2E_ENVIRONMENT_NOT_FOUND' });
+      expect(await service.getTest('ws', first.id)).toMatchObject({ environmentId: null });
+      expect(runner.run).not.toHaveBeenCalled();
+      // Without saved environments at all there is nothing to choose from.
+      const bare = setup();
+      const created = await bare.service.create(context, input);
+      await bare.service.idle();
+      const [test] = (await bare.service.get('ws', created.id)).tests;
+      await expect(
+        bare.service.rerunTest('ws', test!.id, false, undefined, {}, 'any'),
+      ).rejects.toMatchObject({ code: 'E2E_ENVIRONMENT_NOT_FOUND' });
+    });
+
+    it("keeps the run's own account when the test points to the run's environment", async () => {
+      const { service, admin, first, lastRun } = await withEnvironments();
+      await service.rerunTest('ws', first.id, false, undefined, {}, admin.id);
+      await service.idle();
+      // The run was configured from this environment but signs in with the account typed on it.
+      expect(lastRun()).toMatchObject({
+        baseUrl: 'http://localhost:5173',
+        credentials: { username: 'qa@example.com' },
+        variables: { ROLE: 'admin' },
+      });
+    });
+
+    it("keeps the tunnel origin and Access token only for the run's own address", async () => {
+      const environments = new E2eEnvironmentService(new InMemoryE2eEnvironmentStore());
+      const same = await environments.create('ws', {
+        name: 'Same address',
+        baseUrl: 'https://sample.trycloudflare.com',
+        username: 'other@example.com',
+        password: 'other-pass',
+      });
+      const elsewhere = await environments.create('ws', {
+        name: 'Elsewhere',
+        baseUrl: 'https://other.example.com',
+      });
+      const { service, runner } = setup({}, [passed], undefined, undefined, 1, environments);
+      const created = await service.create(context, {
+        ...input,
+        baseUrl: 'https://sample.trycloudflare.com',
+        localOrigin: 'http://localhost:5173',
+        accessClientId: 'id.access',
+        accessClientSecret: 'secret',
+      });
+      await service.idle();
+      const [test] = (await service.get('ws', created.id)).tests;
+
+      await service.rerunTest('ws', test!.id, false, undefined, {}, same.id);
+      await service.idle();
+      expect(runner.run.mock.lastCall![0]).toMatchObject({
+        baseUrl: 'https://sample.trycloudflare.com',
+        localOrigin: 'http://localhost:5173',
+        accessToken: { clientId: 'id.access' },
+        credentials: { username: 'other@example.com' },
+      });
+
+      await service.rerunTest('ws', test!.id, false, undefined, {}, elsewhere.id);
+      await service.idle();
+      expect(runner.run.mock.lastCall![0]).toMatchObject({
+        baseUrl: 'https://other.example.com',
+        localOrigin: null,
+        accessToken: null,
+        credentials: { username: null, password: null },
+      });
+    });
+
+    it('ignores the environment of a test when the executor has none, and fails it on other errors', async () => {
+      const bare = setup();
+      const created = await bare.service.create(context, input);
+      await bare.service.idle();
+      const [test] = (await bare.service.get('ws', created.id)).tests;
+      await bare.store.updateTest('ws', test!.id, { environmentId: 'saved-elsewhere' });
+      await bare.service.rerunTest('ws', test!.id);
+      await bare.service.idle();
+      expect(await bare.service.getTest('ws', test!.id)).toMatchObject({ status: 'passed' });
+
+      const { service, environments, viewer, first } = await withEnvironments();
+      await service.rerunTest('ws', first.id, false, undefined, {}, viewer.id);
+      await service.idle();
+      vi.spyOn(environments, 'find').mockRejectedValueOnce(new Error('database down'));
+      await service.rerunTest('ws', first.id);
+      await service.idle();
+      expect(await service.getTest('ws', first.id)).toMatchObject({
+        status: 'error',
+        error: expect.stringContaining('database down'),
+      });
+    });
   });
 
   it('blocks unsafe hooks committed to the repository', async () => {
@@ -497,6 +818,105 @@ export default async function afterRun({ request }: { request: APIRequestContext
     const after = await service.getTest('ws', first!.id);
     expect(after).toMatchObject({ status: 'error' });
     expect(after.error).toContain('Before Run: import from "node:fs" is not allowed');
+  });
+
+  it('rewrites an unsafe hook once and rejects it when it stays unsafe', async () => {
+    const unsafe = "import fs from 'node:fs';\nexport default async function beforeRun() {}";
+    const safe = 'export default async function beforeRun() {}';
+    const writeHook = vi
+      .fn()
+      .mockImplementation(({ kind, previous }: { kind: string; previous?: unknown }) =>
+        Promise.resolve(kind === 'beforeRun' ? (previous ? safe : unsafe) : null),
+      );
+    const { service, scripts } = setup({ writeHook });
+    const created = await service.create(context, input);
+    await service.idle();
+    const retry = writeHook.mock.calls.find(([request]) => request.previous)?.[0];
+    expect(retry.previous.problem).toContain(
+      'The script was rejected by the security checks: import from "node:fs" is not allowed',
+    );
+    expect(scripts.commits.find((commit) => commit.path.endsWith('.before.ts'))?.message).toContain(
+      'Before Run of TC001',
+    );
+    expect((await service.get('ws', created.id)).tests[0]?.status).toBe('passed');
+
+    const stubborn = setup({ writeHook: vi.fn().mockResolvedValue(unsafe) });
+    const failed = await stubborn.service.create(context, input);
+    await stubborn.service.idle();
+    const detail = await stubborn.service.get('ws', failed.id);
+    expect(detail.tests[0]?.status).toBe('error');
+    expect(detail.tests[0]?.error).toContain('Before Run: import from "node:fs" is not allowed');
+  });
+
+  it('writes no Before Run when the rewrite of an unsafe one finds nothing to prepare', async () => {
+    const unsafe =
+      "import fs from 'node:fs';" +
+      String.fromCharCode(10) +
+      'export default async function beforeRun() {}';
+    const writeHook = vi
+      .fn()
+      .mockImplementation(({ previous }: { previous?: unknown }) =>
+        Promise.resolve(previous ? null : unsafe),
+      );
+    const { service, scripts } = setup({ writeHook });
+    const created = await service.create(context, input);
+    await service.idle();
+    expect(scripts.commits.some((commit) => commit.path.endsWith('.before.ts'))).toBe(false);
+    expect((await service.get('ws', created.id)).tests[0]?.status).toBe('passed');
+  });
+
+  it('tells the paired chats when a run fails before its tests finish', async () => {
+    const notifier = { runFinished: vi.fn().mockResolvedValue(undefined) };
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { service } = setup(
+      { plan: vi.fn().mockRejectedValue(new Error('Model unavailable\nretry later')) },
+      [passed],
+      undefined,
+      notifier,
+    );
+    const created = await service.create(context, input);
+    await service.idle();
+    expect((await service.get('ws', created.id)).status).toBe('failed');
+    expect(notifier.runFinished).toHaveBeenCalledWith({
+      workspaceId: 'ws',
+      kind: 'e2e',
+      name: 'ama',
+      status: 'error',
+      summary: expect.stringContaining('Model unavailable'),
+    });
+    expect(notifier.runFinished.mock.calls[0]![0].summary).not.toContain('\n');
+    errorLog.mockRestore();
+  });
+
+  it('commits the hooks of a plan written by the MCP host and rejects unsafe ones', async () => {
+    const { service, scripts } = setup();
+    const created = await service.create(context, { ...input, planning: 'host' });
+    await service.idle();
+    const test = {
+      title: 'Create event',
+      description: 'd',
+      priority: 'high' as const,
+      steps: ['a'],
+      script: VALID,
+    };
+    const beforeRun = 'export default async function beforeRun() {}';
+    await expect(
+      service.savePlan('ws', created.id, {
+        tests: [{ ...test, beforeRun: "import fs from 'node:fs';", afterRun: '   ' }],
+      }),
+    ).rejects.toMatchObject({
+      code: 'E2E_SCRIPT_REJECTED',
+      technicalMessage: expect.stringContaining('TC001: Before Run: '),
+    });
+    await service.savePlan('ws', created.id, {
+      tests: [{ ...test, beforeRun, afterRun: '   ' }],
+    });
+    expect(scripts.commits.map((commit) => commit.path)).toEqual([
+      'tests/e2e/tc001-create-event.spec.ts',
+      'tests/e2e/tc001-create-event.before.ts',
+    ]);
+    expect(scripts.commits[1]?.message).toBe('test(e2e): add Before Run of TC001 - Create event');
+    await service.idle();
   });
 
   it('rewrites specs that were deleted from the repository', async () => {
@@ -637,6 +1057,59 @@ export default async function afterRun({ request }: { request: APIRequestContext
     expect(runner.run).toHaveBeenCalledOnce();
   });
 
+  it('runs the tests of an execution in parallel browsers', async () => {
+    const { service, runner } = setup({}, [passed], undefined, undefined, 2);
+    let active = 0;
+    let peak = 0;
+    runner.run.mockImplementation(async () => {
+      peak = Math.max(peak, ++active);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      active--;
+      return passed;
+    });
+    const created = await service.create(context, input);
+    await service.idle();
+    const detail = await service.get('ws', created.id);
+    expect(detail.status).toBe('completed');
+    expect(detail.tests.map((test) => test.status)).toEqual(['passed', 'passed']);
+    expect(peak).toBe(2);
+  });
+
+  it('never runs more browsers than the concurrency allows', async () => {
+    const { service, runner } = setup({}, [passed], undefined, undefined, 1);
+    let active = 0;
+    let peak = 0;
+    runner.run.mockImplementation(async () => {
+      peak = Math.max(peak, ++active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active--;
+      return passed;
+    });
+    await service.create(context, input);
+    await service.idle();
+    expect(peak).toBe(1);
+  });
+
+  it('commits the specs of parallel tests one at a time', async () => {
+    const { service, scripts } = setup({}, [passed], undefined, undefined, 2);
+    let writing = 0;
+    let overlap = false;
+    const write = scripts.writeFile.bind(scripts);
+    scripts.writeFile = async (...args: Parameters<typeof write>) => {
+      if (++writing > 1) overlap = true;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      try {
+        return await write(...args);
+      } finally {
+        writing--;
+      }
+    };
+    await service.create(context, input);
+    await service.idle();
+    expect(overlap).toBe(false);
+    expect(scripts.commits.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('continues with the next test when one test errors', async () => {
     const { service, runner } = setup();
     runner.run.mockRejectedValueOnce(new Error('spawn failed')).mockResolvedValue(passed);
@@ -668,11 +1141,15 @@ export default async function afterRun({ request }: { request: APIRequestContext
     expect((await service.get('ws', created.id)).status).toBe('completed');
 
     const [first] = (await service.get('ws', created.id)).tests;
-    runner.explore.mockRejectedValueOnce(new Error('offline'));
     await service.rerunTest('ws', first!.id, true);
     await service.idle();
     expect(author.writeScript).toHaveBeenCalledOnce();
-    expect(author.writeScript.mock.calls[0]?.[0].snapshot).toBeNull();
+    // The rewrite reuses the snapshot the plan captured minutes ago instead of opening the site.
+    expect(author.writeScript.mock.calls[0]?.[0].snapshot).toEqual({
+      startUrl: 'http://localhost:5173/e/123',
+      pages: [],
+    });
+    expect(runner.explore).not.toHaveBeenCalled();
     const test = await service.getTest('ws', first!.id);
     expect(test).toMatchObject({ status: 'passed', attempts: 3 });
   });
@@ -753,6 +1230,84 @@ export default async function afterRun({ request }: { request: APIRequestContext
     await expect(service.update('ws', 'missing', input)).rejects.toMatchObject({
       code: 'E2E_CREATION_NOT_FOUND',
     });
+  });
+
+  it('never lets the execution of one test get in the way of another test of the run', async () => {
+    const { service, runner, store } = setup({}, [passed], undefined, undefined, 1, undefined, 2);
+    const created = await service.create(context, input);
+    await service.idle();
+    const [first, second] = (await service.get('ws', created.id)).tests;
+    let release!: (result: E2eRunResult) => void;
+    runner.run.mockImplementationOnce(
+      () =>
+        new Promise<E2eRunResult>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    await service.rerunTest('ws', first!.id, false);
+    await vi.waitFor(async () =>
+      expect((await service.getTest('ws', first!.id)).status).toBe('running'),
+    );
+
+    // The same test, or the whole run, still cannot start twice...
+    await expect(service.rerunTest('ws', first!.id)).rejects.toMatchObject({
+      code: 'E2E_ALREADY_RUNNING',
+    });
+    await expect(service.pushScript('ws', first!.id, VALID)).rejects.toMatchObject({
+      code: 'E2E_ALREADY_RUNNING',
+    });
+    await expect(service.rerun('ws', created.id)).rejects.toMatchObject({
+      code: 'E2E_ALREADY_RUNNING',
+    });
+    // ...but the other test is free to be edited, regenerated and run meanwhile.
+    expect(await service.pushScript('ws', second!.id, VALID)).toMatchObject({ content: VALID });
+    await service.rerunTest('ws', second!.id, true);
+    await vi.waitFor(async () =>
+      expect((await service.getTest('ws', second!.id)).status).toBe('passed'),
+    );
+    await vi.waitFor(async () => expect(await store.getCreation('ws', created.id)).toBeTruthy());
+
+    // The first test is untouched by the other one ending, and so is the run's status.
+    expect((await service.getTest('ws', first!.id)).status).toBe('running');
+    expect((await service.get('ws', created.id)).status).toBe('running');
+
+    release(passed);
+    await service.idle();
+    expect((await service.getTest('ws', first!.id)).status).toBe('passed');
+    expect((await service.get('ws', created.id)).status).toBe('completed');
+  });
+
+  it('only fails the test of the job that crashed, not the ones other jobs are running', async () => {
+    const { service, runner } = setup({}, [passed], undefined, undefined, 1, undefined, 2);
+    const created = await service.create(context, input);
+    await service.idle();
+    const [first, second] = (await service.get('ws', created.id)).tests;
+    let release!: (result: E2eRunResult) => void;
+    runner.run
+      .mockImplementationOnce(
+        () =>
+          new Promise<E2eRunResult>((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(new E2eRunnerError('E2E_BROWSER_NOT_INSTALLED', 'no browser'));
+
+    await service.rerunTest('ws', first!.id, false);
+    await vi.waitFor(async () =>
+      expect((await service.getTest('ws', first!.id)).status).toBe('running'),
+    );
+    await service.rerunTest('ws', second!.id, false);
+    await vi.waitFor(async () =>
+      expect((await service.getTest('ws', second!.id)).status).toBe('error'),
+    );
+    expect((await service.getTest('ws', first!.id)).status).toBe('running');
+    expect((await service.get('ws', created.id)).status).toBe('running');
+
+    release(passed);
+    await service.idle();
+    expect((await service.getTest('ws', first!.id)).status).toBe('passed');
+    expect((await service.get('ws', created.id)).status).toBe('completed');
   });
 
   it('lets the MCP host plan and write the specs without a workspace LLM', async () => {
@@ -1013,6 +1568,31 @@ export default async function afterRun({ request }: { request: APIRequestContext
     expect(detail.tests.map((item) => item.status)).toEqual(['passed', 'error']);
   });
 
+  it('wakes the worker again after startup, to find the jobs the previous process abandoned', async () => {
+    vi.useFakeTimers();
+    try {
+      const wake = vi.fn().mockResolvedValue(undefined);
+      const { store, artifacts, queue } = setup();
+      const restarted = new E2eService({
+        store,
+        artifacts,
+        queue,
+        dispatcher: { wake },
+        agents: {} as never,
+        scripts: new FakeScriptRepository(),
+      });
+      await restarted.recover();
+      expect(wake).toHaveBeenCalledTimes(1);
+      // Its heartbeats are still recent at startup: it is judged abandoned only a while later.
+      await vi.advanceTimersByTimeAsync(129_000);
+      expect(wake).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(wake).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('validates input and lookups', async () => {
     const { service, agents } = setup();
     await expect(service.create({ requestId: 'r' }, input)).rejects.toMatchObject({
@@ -1269,5 +1849,46 @@ describe('describeError', () => {
       'raw text',
     );
     expect(describeError('plain', 'en-US')).toBe('plain');
+  });
+});
+
+describe('E2eService with a folder of this computer', () => {
+  const local = {
+    provider: 'local' as const,
+    id: 'D:\Projects\finance-app-demo',
+    branch: '',
+    path: 'tests/e2e',
+  };
+
+  it('keeps the specs in the chosen folder when the app can read it', async () => {
+    const { service, scripts } = setup();
+    Object.assign(scripts, {
+      resolveFolder: vi
+        .fn()
+        .mockResolvedValue({ id: local.id, name: 'finance-app-demo', defaultBranch: 'main' }),
+    });
+    const created = await service.create(context, { ...input, repository: local });
+    expect(created.repository).toEqual({
+      provider: 'local',
+      id: local.id,
+      name: 'finance-app-demo',
+      branch: 'main',
+      path: 'tests/e2e',
+    });
+    // A branch picked by the user wins over the one checked out.
+    const named = await service.create(context, {
+      ...input,
+      repository: { ...local, branch: 'feature/x' },
+    });
+    expect(named.repository?.branch).toBe('feature/x');
+    await service.idle();
+  });
+
+  it('refuses a folder where the app cannot read the disk (hosted ADK)', async () => {
+    const { service } = setup();
+    await expect(service.create(context, { ...input, repository: local })).rejects.toMatchObject({
+      code: 'E2E_LOCAL_FOLDER_UNAVAILABLE',
+      statusCode: 409,
+    });
   });
 });

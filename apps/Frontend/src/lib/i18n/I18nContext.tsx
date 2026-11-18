@@ -19,6 +19,8 @@ const DICTIONARIES: Record<SupportedLocale, I18nDictionary> = {
 export interface I18nContextValue {
   readonly locale: SupportedLocale;
   readonly setLocale: (locale: SupportedLocale) => void;
+  /** Typed dictionary for the active locale, read as `messages.feature.key`. */
+  readonly messages: I18nDictionary;
   readonly t: (key: TranslationKey, params?: Record<string, string | number>) => string;
   readonly formatDate: (
     date: Date | string | number,
@@ -41,6 +43,32 @@ export function getInitialLocale(): SupportedLocale {
   }
 
   return DEFAULT_LOCALE;
+}
+
+export type MessageParams = Record<string, string | number>;
+
+/**
+ * Replaces `{name}` and `{{name}}` placeholders in a dictionary template in one pass, so values
+ * are inserted verbatim (a `$&` or a `{other}` inside a value is never expanded).
+ * Placeholders without a value are kept.
+ */
+export function formatMessage(template: string, params?: MessageParams): string {
+  if (!params) return template;
+  return template.replace(/\{\{(\w+)\}\}|\{(\w+)\}/g, (match, double?: string, single?: string) => {
+    const key = (double ?? single) as string;
+    return Object.hasOwn(params, key) ? String(params[key]) : match;
+  });
+}
+
+/** Locale of the mounted provider, recorded while it renders so its children already read it. */
+let activeLocale: SupportedLocale = DEFAULT_LOCALE;
+
+/**
+ * Dictionary for code outside React components (pure helpers, thrown errors), in the locale of
+ * the mounted provider. Inside components prefer `useI18n().messages`, which re-renders on change.
+ */
+export function getMessages(locale: SupportedLocale = activeLocale): I18nDictionary {
+  return DICTIONARIES[locale];
 }
 
 function resolvePath(obj: Record<string, unknown>, path: string): string | undefined {
@@ -84,23 +112,24 @@ export const I18nProvider: React.FC<I18nProviderProps> = ({
     document.documentElement.lang = locale;
   }, [locale]);
 
+  useEffect(
+    () => () => {
+      activeLocale = DEFAULT_LOCALE;
+    },
+    [],
+  );
+
   const value = useMemo<I18nContextValue>(() => {
+    activeLocale = locale;
     const dictionary = DICTIONARIES[locale];
     const fallbackDictionary = DICTIONARIES[DEFAULT_LOCALE];
 
     const t = (key: TranslationKey, params?: Record<string, string | number>): string => {
-      let message = resolvePath(dictionary as unknown as Record<string, unknown>, key);
-      if (!message) {
-        message = resolvePath(fallbackDictionary as unknown as Record<string, unknown>, key) ?? '';
-      }
-
-      if (params) {
-        for (const [k, v] of Object.entries(params)) {
-          message = message.replace(new RegExp(`\\{\\{${k}\\}\\}|\\{${k}\\}`, 'g'), String(v));
-        }
-      }
-
-      return message;
+      const message =
+        resolvePath(dictionary as unknown as Record<string, unknown>, key) ||
+        resolvePath(fallbackDictionary as unknown as Record<string, unknown>, key) ||
+        '';
+      return formatMessage(message, params);
     };
 
     const formatDate = (
@@ -118,6 +147,7 @@ export const I18nProvider: React.FC<I18nProviderProps> = ({
     return {
       locale,
       setLocale,
+      messages: dictionary,
       t,
       formatDate,
       formatNumber,
@@ -130,15 +160,9 @@ export const I18nProvider: React.FC<I18nProviderProps> = ({
 const defaultI18nValue: I18nContextValue = {
   locale: 'pt-BR',
   setLocale: () => {},
-  t: (key: TranslationKey, params?: Record<string, string | number>): string => {
-    let message = resolvePath(ptBR as unknown as Record<string, unknown>, key) ?? '';
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        message = message.replace(new RegExp(`\\{\\{${k}\\}\\}|\\{${k}\\}`, 'g'), String(v));
-      }
-    }
-    return message;
-  },
+  messages: ptBR,
+  t: (key: TranslationKey, params?: Record<string, string | number>): string =>
+    formatMessage(resolvePath(ptBR as unknown as Record<string, unknown>, key) ?? '', params),
   formatDate: (date: Date | string | number, options?: Intl.DateTimeFormatOptions): string => {
     const d = date instanceof Date ? date : new Date(date);
     return new Intl.DateTimeFormat('pt-BR', options).format(d);

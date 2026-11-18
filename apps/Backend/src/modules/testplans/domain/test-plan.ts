@@ -278,9 +278,47 @@ function tryParseJson(text: string): unknown {
       return JSON.parse(withoutTrailingCommas);
     } catch {
       const sanitized = sanitizeJsonStrings(withoutTrailingCommas);
-      return JSON.parse(sanitized);
+      try {
+        return JSON.parse(sanitized);
+      } catch (error) {
+        const salvaged = salvageCompleteObjects(sanitized);
+        if (!salvaged) throw error;
+        return JSON.parse(salvaged);
+      }
     }
   }
+}
+
+/**
+ * An answer cut off midway (the model ran out of output on a long requirement) still holds the
+ * cases it finished: keep those instead of losing the whole answer.
+ */
+function salvageCompleteObjects(text: string): string | null {
+  const start = text.indexOf('[');
+  if (start === -1) return null;
+  const objects: string[] = [];
+  let depth = 0;
+  let objectStart = -1;
+  let inString = false;
+  let isEscaped = false;
+  for (let i = start + 1; i < text.length; i += 1) {
+    const char = text[i]!;
+    if (inString) {
+      if (isEscaped) isEscaped = false;
+      else if (char === '\\') isEscaped = true;
+      else if (char === '"') inString = false;
+    } else if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      if (depth === 0) objectStart = i;
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) objects.push(text.slice(objectStart, i + 1));
+      if (depth < 0) break;
+    }
+  }
+  return objects.length ? `[${objects.join(',')}]` : null;
 }
 
 function sanitizeJsonStrings(json: string): string {

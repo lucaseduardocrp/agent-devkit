@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IntegrationTestsView } from '../src/features/apitests/IntegrationTestsView.js';
 import { LoadTestsView } from '../src/features/apitests/LoadTestsView.js';
 import type {
@@ -486,5 +486,38 @@ describe('LoadTestsView', () => {
     expect(within(detail).getByText('210 ms', { selector: 'dd' })).toBeInTheDocument();
     expect(within(detail).getByTestId('timeline-chart')).toBeInTheDocument();
     expect(within(detail).getByText('HTTP 500')).toBeInTheDocument();
+  });
+});
+
+describe('run target in the desktop app', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, 'adkDesktop', {
+      value: { apiUrl: 'http://127.0.0.1:60675' },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'adkDesktop');
+  });
+
+  it('hides the choice and sends integration requests from this computer', async () => {
+    const api = integrationClient();
+    const view = render(<IntegrationTestsView apiClient={api as unknown as ApiClient} />);
+    await view.findByTestId('request-editor');
+    expect(view.queryByTestId('run-target')).toBeNull();
+    fireEvent.click(view.getByTestId('run-request'));
+    await waitFor(() =>
+      expect(api.startIntegrationRun).toHaveBeenCalledWith(
+        expect.objectContaining({ target: 'remote' }),
+      ),
+    );
+  });
+
+  it('hides the choice in load tests', async () => {
+    const api = loadClient();
+    const view = render(<LoadTestsView apiClient={api as unknown as ApiClient} />);
+    fireEvent.click(await view.findByTestId('scenario-Peak'));
+    await view.findByLabelText('List orders');
+    expect(view.queryByTestId('run-target')).toBeNull();
   });
 });

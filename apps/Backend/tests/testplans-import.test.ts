@@ -12,7 +12,10 @@ import {
   keepCaseMetadata,
   listAllSavedTestPlans,
 } from '../src/modules/testplans/application/saved-test-plans.js';
-import { SavedTestCaseReader } from '../src/modules/testplans/application/saved-test-cases.js';
+import {
+  SavedTestCaseReader,
+  savedCasesOf,
+} from '../src/modules/testplans/application/saved-test-cases.js';
 import {
   InMemoryTestSuiteStore,
   TestSuiteService,
@@ -332,6 +335,41 @@ describe('importing test cases from a test management platform', () => {
       setup(huge).importer.import(WS, { provider: 'azure_devops', planId: '10' }),
     ).rejects.toMatchObject({ code: 'TEST_IMPORT_TOO_LARGE' });
   });
+
+  it('reads the suites a few at a time, in order, and stops reading after a failure', async () => {
+    const suites = Array.from({ length: 12 }, (_, index) => ({
+      id: String(index + 1),
+      name: `S${index + 1}`,
+    }));
+    const provider = fakeProvider({ suites });
+    let running = 0;
+    let peak = 0;
+    provider.listCases.mockImplementation(async ({ suiteId }: { suiteId?: string }) => {
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      running--;
+      return [remoteCase(`${suiteId}00`, suiteId!)];
+    });
+    const result = await setup(provider).importer.import(WS, {
+      provider: 'azure_devops',
+      planId: '10',
+    });
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(5);
+    expect(result.plans.map((plan) => plan.title)).toEqual(suites.map((suite) => suite.name));
+
+    const failing = fakeProvider({ suites });
+    failing.listCases.mockImplementation(async ({ suiteId }: { suiteId?: string }) => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      if (suiteId === '1') throw new Error('platform down');
+      return [remoteCase(`${suiteId}00`, suiteId!)];
+    });
+    await expect(
+      setup(failing).importer.import(WS, { provider: 'azure_devops', planId: '10' }),
+    ).rejects.toThrow('platform down');
+    expect(failing.listCases.mock.calls.length).toBeLessThan(suites.length);
+  });
 });
 
 describe('saved test case metadata', () => {
@@ -359,6 +397,45 @@ describe('saved test case metadata', () => {
       },
       { title: 'B', description: '', steps: [] },
     ]);
+  });
+
+  it('keeps case ids by position when the client sends none, unless another case claims them', () => {
+    const previous = [
+      { title: 'A', description: '', steps: [], metadata: { caseId: 'a', extra: 1 } },
+      { title: 'B', description: '', steps: [], metadata: { caseId: 'b' } },
+      { title: 'C', description: '', steps: [] },
+    ];
+    const kept = keepCaseMetadata(previous, [
+      { title: 'A2', description: '', steps: [] },
+      { title: 'B2', description: '', steps: [], metadata: { caseId: 'a' } },
+      { title: 'C2', description: '', steps: [] },
+    ]);
+    // Position 0 would reuse "a", but the second case claims it; position 2 had no id.
+    expect(kept[0]!.metadata).toBeUndefined();
+    expect(kept[1]!.metadata).toEqual({ caseId: 'a', extra: 1 });
+    expect(kept[2]!.metadata).toBeUndefined();
+    const byPosition = keepCaseMetadata(previous, [
+      { title: 'A2', description: '', steps: [] },
+      { title: 'B2', description: '', steps: [] },
+    ]);
+    expect(byPosition.map((item) => item.metadata)).toEqual([
+      { caseId: 'a', extra: 1 },
+      { caseId: 'b' },
+    ]);
+  });
+
+  it('reads cases whose description still holds structured sections', async () => {
+    const plans = new InMemorySavedTestPlanStore();
+    const saved = await plans.save(
+      createSavedTestPlan('ws', { title: 'P' }, [
+        {
+          title: 'T',
+          description: { useCase: 'Valida' } as unknown as string,
+          steps: [{ action: 'Abrir', expectedResult: 'Aberto' }],
+        },
+      ]),
+    );
+    expect(savedCasesOf(saved)[0]!.description).toContain('Valida');
   });
 
   it('keeps imported fields when the web app saves an edited Test Plan', async () => {

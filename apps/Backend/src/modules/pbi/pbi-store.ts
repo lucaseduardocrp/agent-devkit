@@ -34,6 +34,8 @@ export interface PbiSearchOptions {
   externalId?: string;
   providerId?: string;
   iterationPath?: string;
+  /** Text of the title, or the id the item has in its provider. */
+  q?: string;
   page: number;
   pageSize: number;
 }
@@ -124,7 +126,12 @@ export class InMemoryPbiStore implements PbiStore {
           item.links.some((link) => link.providerId === options.providerId)) &&
         (!options.iterationPath ||
           (typeof item.sourceData.iterationPath === 'string' &&
-            item.sourceData.iterationPath.includes(options.iterationPath))),
+            item.sourceData.iterationPath.includes(options.iterationPath))) &&
+        (!options.q ||
+          item.title
+            .toLocaleLowerCase()
+            .includes(options.q.replace(/^#/, '').toLocaleLowerCase()) ||
+          item.links.some((link) => link.externalId.startsWith(options.q!.replace(/^#/, '')))),
     );
     const offset = (options.page - 1) * options.pageSize;
     return {
@@ -251,6 +258,14 @@ export class PrismaPbiStore implements PbiStore {
       ...(options.iterationPath
         ? {
             sourceData: { path: ['iterationPath'], string_contains: options.iterationPath },
+          }
+        : {}),
+      ...(options.q
+        ? {
+            OR: [
+              { title: { contains: options.q.replace(/^#/, ''), mode: 'insensitive' } },
+              { links: { some: { externalId: { startsWith: options.q.replace(/^#/, '') } } } },
+            ],
           }
         : {}),
     };

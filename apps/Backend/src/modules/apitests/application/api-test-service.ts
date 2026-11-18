@@ -7,6 +7,11 @@ import type { LlmPort } from '../../agents/application/agent-ports.js';
 import { PromptInjectionGuard } from '../../agents/application/prompt-injection-guard.js';
 import type { DynamicProviderFactory } from '../../integrations/application/dynamic-provider-factory.js';
 import {
+  formatDuration,
+  type RunFinishedEvent,
+  type RunNotifier,
+} from '../../messaging/application/run-notifier.js';
+import {
   collectionInputSchema,
   defaultThresholds,
   LIMITS,
@@ -28,7 +33,9 @@ import { peakVus, profileStages, totalDuration } from '../engine/load-profiles.j
 import type {
   ApiItem,
   ApiRequestSpec,
+  CollectionRunResult,
   LoadProfileType,
+  LoadSummary,
   RuntimeState,
   Variable,
 } from '../engine/types.js';
@@ -52,7 +59,12 @@ import {
 } from '../formats/ci.js';
 import { exportK6 } from '../formats/k6.js';
 import { zip } from '../formats/zip.js';
-import type { ApiTestStore, ExecutorOutcome, PersonalValueScope } from './api-test-store.js';
+import type {
+  ApiTestStore,
+  ExecutorOutcome,
+  PersonalValueScope,
+  RunOutcome,
+} from './api-test-store.js';
 import type { CiRepositoryGateway } from './ci-repository.js';
 import {
   EMPTY_RUNTIME,
@@ -105,6 +117,8 @@ export interface ApiTestServiceOptions {
    * shared/host-access.ts). Otherwise remote runs to localhost are refused up front.
    */
   readonly workersReachLocalhost?: boolean;
+  /** Tells the workspace's paired chats (Telegram) that a run ended. */
+  readonly notifier?: RunNotifier;
   /** The connected Git repositories where collections and their pipelines are written. */
   readonly repositories?: CiRepositoryGateway;
 }
@@ -280,7 +294,9 @@ export class ApiTestService {
     if (!strip(stored).extracted.size) return stored;
     // Re-read right before writing so a concurrent save is not overwritten with old content
     // (a document migrated meanwhile has nothing left to move and is written back unchanged).
-    const fresh = (await this.store.getCollection(stored.workspaceId, stored.id)) ?? stored;
+    const fresh =
+      (await this.store.getCollection(stored.workspaceId, stored.id)) ??
+      /* v8 ignore next -- deleted between the two reads */ stored;
     const { shared, extracted } = strip({ ...fresh, variables: this.openLegacy(fresh.variables) });
     await this.adoptLegacy(
       {
@@ -300,7 +316,9 @@ export class ApiTestService {
    */
   private async migrateEnvironment(stored: ApiEnvironment): Promise<ApiEnvironment> {
     if (!stripVariables(stored.variables).extracted.size) return stored;
-    const fresh = (await this.store.getEnvironment(stored.workspaceId, stored.id)) ?? stored;
+    const fresh =
+      (await this.store.getEnvironment(stored.workspaceId, stored.id)) ??
+      /* v8 ignore next -- deleted between the two reads */ stored;
     const { shared, extracted } = stripVariables(this.openLegacy(fresh.variables));
     if (fresh.createdBy) {
       await this.adoptLegacy(
@@ -791,9 +809,7 @@ export class ApiTestService {
     if (!parsed.success) {
       throw invalid(
         'The run options are not valid.',
-        // A failed safeParse always carries at least one issue, each with a message.
-        /* v8 ignore next */
-        parsed.error.issues[0]?.message ?? '',
+        parsed.error.issues[0]!.message,
         parsed.error.issues
           .slice(0, 20)
           .map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
@@ -1029,6 +1045,7 @@ export class ApiTestService {
         console.warn('[ApiTestService] Could not keep the runtime state:', error);
       }
     }
+    if (saved) await this.options.notifier?.runFinished(runFinishedEvent(run, recorded));
     return saved;
   }
 
@@ -1373,7 +1390,7 @@ export function extractJson(text: string): Record<string, unknown> {
   const start = candidate.indexOf('{');
   const end = candidate.lastIndexOf('}');
   if (start < 0 || end <= start) throw new Error('no JSON object in the answer');
-  // The slice starts with '{' and ends with '}', so it parses to an object or throws.
+  // The slice runs from `{` to `}`, so it parses to an object or throws.
   return JSON.parse(candidate.slice(start, end + 1)) as Record<string, unknown>;
 }
 
@@ -1462,3 +1479,26 @@ Answer with only one JSON object in this shape:
 }`;
 
 export const GENERATION_FORMAT = { collection: COLLECTION_SHAPE };
+
+function runFinishedEvent(run: ApiRun, outcome: RunOutcome): RunFinishedEvent {
+  let summary = outcome.error?.split('\n')[0]?.slice(0, 300) ?? '';
+  if (outcome.result && run.kind === 'integration') {
+    const result = outcome.result as CollectionRunResult;
+    summary = `${result.passed}/${result.total} passed · ${formatDuration(result.durationMs)}`;
+  } else if (outcome.result) {
+    const result = outcome.result as LoadSummary;
+    summary = [
+      `${result.totalRequests} requests`,
+      `${(result.errorRate * 100).toFixed(1)}% errors`,
+      `p95 ${Math.round(result.latency.p95)} ms`,
+      `${result.rps.toFixed(1)} req/s`,
+    ].join(' · ');
+  }
+  return {
+    workspaceId: run.workspaceId,
+    kind: run.kind,
+    name: run.name,
+    status: outcome.status,
+    summary,
+  };
+}

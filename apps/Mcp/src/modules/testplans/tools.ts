@@ -4,6 +4,7 @@ import { definePrompt } from '../../core/prompt.js';
 import type { McpModule } from '../../core/registry.js';
 import { defineTool, json, text } from '../../core/tool.js';
 import { getWorkflowBrief } from '../agents/tools.js';
+import { templateFieldValues } from '../field-mappings/tools.js';
 import { id, page, pageSize, untrusted, UNTRUSTED_CONTENT_RULE } from '../shared.js';
 
 const testPlanId = id('Saved Test Plan id (from testplans_list).');
@@ -27,7 +28,15 @@ const generationInput = {
     .min(1)
     .optional()
     .describe('Brain pageId, spec id or PBI id of the source.'),
-  suiteId: z.string().trim().min(1).optional().describe('Suite to save into (default: "Test").'),
+  userPrompt: z.string().trim().optional().describe('Extra instructions from the user.'),
+  format: z.string().trim().optional().describe('CSV format; platformProvider takes precedence.'),
+  suiteId: z
+    .string()
+    .trim()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe('Suite to save into (default: "Test").'),
   assignedTo: z.string().trim().optional(),
   areaPath: z.string().trim().optional().describe('Azure DevOps area path used in the CSV export.'),
   platformProvider: z.string().trim().optional().describe('CSV dialect, e.g. azure.'),
@@ -53,6 +62,7 @@ const description = z
     flow: z
       .array(
         z.union([
+          z.string().max(200),
           z.object({ step: z.string().max(200) }),
           z.object({
             decision: z.string().max(200),
@@ -99,6 +109,13 @@ export const testPlansModule: McpModule = {
         title: generationInput.title,
         criteria: generationInput.criteria,
         agentId: generationInput.agentId,
+        userPrompt: generationInput.userPrompt,
+        format: generationInput.format,
+        sourceType: generationInput.sourceType,
+        sourceId: generationInput.sourceId,
+        areaPath: generationInput.areaPath,
+        assignedTo: generationInput.assignedTo,
+        platformProvider: generationInput.platformProvider,
       },
       run: async (input, { api }) => {
         const [brief, workflowBrief] = await Promise.all([
@@ -134,7 +151,12 @@ export const testPlansModule: McpModule = {
         plans: z.array(plan).min(1).max(100),
         sourceType: generationInput.sourceType,
         sourceId: generationInput.sourceId,
-        suiteId: generationInput.suiteId,
+        suiteId: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe('Suite to save into (default: "Test").'),
         assignedTo: generationInput.assignedTo,
         areaPath: generationInput.areaPath,
         platformProvider: generationInput.platformProvider,
@@ -370,6 +392,19 @@ export const testPlansModule: McpModule = {
           .regex(/^[1-9]\d*$/)
           .optional()
           .describe('Existing remote parent suite ID in remotePlanId.'),
+        remoteSuiteName: z
+          .string()
+          .trim()
+          .min(1)
+          .max(255)
+          .optional()
+          .describe('Name of the child suite to create; needs remoteParentSuiteId.'),
+        templateId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe('Test case field mapping template (see field_mappings_list).'),
+        fieldValues: templateFieldValues,
         remoteSuiteId: z
           .string()
           .regex(/^[1-9]\d*$/)

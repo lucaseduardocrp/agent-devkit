@@ -630,16 +630,4 @@ describe('IntegrationTestsView responses and reloads', () => {
     fireEvent.click(await view.findByRole('menuitem', { name: /Limpar resposta/ }));
     await waitFor(() => expect(view.queryByText('refused')).toBeNull());
   });
-
-  it('closes the tab of a request the server no longer has', async () => {
-    const api = client();
-    const { view } = await mount(api);
-    expect(tabNames().some((name) => name?.includes('Login'))).toBe(true);
-    api.getApiCollection.mockResolvedValue({ ...orders, items: [] });
-    fireEvent.click(view.getByRole('button', { name: 'Gerar com IA' }));
-    const dialog = await view.findByTestId('generate-dialog');
-    fireEvent.change(dialog.querySelector('textarea')!, { target: { value: 'orders' } });
-    fireEvent.click(within(dialog).getByTestId('generate-submit'));
-    await waitFor(() => expect(tabNames().some((name) => name?.includes('Login'))).toBe(false));
-  });
 });

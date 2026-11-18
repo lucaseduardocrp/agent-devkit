@@ -64,7 +64,11 @@ const allowedAttributes: Readonly<Record<string, readonly string[]>> = {
   TH: ['colspan', 'rowspan'],
   DETAILS: ['open'],
   IMG: ['src', 'alt', 'title', 'width', 'height'],
+  // Only a text colour survives (see SAFE_TEXT_COLOR), so documents can colour words.
+  SPAN: ['style'],
 };
+
+const SAFE_TEXT_COLOR = /^color:\s*#[0-9a-f]{3,8};?$/i;
 
 export const INLINE_HTML_TAG =
   /<\/?(?:a|abbr|b|br|code|del|em|i|img|ins|kbd|mark|s|small|span|strong|sub|sup|u)\b[^>]*>/i;
@@ -85,6 +89,12 @@ export function sanitizeHtml(value: string): string {
     const keep = allowedAttributes[element.tagName] ?? [];
     for (const attribute of [...element.attributes]) {
       if (!keep.includes(attribute.name)) element.removeAttribute(attribute.name);
+    }
+    if (
+      element.tagName === 'SPAN' &&
+      !SAFE_TEXT_COLOR.test(element.getAttribute('style')?.trim() ?? '')
+    ) {
+      element.removeAttribute('style');
     }
     if (element.tagName === 'IMG' && !isSafeImageSource(element.getAttribute('src') ?? '')) {
       element.remove();

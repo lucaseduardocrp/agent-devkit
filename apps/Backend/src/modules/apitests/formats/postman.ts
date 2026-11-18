@@ -191,8 +191,7 @@ function bodyFrom(value: unknown, headers: KeyValue[]): RequestBody {
   }
 }
 
-/* v8 ignore next -- splitting a string always yields at least one part */
-const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+const baseName = (path: string) => path.split(/[\\/]/).pop()!;
 
 function graphqlFrom(value: unknown): ApiRequestSpec['graphql'] {
   if (!isObject(value) || value['mode'] !== 'graphql') return undefined;
@@ -368,9 +367,8 @@ const authParams = (entries: Record<string, string | boolean | number | undefine
 function authTo(auth: RequestAuth | undefined): Json | undefined {
   if (!auth || auth.type === 'inherit') return undefined;
   switch (auth.type) {
-    case 'none':
     // Postman has no WSSE auth: there the header needs a pre-request script.
-    // falls through
+    case 'none':
     case 'wsse':
       return { type: 'noauth' };
     case 'bearer':

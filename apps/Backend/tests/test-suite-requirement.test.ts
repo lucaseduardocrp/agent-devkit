@@ -22,7 +22,13 @@ interface Call {
 }
 
 /** A fake Azure DevOps: 50 is a PBI, 51 a Bug, 60 a Task, and test cases get ids from 100. */
-function azure(overrides: { failSuiteCreation?: number; caseRelations?: unknown[] } = {}) {
+function azure(
+  overrides: {
+    failSuiteCreation?: number;
+    caseRelations?: unknown[];
+    answer?: (url: string) => { status?: number; data?: unknown } | undefined;
+  } = {},
+) {
   const calls: Call[] = [];
   let nextCase = 100;
   let nextSuite = 20;
@@ -33,6 +39,8 @@ function azure(overrides: { failSuiteCreation?: number; caseRelations?: unknown[
     calls.push({ method, url, body });
     const reply = (data: unknown, status = 200) =>
       ({ ok: status < 400, status, json: async () => data }) as Response;
+    const custom = overrides.answer?.(url);
+    if (custom) return reply(custom.data ?? {}, custom.status ?? 200);
     if (url.includes('/wit/workitems/50?'))
       return reply({
         fields: { 'System.WorkItemType': 'Product Backlog Item', 'System.Title': 'Cores' },
@@ -187,6 +195,74 @@ describe('Azure requirement-based suites', () => {
   });
 });
 
+describe('Azure work item lookups (edges)', () => {
+  it('treats a rejected id like a missing item and passes other failures on', async () => {
+    const bad = azure({
+      answer: (url) => (url.includes('/wit/workitems/400?') ? { status: 400 } : undefined),
+    });
+    await expect(bad.publisher.publish(tree, { workItemIds: ['400'] })).rejects.toMatchObject({
+      code: 'WORK_ITEM_NOT_FOUND',
+    });
+    const down = azure({
+      answer: (url) => (url.includes('/wit/workitems/500?') ? { status: 500 } : undefined),
+    });
+    await expect(down.publisher.publish(tree, { workItemIds: ['500'] })).rejects.not.toMatchObject({
+      code: 'WORK_ITEM_NOT_FOUND',
+    });
+  });
+
+  it('passes on a lookup that fails before Azure answers', async () => {
+    const { publisher } = azure({
+      answer: (url) => {
+        if (url.includes('/wit/workitems/80?')) throw new TypeError('network down');
+        return undefined;
+      },
+    });
+    await expect(publisher.publish(tree, { workItemIds: ['80'] })).rejects.not.toMatchObject({
+      code: 'WORK_ITEM_NOT_FOUND',
+    });
+  });
+
+  it('describes an item without type or title with defaults', async () => {
+    const { publisher } = azure({
+      answer: (url) => (url.includes('/wit/workitems/70?') ? { data: {} } : undefined),
+    });
+    const result = await publisher.publish(tree, { suiteKind: 'static', workItemIds: ['70'] });
+    expect(result.workItems).toEqual([{ id: '70', type: 'Work Item', title: '' }]);
+  });
+
+  it('accepts categories without names and cases that have no relations yet', async () => {
+    const empty = azure({
+      answer: (url) => (url.includes('/wit/workitemtypecategories') ? { data: {} } : undefined),
+    });
+    await expect(
+      empty.publisher.publish(tree, { suiteKind: 'requirement', workItemIds: ['50'] }),
+    ).rejects.toMatchObject({ code: expect.any(String) });
+    const partial = azure({
+      answer: (url) =>
+        url.includes('/wit/workitemtypecategories')
+          ? {
+              data: {
+                value: [
+                  { workItemTypes: [{ name: 'Ignored' }] },
+                  { referenceName: 'Microsoft.RequirementCategory' },
+                  {
+                    referenceName: 'Microsoft.RequirementCategory',
+                    workItemTypes: [{ name: 'Product Backlog Item' }, {}],
+                  },
+                ],
+              },
+            }
+          : undefined,
+    });
+    const result = await partial.publisher.publish(tree, {
+      suiteKind: 'requirement',
+      workItemIds: ['50'],
+    });
+    expect(result.suiteKind).toBe('requirement');
+  });
+});
+
 describe('Azure static suites linked to a work item', () => {
   it('links every new case to the item with a Tests link, whatever its type', async () => {
     const { calls, publisher } = azure();
@@ -219,6 +295,20 @@ describe('Azure static suites linked to a work item', () => {
       expect(
         relationsOf(call).map((change) => (change.value as { url: string }).url.split('/').pop()),
       ).toEqual(['50', '60']);
+  });
+
+  it('links a republished case that Azure reports without any relations', async () => {
+    const republished = {
+      ...tree,
+      cases: [{ ...testCase, metadata: { caseId: 'c1', remoteCaseIds: { azure_devops: '7' } } }],
+      children: [],
+    };
+    const { calls, publisher } = azure({
+      answer: (url) =>
+        url.includes('/wit/workitems/7?') && url.includes('relations') ? { data: {} } : undefined,
+    });
+    await publisher.publish(republished, { workItemIds: ['50'] });
+    expect(relationsOf(calls.find((call) => call.method === 'PATCH'))).toHaveLength(1);
   });
 
   it('links a republished case only when it is not linked yet', async () => {

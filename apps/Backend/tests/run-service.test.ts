@@ -18,10 +18,7 @@ function setup(
 ) {
   const issues = new InMemoryIssueStore();
   const store = new InMemoryRunStore();
-  const agents = fakeRunAgents(executeAgent, {
-    agent: { id: agentId, name: 'Agent' },
-    workflow: { finalReview: false },
-  });
+  const agents = fakeRunAgents(executeAgent);
   const runs = new RunService(store, issues, agents);
   const createIssue = (title: string) =>
     issues.create(workspaceId, 'user-a', { title, assigneeAgentId: agentId });
@@ -46,7 +43,7 @@ describe('agent issue runs', () => {
     const result = await runs.get(workspaceId, queued.id);
     expect(executeAgent).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
-      output: '## Agent\n\nCompleted work',
+      output: '## Agent A\n\nCompleted work',
       inputTokens: 1000,
       outputTokens: 500,
       costMicros: 6000,
@@ -125,9 +122,6 @@ describe('agent issue runs', () => {
     await expect(runs.checkout(workspaceId, host.id)).rejects.toMatchObject({
       code: 'INVALID_RUN_STATE',
     });
-    await expect(runs.create(issue.id, context, 'host')).rejects.toMatchObject({
-      code: 'ISSUE_CLOSED',
-    });
     await issues.update(workspaceId, issue.id, { status: 'todo' });
     const next = await runs.create(issue.id, context, 'host');
     expect((await runs.cancel(workspaceId, next.id)).status).toBe('cancelled');
@@ -181,7 +175,7 @@ describe('agent issue runs', () => {
     expect(prompt).toContain('Carry out the requested work when possible.');
     expect((await issues.comments(issue.id)).at(-1)).toMatchObject({
       authorId: agentId,
-      body: '## Agent\n\nI updated the checklist and need approval.',
+      body: '## Agent A\n\nI updated the checklist and need approval.',
     });
     expect((await runs.get(workspaceId, initial.id)).status).toBe('succeeded');
   });

@@ -26,10 +26,12 @@ export type AgentWorkflowToolset =
   | 'design'
   | 'e2e'
   | 'releasenotes'
+  | 'development'
   | 'integrationtests'
   | 'loadtests'
   | 'audit'
-  | 'workspaces';
+  | 'workspaces'
+  | 'notifications';
 
 export interface AgentWorkflowRuleDto {
   readonly id: string;

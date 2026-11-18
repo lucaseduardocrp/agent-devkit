@@ -150,6 +150,10 @@ function createApi(
     })),
     getAgentRuns: vi.spyOn(api, 'getAgentRuns').mockResolvedValue([]),
     updateInboxItem: vi.spyOn(api, 'updateInboxItem').mockResolvedValue(undefined),
+    // The inbox stream stays open and silent unless a test drives it.
+    streamInboxEvents: vi
+      .spyOn(api, 'streamInboxEvents')
+      .mockImplementation(() => new Promise(() => undefined)),
     createIssue: vi.spyOn(api, 'createIssue').mockResolvedValue(issues[0]!),
     updateIssue: vi.spyOn(api, 'updateIssue').mockResolvedValue(issues[0]!),
     deleteIssue: vi.spyOn(api, 'deleteIssue').mockResolvedValue(undefined),
@@ -542,6 +546,134 @@ describe('WorkView inbox', () => {
     await screen.findByRole('button', { name: '1 Prepare release' });
     expect(screen.getByRole('tab', { name: 'Não lidas' }).textContent).toBe('Não lidas');
   });
+
+  it('has no refresh or new issue button: it follows the server live', async () => {
+    const { api, spies } = createApi({ inbox });
+    renderView(api, { tab: 'inbox' });
+    await screen.findByRole('button', { name: '1 Alpha task' });
+    expect(screen.queryByRole('button', { name: 'Atualizar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Nova issue' })).toBeNull();
+    expect(spies.streamInboxEvents).toHaveBeenCalledOnce();
+  });
+
+  it('keeps both buttons on the issues list, which does not follow the server live', async () => {
+    const { api, spies } = createApi({ inbox });
+    renderView(api, { tab: 'issues' });
+    await screen.findByRole('button', { name: '1 Prepare release' });
+    expect(screen.getByRole('button', { name: 'Atualizar' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nova issue' })).toBeInTheDocument();
+    expect(spies.streamInboxEvents).not.toHaveBeenCalled();
+  });
+
+  it('reads the inbox again once per burst of events, and when the stream (re)connects', async () => {
+    const { api, spies } = createApi({ inbox: [inbox[0]!] });
+    let given!: Parameters<ApiClient['streamInboxEvents']>[0];
+    spies.streamInboxEvents.mockImplementation((handlers) => {
+      given = handlers;
+      return new Promise(() => undefined);
+    });
+    renderView(api, { tab: 'inbox' });
+    await screen.findByRole('button', { name: '1 Alpha task' });
+    expect(spies.getInbox).toHaveBeenCalledTimes(1);
+
+    spies.getInbox.mockResolvedValue([inbox[0]!, inbox[3]!]);
+    act(() => given.onReady());
+    await screen.findByRole('button', { name: '4 Delta task' });
+    expect(spies.getInbox).toHaveBeenCalledTimes(2);
+
+    spies.getInbox.mockResolvedValue([inbox[0]!, inbox[2]!, inbox[3]!]);
+    act(() => {
+      given.onRun({ issueId: 'c' });
+      given.onRun({ issueId: 'c' });
+      given.onRun({ issueId: 'a' });
+    });
+    await screen.findByRole('button', { name: '3 Gamma task' });
+    expect(spies.getInbox).toHaveBeenCalledTimes(3);
+  });
+
+  it('applies only the newest read when the answers arrive out of order', async () => {
+    const { api, spies } = createApi({ inbox: [] });
+    let given!: Parameters<ApiClient['streamInboxEvents']>[0];
+    spies.streamInboxEvents.mockImplementation((handlers) => {
+      given = handlers;
+      return new Promise(() => undefined);
+    });
+    renderView(api, { tab: 'inbox' });
+    await waitFor(() => expect(spies.getInbox).toHaveBeenCalledTimes(1));
+
+    const older = deferred<readonly InboxItem[]>();
+    const newer = deferred<readonly InboxItem[]>();
+    spies.getInbox.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    act(() => given.onReady());
+    act(() => given.onRun({ issueId: 'a' }));
+    await waitFor(() => expect(spies.getInbox).toHaveBeenCalledTimes(3));
+
+    await act(async () => newer.resolve([inbox[0]!]));
+    await screen.findByRole('button', { name: '1 Alpha task' });
+    await act(async () => older.resolve([]));
+    expect(screen.getByRole('button', { name: '1 Alpha task' })).toBeInTheDocument();
+  });
+
+  it('keeps the list on screen when a read fails', async () => {
+    const { api, spies } = createApi({ inbox: [inbox[0]!] });
+    let given!: Parameters<ApiClient['streamInboxEvents']>[0];
+    spies.streamInboxEvents.mockImplementation((handlers) => {
+      given = handlers;
+      return new Promise(() => undefined);
+    });
+    renderView(api, { tab: 'inbox' });
+    await screen.findByRole('button', { name: '1 Alpha task' });
+
+    spies.getInbox.mockRejectedValue(new Error('offline'));
+    act(() => given.onReady());
+    await waitFor(() => expect(spies.getInbox).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('button', { name: '1 Alpha task' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  describe('safety reads', () => {
+    const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+
+    it('reads once a minute while live', async () => {
+      vi.useFakeTimers();
+      try {
+        const { api, spies } = createApi({ inbox: [inbox[0]!] });
+        let given!: Parameters<ApiClient['streamInboxEvents']>[0];
+        spies.streamInboxEvents.mockImplementation((handlers) => {
+          given = handlers;
+          return new Promise(() => undefined);
+        });
+        renderView(api, { tab: 'inbox' });
+        await tick(0);
+        act(() => given.onReady());
+        await tick(0);
+        const reads = spies.getInbox.mock.calls.length;
+
+        await tick(59_000);
+        expect(spies.getInbox).toHaveBeenCalledTimes(reads);
+        await tick(1_000);
+        expect(spies.getInbox).toHaveBeenCalledTimes(reads + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('polls every ten seconds while the stream is down', async () => {
+      vi.useFakeTimers();
+      try {
+        const { api, spies } = createApi({ inbox: [inbox[0]!] });
+        spies.streamInboxEvents.mockRejectedValue(new Error('unreachable'));
+        renderView(api, { tab: 'inbox' });
+        await tick(0);
+        const reads = spies.getInbox.mock.calls.length;
+
+        await tick(10_000);
+        expect(spies.getInbox.mock.calls.length).toBeGreaterThan(reads);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
 
 describe('WorkView issue composer', () => {
@@ -561,15 +693,15 @@ describe('WorkView issue composer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Nova issue' }));
     const dialog = screen.getByRole('dialog');
     await waitFor(() =>
-      expect(within(dialog).getByRole('option', { name: 'carla@example.com' })).toBeInTheDocument(),
+      expect(within(dialog).getAllByRole('option', { name: 'carla@example.com' })).toHaveLength(2),
     );
-    expect(within(dialog).getByRole('option', { name: 'Bruno' })).toBeInTheDocument();
-    expect(within(dialog).getByRole('option', { name: 'user-d' })).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('option', { name: 'Bruno' })).toHaveLength(2);
+    expect(within(dialog).getAllByRole('option', { name: 'user-d' })).toHaveLength(2);
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Título' }), {
       target: { value: '  New thing  ' },
     });
-    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Descrição' }), {
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /^Descrição/ }), {
       target: { value: 'Details' },
     });
     fireEvent.change(within(dialog).getByRole('combobox', { name: 'Status' }), {
@@ -584,6 +716,9 @@ describe('WorkView issue composer', () => {
     fireEvent.change(within(dialog).getByRole('combobox', { name: 'Responsável' }), {
       target: { value: 'user-b' },
     });
+    fireEvent.change(within(dialog).getByRole('combobox', { name: 'Revisor' }), {
+      target: { value: 'user-c' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Criar issue' }));
 
     await waitFor(() =>
@@ -595,6 +730,7 @@ describe('WorkView issue composer', () => {
         type: '',
         assigneeAgentId: 'agent-a',
         assigneeUserId: 'user-b',
+        proofreaderUserId: 'user-c',
         attachments: [],
       }),
     );
@@ -650,7 +786,9 @@ describe('WorkView issue description', () => {
     expect(within(dialog).getByText('bad').hasAttribute('href')).toBe(false);
     expect(within(dialog).getByText(/inner/).tagName).toBe('P');
     expect(within(dialog).getByText(/Hello/).hasAttribute('class')).toBe(false);
-    expect(dialog.querySelector('img, font, iframe')).toBeNull();
+    expect(dialog.querySelector('font, iframe')).toBeNull();
+    // Images are kept (the source is rewritten to a loadable file), unlike the other tags.
+    expect(dialog.querySelector('img')).not.toBeNull();
   });
 
   it('decodes HTML that was escaped before being stored', async () => {
@@ -697,17 +835,41 @@ describe('WorkView issue detail', () => {
     const dialog = await openDetail();
     expect(within(dialog).getByRole('option', { name: 'ghost-user' })).toBeInTheDocument();
 
-    const change = async (name: string, value: string, expected: object) => {
-      const select = within(dialog).getByRole('combobox', { name });
-      await waitIdle(select);
-      fireEvent.change(select, { target: { value } });
-      await waitFor(() => expect(spies.updateIssue).toHaveBeenLastCalledWith('issue-1', expected));
-    };
-    await change('Status', 'done', { status: 'done' });
-    await change('Prioridade', 'low', { priority: 'low' });
-    await change('Agente', '', { assigneeAgentId: null });
-    await change('Responsável', 'user-b', { assigneeUserId: 'user-b' });
-    await change('Responsável', '', { assigneeUserId: null });
+    const change = (name: string, value: string) =>
+      fireEvent.change(within(dialog).getByRole('combobox', { name }), { target: { value } });
+    await waitIdle(within(dialog).getByRole('combobox', { name: 'Status' }));
+    change('Status', 'done');
+    change('Prioridade', 'low');
+    change('Agente', '');
+    change('Responsável', 'user-b');
+    change('Responsável', '');
+    // The card is a draft: nothing is sent until the user saves, and then in one request.
+    expect(spies.updateIssue).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar' }));
+    await waitFor(() =>
+      expect(spies.updateIssue).toHaveBeenCalledWith('issue-1', {
+        status: 'done',
+        priority: 'low',
+        assigneeAgentId: null,
+        assigneeUserId: null,
+      }),
+    );
+    expect(spies.updateIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not save when a changed field goes back to its stored value', async () => {
+    const { api, spies } = createApi();
+    renderView(api);
+    const dialog = await openDetail();
+    const status = within(dialog).getByRole('combobox', { name: 'Status' });
+    await waitIdle(status);
+    const stored = (status as HTMLSelectElement).value;
+    fireEvent.change(status, { target: { value: 'done' } });
+    const save = within(dialog).getByRole('button', { name: 'Salvar' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.change(status, { target: { value: stored } });
+    expect(save.disabled).toBe(true);
+    expect(spies.updateIssue).not.toHaveBeenCalled();
   });
 
   it('shows a generic save error when an update fails without an Error', async () => {
@@ -718,7 +880,54 @@ describe('WorkView issue detail', () => {
     fireEvent.change(within(dialog).getByRole('combobox', { name: 'Status' }), {
       target: { value: 'done' },
     });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar' }));
     expect(await screen.findByText('Não foi possível salvar.')).toBeInTheDocument();
+  });
+
+  describe('closing with unsaved changes', () => {
+    const openChanged = async () => {
+      const ctx = createApi();
+      renderView(ctx.api);
+      const dialog = await openDetail();
+      fireEvent.change(within(dialog).getByRole('combobox', { name: 'Status' }), {
+        target: { value: 'done' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Fechar' }));
+      return { ...ctx, dialog, alert: await screen.findByRole('alertdialog') };
+    };
+
+    it('keeps editing on cancel', async () => {
+      const { alert, dialog, spies } = await openChanged();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Cancelar' }));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(dialog).toBeInTheDocument();
+      expect(spies.updateIssue).not.toHaveBeenCalled();
+    });
+
+    it('discards the changes and closes', async () => {
+      const { alert, dialog, spies } = await openChanged();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Descartar alterações' }));
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+      expect(spies.updateIssue).not.toHaveBeenCalled();
+    });
+
+    it('saves the changes and closes', async () => {
+      const { alert, dialog, spies } = await openChanged();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Salvar alterações' }));
+      await waitFor(() =>
+        expect(spies.updateIssue).toHaveBeenCalledWith('issue-1', { status: 'done' }),
+      );
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    });
+
+    it('closes at once when nothing changed', async () => {
+      const { api } = createApi();
+      renderView(api);
+      const dialog = await openDetail();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Fechar' }));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    });
   });
 
   it('edits the title and description, and can cancel editing', async () => {
@@ -730,10 +939,15 @@ describe('WorkView issue detail', () => {
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Título' }), {
       target: { value: ' Renamed ' },
     });
-    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Descrição' }), {
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /^Descrição/ }), {
       target: { value: 'New body' },
     });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar' }));
+    // The details form has its own submit button next to the card's save button.
+    fireEvent.click(
+      within(dialog)
+        .getAllByRole('button', { name: 'Salvar' })
+        .find((button) => button.getAttribute('type') === 'submit')!,
+    );
     await waitFor(() =>
       expect(spies.updateIssue).toHaveBeenCalledWith('issue-1', {
         title: 'Renamed',

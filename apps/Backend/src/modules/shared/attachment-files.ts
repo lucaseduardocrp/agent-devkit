@@ -1,5 +1,10 @@
 import type { E2eArtifactStore } from '../e2e/application/artifact-store.js';
-import { attachmentMetaKey, readAttachmentMeta, type StoredAttachmentMeta } from './attachment.js';
+import {
+  attachmentPrefixes,
+  locateAttachmentMeta,
+  readAttachmentMeta,
+  type StoredAttachmentMeta,
+} from './attachment.js';
 
 /**
  * Lifecycle of files stored by the ADK. The browser keeps everything a user pastes or
@@ -23,19 +28,9 @@ export function fileOwner(type: string, id: string): string {
   return `${type}:${id}`;
 }
 
-function attachmentPrefix(workspaceId: string, id: string): string {
-  return `attachments/${workspaceId}/${id}`;
-}
-
-async function writeMeta(store: E2eArtifactStore, workspaceId: string, meta: StoredAttachmentMeta) {
-  await store.put(
-    attachmentMetaKey(workspaceId, meta.id),
-    Buffer.from(JSON.stringify(meta), 'utf8'),
-  );
-}
-
+/** Removes the file wherever it is kept: its kind's folder, or the old flat place. */
 export async function deleteFile(store: E2eArtifactStore, workspaceId: string, id: string) {
-  await store.removePrefix(attachmentPrefix(workspaceId, id));
+  for (const prefix of attachmentPrefixes(workspaceId, id)) await store.removePrefix(prefix);
 }
 
 /** Makes the referenced files permanent and gives them to `owner` when nobody owns them. */
@@ -46,13 +41,15 @@ async function claimFiles(
   ids: Iterable<string>,
 ) {
   for (const id of ids) {
-    const meta = await readAttachmentMeta(store, workspaceId, id);
-    if (!meta || (meta.status === 'committed' && meta.owner)) continue;
-    await writeMeta(store, workspaceId, {
-      ...meta,
+    const found = await locateAttachmentMeta(store, workspaceId, id);
+    if (!found || (found.meta.status === 'committed' && found.meta.owner)) continue;
+    // Written back where it was found, next to the content.
+    const claimed: StoredAttachmentMeta = {
+      ...found.meta,
       status: 'committed',
-      owner: meta.owner ?? owner,
-    });
+      owner: found.meta.owner ?? owner,
+    };
+    await store.put(found.key, Buffer.from(JSON.stringify(claimed), 'utf8'));
   }
 }
 
@@ -112,7 +109,10 @@ export async function sweepPendingFiles(
   if (!store.listKeys) return 0;
   let removed = 0;
   for (const key of await store.listKeys('attachments')) {
-    const match = /^attachments\/([^/]+)\/([0-9a-f-]{36})\/meta\.json$/i.exec(key);
+    const match =
+      /^attachments\/(?:(?:files|images|videos)\/)?([^/]+)\/([0-9a-f-]{36})\/meta\.json$/i.exec(
+        key,
+      );
     if (!match) continue;
     const [, workspaceId, id] = match;
     const meta = await readAttachmentMeta(store, workspaceId!, id!);

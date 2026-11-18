@@ -63,6 +63,40 @@ describe('Postgres E2E queue', () => {
     expect(await queue.hasActive(workspaceId, creation.id)).toBe(true);
   });
 
+  it('lets the tests of one run execute side by side, but never one test twice', async () => {
+    const creation = await newCreation();
+    const execute = (testId: string) =>
+      queue.enqueue({
+        workspaceId,
+        creationId: creation.id,
+        kind: 'execute',
+        testIds: [testId],
+      });
+    const attempts = await Promise.all([
+      execute('t1'),
+      execute('t2'),
+      execute('t1'),
+      execute('t2'),
+    ]);
+    expect(attempts.filter(Boolean)).toHaveLength(2);
+    expect(await queue.hasActive(workspaceId, creation.id, { testId: 't1' })).toBe(true);
+    expect(await queue.hasActive(workspaceId, creation.id, { testId: 't3' })).toBe(false);
+    // A job on the whole run waits for the tests, and no test starts while it is active.
+    expect(
+      await queue.enqueue({ workspaceId, creationId: creation.id, kind: 'generate', testIds: [] }),
+    ).toBeNull();
+    expect(await queue.cancel(workspaceId, creation.id)).toBe(true);
+    const wide = await queue.enqueue({
+      workspaceId,
+      creationId: creation.id,
+      kind: 'generate',
+      testIds: [],
+    });
+    expect(wide).not.toBeNull();
+    expect(await execute('t3')).toBeNull();
+    expect(await queue.hasActive(workspaceId, creation.id, { testId: 't3' })).toBe(true);
+  });
+
   it('hands each job to exactly one of many competing workers', async () => {
     const creations = await Promise.all(Array.from({ length: 6 }, () => newCreation()));
     for (const creation of creations)

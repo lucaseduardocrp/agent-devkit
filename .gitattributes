@@ -7,3 +7,14 @@
 # Built-in skills are listed in the ADK Hub (agent-devkit-hub), downloaded raw from GitHub and
 # checked against hashes in its index: keep the working tree byte-identical on every platform.
 apps/Mcp/skills/** text eol=lf
+# The frontend's Prettier check requires LF (prettier.config.mjs: endOfLine 'lf'); without this,
+# a Windows checkout with core.autocrlf gets CRLF and `npm run verify` fails on untouched files.
+apps/Frontend/**/*.ts text eol=lf
+apps/Frontend/**/*.tsx text eol=lf
+apps/Frontend/**/*.js text eol=lf
+apps/Frontend/**/*.mjs text eol=lf
+apps/Frontend/**/*.cjs text eol=lf
+apps/Frontend/**/*.json text eol=lf
+apps/Frontend/**/*.yml text eol=lf
+apps/Frontend/**/*.yaml text eol=lf
+apps/Frontend/**/*.html text eol=lf

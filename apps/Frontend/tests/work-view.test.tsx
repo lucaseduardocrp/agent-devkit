@@ -220,6 +220,12 @@ describe('WorkView', () => {
             { tool: 'issues_list', calls: 1, totalTokens: 50 },
           ],
           byClient: [{ provider: 'mcp', model: 'claude-code', calls: 2, totalTokens: 1150 }],
+          bySource: [
+            { source: 'api', calls: 1, totalTokens: 600, spendMicros: 3_000 },
+            { source: 'cli', calls: 1, totalTokens: 400, spendMicros: 1_500 },
+            { source: 'mcp', calls: 1, totalTokens: 100, spendMicros: 0 },
+            { source: 'custom', calls: 1, totalTokens: 50, spendMicros: 0 },
+          ],
         },
       },
     });
@@ -231,8 +237,14 @@ describe('WorkView', () => {
         currentUserId="user-a"
       />,
     );
-    const panel = await screen.findByRole('region', { name: 'Uso via MCP neste mês' });
+    const panel = await screen.findByRole('region', {
+      name: 'Uso de IA fora das execuções de agentes neste mês',
+    });
     expect(screen.getByText(/Total de tokens usados: 1\.150/)).toBeInTheDocument();
+    expect(panel).toHaveTextContent('Chave de API≈ 600 · 1×');
+    expect(panel).toHaveTextContent('CLI≈ 400 · 1×');
+    expect(panel).toHaveTextContent('MCP≈ 100 · 1×');
+    expect(panel).toHaveTextContent('custom≈ 50 · 1×');
     expect(panel).toHaveTextContent('Chamadas2');
     expect(panel).toHaveTextContent('Tokens≈ 1.150');
     expect(panel).toHaveTextContent(/Gasto\s*US\$\s*0,00/);
@@ -274,8 +286,11 @@ describe('WorkView', () => {
         currentUserId="user-a"
       />,
     );
-    const panel = await screen.findByRole('region', { name: 'Uso via MCP neste mês' });
+    const panel = await screen.findByRole('region', {
+      name: 'Uso de IA fora das execuções de agentes neste mês',
+    });
     expect(panel).toHaveTextContent('Tokens30Gasto');
+    expect(panel).not.toHaveTextContent('Por origem');
     expect(panel).toHaveTextContent('Entrada / saída: 30 / 0');
     expect(panel).not.toHaveTextContent('≈ 30');
     expect(panel).not.toHaveTextContent('sem tarifa');
@@ -283,7 +298,10 @@ describe('WorkView', () => {
 
     api.getDashboard.mockResolvedValueOnce({
       ...summary,
-      costs: { ...costs, mcpUsage: { ...usage, calls: 0, byTool: [], byClient: [] } },
+      costs: {
+        ...costs,
+        mcpUsage: { ...usage, calls: 0, byTool: [], byClient: [], bySource: [] },
+      },
     });
     render(
       <WorkView
@@ -293,7 +311,9 @@ describe('WorkView', () => {
         currentUserId="user-a"
       />,
     );
-    expect(await screen.findByText('Nenhum uso via MCP neste mês.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Nenhum uso de IA fora das execuções de agentes neste mês.'),
+    ).toBeInTheDocument();
   });
 
   it('starts a new run for an assigned issue', async () => {

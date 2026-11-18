@@ -109,6 +109,7 @@ describe('BrainView document links', () => {
 
     fireEvent.click(view.getByTestId('btn-copy-document'));
     expect((view.getByTestId('input-document-title') as HTMLInputElement).value).toBe('External');
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     expect((view.getByTestId('textarea-document-content') as HTMLTextAreaElement).value).toBe(
       'Remote text',
     );
@@ -143,6 +144,7 @@ describe('BrainView documentation assistant', () => {
     await within(agentSelect).findByRole('option', { name: 'Writer' });
     fireEvent.change(agentSelect, { target: { value: 'writer' } });
 
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     const editor = view.getByTestId('textarea-document-content') as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: 'Intro', selectionStart: 5 } });
     const prompt = within(sidebar).getByLabelText(/Peça para criar/);
@@ -200,6 +202,7 @@ describe('BrainView documentation assistant', () => {
     });
     fireEvent.click(within(sidebar).getByRole('button', { name: 'Ações' }));
     fireEvent.click(await within(sidebar).findByRole('button', { name: 'Inserir no documento' }));
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     expect((view.getByTestId('textarea-document-content') as HTMLTextAreaElement).value).toBe(
       'Generated text',
     );

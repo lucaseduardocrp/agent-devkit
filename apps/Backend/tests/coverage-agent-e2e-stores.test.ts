@@ -116,6 +116,36 @@ describe('PrismaE2eStore JSON columns', () => {
     });
   });
 
+  it('maps the saved case a test is linked to and finds the tests of a plan', async () => {
+    const { db, testRow, store } = fakeDb();
+    const savedCase = { planId: 'plan-1', caseId: 'case-1' };
+    db.e2eTestCaseRecord.findFirst.mockResolvedValueOnce({
+      ...testRow,
+      savedCase: JSON.stringify(savedCase),
+    });
+    expect(await store.getTest('ws', 't1')).toMatchObject({ savedCase });
+
+    await store.updateTest('ws', 't1', { savedCase } as never);
+    expect(db.e2eTestCaseRecord.updateMany.mock.lastCall![0].data).toEqual({
+      savedCase: JSON.stringify(savedCase),
+    });
+    await store.updateTest('ws', 't1', { savedCase: null } as never);
+    expect(db.e2eTestCaseRecord.updateMany.mock.lastCall![0].data).toEqual({ savedCase: null });
+
+    // The text filter is only a prefilter: another plan whose id contains this one is dropped.
+    const findMany = vi.fn().mockResolvedValue([
+      { ...testRow, savedCase: JSON.stringify(savedCase) },
+      { ...testRow, id: 't2', savedCase: JSON.stringify({ planId: 'plan-10', caseId: 'x' }) },
+    ]);
+    const linked = new PrismaE2eStore({
+      e2eTestCaseRecord: { findMany },
+    } as unknown as PrismaClient);
+    expect((await linked.listLinkedTests('ws', 'plan-1')).map((test) => test.id)).toEqual(['t1']);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { workspaceId: 'ws', savedCase: { contains: 'plan-1' } },
+    });
+  });
+
   it('does not touch the run when the updated test vanished before it was read back', async () => {
     const { db, store } = fakeDb();
     db.e2eTestCaseRecord.findFirst.mockResolvedValueOnce(null);
@@ -188,6 +218,16 @@ describe('LocalE2eRunner task payloads and cancellation', () => {
 
     await runner.explore({ mode: 'frontend', url: 'https://app.example.com/', accessToken: token });
     expect(payload()).toMatchObject({ url: 'https://app.example.com/', accessToken: token });
+  });
+
+  it('hands the focus of an exploration to the runner', async () => {
+    const { runner, payload } = runnerFinishingExplore();
+    await runner.explore({
+      mode: 'frontend',
+      url: 'http://localhost:5173/',
+      focus: 'the billing screens',
+    });
+    expect(payload()).toMatchObject({ focus: 'the billing screens' });
   });
 
   it('cancels and cleans up when the task disappears while waiting', async () => {

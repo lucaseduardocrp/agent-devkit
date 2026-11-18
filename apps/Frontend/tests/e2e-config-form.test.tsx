@@ -1,16 +1,9 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { E2eConfigForm } from '../src/features/e2e/E2eConfigForm.js';
 import type { ApiClient } from '../src/lib/api-client.js';
 import type { E2eCreationDetail } from '../src/features/e2e/e2e-types.js';
-import { LocalHelperError, localTunnelBridge } from '../src/features/e2e/local-tunnel-bridge.js';
-import type * as TunnelBridge from '../src/features/e2e/local-tunnel-bridge.js';
-
-vi.mock('../src/features/e2e/local-tunnel-bridge.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof TunnelBridge>()),
-  localTunnelBridge: { start: vi.fn(), status: vi.fn() },
-}));
-
+import { pickRepository } from './helpers/pick-repository.js';
 // jsdom lacks Blob.text(), which every supported browser provides.
 beforeAll(() => {
   Blob.prototype.text ??= function (this: Blob) {
@@ -129,13 +122,16 @@ function setup(
     savedPlans?: unknown[] | Error | Promise<unknown[]>;
     /** A local install: the ADK workers open http://localhost on the user's computer. */
     workersReachLocalhost?: boolean;
+    /** Where the server runs new E2E runs unless the form says otherwise. */
+    defaultExecutionTarget?: 'remote' | 'local';
   } = {},
 ) {
   const client = {
     apiUrl: 'https://api.adk.example.com',
-    getCapabilities: vi
-      .fn()
-      .mockResolvedValue({ workersReachLocalhost: options.workersReachLocalhost ?? false }),
+    getCapabilities: vi.fn().mockResolvedValue({
+      workersReachLocalhost: options.workersReachLocalhost ?? false,
+      defaultExecutionTarget: options.defaultExecutionTarget ?? 'remote',
+    }),
     getE2eRunners: vi.fn().mockResolvedValue(options.runners ?? []),
     getAgents: vi.fn(() =>
       options.agents instanceof Error
@@ -189,15 +185,23 @@ function setup(
   return { client, view, onCreated, onCancel };
 }
 
+const REPOSITORY_NAMES = { 'github:42': 'acme/demo-app', 'azure_devops:guid-1': 'Finance/app' };
+
+/** Waits for the repositories to load: the searchable select is disabled until they are. */
+async function repositoriesLoaded(view: ReturnType<typeof render>) {
+  await waitFor(() =>
+    expect((view.getByRole('combobox', { name: 'Repositório' }) as HTMLInputElement).disabled).toBe(
+      false,
+    ),
+  );
+}
+
 async function chooseRepository(
   view: ReturnType<typeof render>,
   key = 'github:42',
   branch = 'main',
 ) {
-  await waitFor(() =>
-    expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBeGreaterThan(1),
-  );
-  fireEvent.change(view.getByLabelText('Repositório'), { target: { value: key } });
+  await pickRepository(REPOSITORY_NAMES, key);
   await waitFor(() =>
     expect((view.getByLabelText('Branch base') as HTMLSelectElement).value).toBe(branch),
   );
@@ -210,182 +214,23 @@ function file(name: string, content: string, size?: number): File {
 }
 
 describe('E2eConfigForm', () => {
-  it('starts a tunnel through the local helper and checks the public URL', async () => {
-    vi.mocked(localTunnelBridge.start).mockResolvedValueOnce({
-      tunnel: {
-        localUrl: 'http://localhost:3000',
-        publicUrl: 'https://helper.trycloudflare.com',
-        accessClientId: 'adk-local-id',
-        accessClientSecret: 'gateway-secret',
-      },
-    });
+  it('sends a localhost address to My computer instead of offering a tunnel', async () => {
     const { view, client } = setup();
-    fireEvent.click(view.getByRole('button', { name: /Iniciar t.nel no meu computador/ }));
-    await waitFor(() =>
-      expect((view.getByLabelText('URL base') as HTMLInputElement).value).toBe(
-        'https://helper.trycloudflare.com',
-      ),
-    );
-    expect(localTunnelBridge.start).toHaveBeenCalledWith('http://localhost:3000');
-    expect(client.checkE2eTunnel).toHaveBeenCalledWith('https://helper.trycloudflare.com', {
-      accessClientId: 'adk-local-id',
-      accessClientSecret: 'gateway-secret',
-    });
-    expect((view.getByLabelText(/local original/) as HTMLInputElement).value).toBe(
-      'http://localhost:3000',
-    );
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    expect(view.queryByRole('button', { name: /Iniciar o t.nel/ })).toBeNull();
+    expect(view.queryByRole('button', { name: /Autenticação do túnel/ })).toBeNull();
+    expect(view.queryByText(/devkit tunnel/)).toBeNull();
+    expect(view.getByRole('status')).toHaveTextContent(/Escolha “Meu computador” acima/);
+    expect(view.getByText(/escolha “Meu computador”/)).toBeInTheDocument();
   });
 
-  it('can restart the local connection of an existing test run', async () => {
-    vi.mocked(localTunnelBridge.start).mockResolvedValueOnce({
-      tunnel: {
-        localUrl: 'http://localhost:8014',
-        publicUrl: 'https://new.trycloudflare.com',
-        accessClientId: 'adk-local-new',
-        accessClientSecret: 'new-secret',
-      },
-    });
-    const { view, client } = setup({
-      creationId: 'c1',
-      getCreation: vi.fn().mockResolvedValue(existing({ localOrigin: 'http://localhost:8014' })),
-    });
-    fireEvent.click(await view.findByRole('button', { name: /Iniciar t.nel no meu computador/ }));
-    await waitFor(() =>
-      expect(localTunnelBridge.start).toHaveBeenCalledWith('http://localhost:8014'),
-    );
-    expect(client.checkE2eTunnel).toHaveBeenCalledWith('https://new.trycloudflare.com', {
-      creationId: 'c1',
-      accessClientId: 'adk-local-new',
-      accessClientSecret: 'new-secret',
-    });
-    expect((view.getByLabelText('URL base') as HTMLInputElement).value).toBe(
-      'https://new.trycloudflare.com',
-    );
-  });
-
-  it('keeps the terminal commands available when browser access to the helper fails', async () => {
-    vi.mocked(localTunnelBridge.start).mockRejectedValueOnce(
-      new LocalHelperError('unreachable', 'Local tunnel helper is unavailable.'),
-    );
-    vi.mocked(localTunnelBridge.status).mockRejectedValueOnce(
-      new LocalHelperError('unreachable', 'Local tunnel helper is unavailable.'),
-    );
-    const { view } = setup();
-    fireEvent.click(view.getByRole('button', { name: /Iniciar t.nel no meu computador/ }));
-    expect(await view.findByText(/Não foi possível acessar o auxiliar local/)).toBeInTheDocument();
-    expect(view.getByText('devkit tunnel --url http://localhost:3000')).toBeInTheDocument();
-    expect(view.getByText('npm install -g @agent-devkit/cli')).toBeInTheDocument();
-    expect(
-      view.getByText(
-        'cloudflared tunnel --url http://localhost:3000 --http-host-header localhost:3000',
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it('explains when the helper was started for another ADK address', async () => {
-    vi.mocked(localTunnelBridge.start).mockRejectedValueOnce(
-      new LocalHelperError('unreachable', 'Local tunnel helper is unavailable.'),
-    );
-    vi.mocked(localTunnelBridge.status).mockRejectedValueOnce(
-      new LocalHelperError('origin_mismatch', 'Started for another address.'),
-    );
-    const { view } = setup();
-    fireEvent.click(view.getByRole('button', { name: /Iniciar t.nel no meu computador/ }));
-    expect(await view.findByText(/rodando para outro endere.o do ADK/)).toBeInTheDocument();
-    expect(
-      view.getAllByText(`devkit bridge --origin ${window.location.origin}`).length,
-    ).toBeGreaterThan(0);
-  });
-
-  it('shows the helper error when cloudflared cannot start', async () => {
-    vi.mocked(localTunnelBridge.start).mockRejectedValueOnce(
-      new LocalHelperError('failed', 'Could not start cloudflared (spawn ENOENT).'),
-    );
-    vi.mocked(localTunnelBridge.status).mockClear();
-    const { view } = setup();
-    fireEvent.click(view.getByRole('button', { name: /Iniciar t.nel no meu computador/ }));
-    expect(
-      await view.findByText('Could not start cloudflared (spawn ENOENT).'),
-    ).toBeInTheDocument();
-    expect(localTunnelBridge.status).not.toHaveBeenCalled();
-  });
-
-  it('sends tunnel credentials to the connection check', async () => {
+  it('requires a public URL for the ADK servers and checks that it is reachable', async () => {
     const { view, client } = setup();
-    fireEvent.change(view.getByLabelText('URL base'), {
-      target: { value: 'https://secure.example.com' },
-    });
-    fireEvent.click(view.getByRole('button', { name: /Autenticação do túnel \(opcional\)/ }));
-    fireEvent.change(view.getByLabelText('Access Client ID'), { target: { value: 'client-id' } });
-    fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
-    expect(view.getByText(/ID e o segredo de acesso juntos/)).toBeInTheDocument();
-    fireEvent.change(view.getByLabelText('Access Client Secret'), {
-      target: { value: 'client-secret' },
-    });
-    expect(view.queryByText(/ID e o segredo de acesso juntos/)).toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Verificar conexão' }));
-    await waitFor(() =>
-      expect(client.checkE2eTunnel).toHaveBeenCalledWith('https://secure.example.com', {
-        accessClientId: 'client-id',
-        accessClientSecret: 'client-secret',
-      }),
-    );
-  });
-
-  it('reveals an incomplete Access token before checking the connection', async () => {
-    const { view, client } = setup();
-    await waitFor(() =>
-      expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBeGreaterThan(
-        1,
-      ),
-    );
-    fireEvent.change(view.getByLabelText('URL base'), {
-      target: { value: 'https://secure.example.com' },
-    });
-    const settings = view.getByRole('button', { name: /Autenticação do túnel \(opcional\)/ });
-    fireEvent.click(settings);
-    fireEvent.change(view.getByLabelText('Access Client ID'), { target: { value: 'client-id' } });
-    fireEvent.click(settings);
-    fireEvent.click(view.getByRole('button', { name: 'Verificar conexão' }));
-
-    expect(settings).toHaveAttribute('aria-expanded', 'true');
-    expect(view.getByText(/ID e o segredo de acesso juntos/)).toBeInTheDocument();
-    expect(client.checkE2eTunnel).not.toHaveBeenCalled();
-  });
-
-  it('shows how to expose a local app and requires the public URL for execution', async () => {
-    const { view, client } = setup();
-    await waitFor(() =>
-      expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBeGreaterThan(
-        1,
-      ),
-    );
-    expect(
-      view.queryByText(
-        'cloudflared tunnel --url http://localhost:3000 --http-host-header localhost:3000',
-      ),
-    ).toBeNull();
-    fireEvent.click(
-      view.getByRole('button', { name: /Configurar o auxiliar ou iniciar o túnel manualmente/ }),
-    );
-    expect(
-      view.getByText(
-        'cloudflared tunnel --url http://localhost:3000 --http-host-header localhost:3000',
-      ),
-    ).toBeInTheDocument();
+    await repositoriesLoaded(view);
     fireEvent.change(view.getByLabelText('URL base'), {
       target: { value: 'http://localhost:5173/login' },
     });
-    expect(
-      view.getByText(
-        'cloudflared tunnel --url http://localhost:5173 --http-host-header localhost:5173',
-      ),
-    ).toBeInTheDocument();
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    fireEvent.click(view.getByRole('button', { name: 'Copiar comando' }));
-    expect(await view.findByText(/Comando copiado/)).toBeInTheDocument();
-    expect(writeText).toHaveBeenCalledWith('devkit tunnel --url http://localhost:5173');
+    expect(view.queryByText(/devkit tunnel/)).toBeNull();
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
     expect(
       view.getByText(
@@ -395,13 +240,9 @@ describe('E2eConfigForm', () => {
     fireEvent.change(view.getByLabelText('URL base'), {
       target: { value: 'https://sample.trycloudflare.com' },
     });
-    expect(view.queryByText('Aplicação rodando localmente')).toBeNull();
     fireEvent.click(view.getByRole('button', { name: 'Verificar conexão' }));
     expect(await view.findByText(/Conexão confirmada/)).toBeInTheDocument();
     expect(client.checkE2eTunnel).toHaveBeenCalledWith('https://sample.trycloudflare.com', {});
-    expect((view.getByLabelText(/local original/) as HTMLInputElement).value).toBe(
-      'http://localhost:5173',
-    );
   });
 
   it('explains when authentication to a protected tunnel fails', async () => {
@@ -420,11 +261,7 @@ describe('E2eConfigForm', () => {
 
   it('warns about missing localhost origin when a Quick Tunnel URL is pasted', async () => {
     const { view } = setup();
-    await waitFor(() =>
-      expect(
-        view.getByRole('combobox', { name: /^Reposit/ }).querySelectorAll('option').length,
-      ).toBeGreaterThan(1),
-    );
+    await repositoriesLoaded(view);
     fireEvent.change(view.getByLabelText('URL base'), {
       target: { value: 'https://sample.trycloudflare.com' },
     });
@@ -454,11 +291,7 @@ describe('E2eConfigForm', () => {
 
   it('requires the local browser address to be an origin without a path', async () => {
     const { view } = setup();
-    await waitFor(() =>
-      expect(
-        view.getByRole('combobox', { name: /^Reposit/ }).querySelectorAll('option').length,
-      ).toBeGreaterThan(1),
-    );
+    await repositoriesLoaded(view);
     fireEvent.change(view.getByLabelText('URL base'), {
       target: { value: 'https://sample.trycloudflare.com' },
     });
@@ -494,13 +327,11 @@ describe('E2eConfigForm', () => {
       'aria-checked',
       'true',
     );
-    // A localhost address on the ADK servers suggests the local runner.
-    fireEvent.click(view.getByRole('button', { name: 'Rodar no meu computador' }));
+    fireEvent.click(view.getByRole('radio', { name: 'Meu computador' }));
     expect(view.getByRole('radio', { name: 'Meu computador' })).toHaveAttribute(
       'aria-checked',
       'true',
     );
-    expect(view.queryByRole('button', { name: /Iniciar t.nel no meu computador/ })).toBeNull();
     expect(view.queryByRole('button', { name: /Autenticação do túnel/ })).toBeNull();
     expect(await view.findByText('Nenhum executor online')).toBeInTheDocument();
     expect(
@@ -551,6 +382,41 @@ describe('E2eConfigForm', () => {
     expect(view.getByText('devkit e2e run c1')).toBeInTheDocument();
     expect(view.queryByText('devkit runner')).toBeNull();
     expect(client.getE2eRunners).toHaveBeenCalled();
+  });
+
+  it('uses the Brain instead of a PRD from the knowledge tabs', async () => {
+    const { client, view, onCreated } = setup();
+    await waitFor(() =>
+      expect((view.getByLabelText('Agente') as HTMLSelectElement).value).toBe('qa'),
+    );
+    // The PRD tab is the default and shows the upload inputs.
+    expect(view.getByRole('tab', { name: 'Usar PRD' })).toHaveAttribute('aria-selected', 'true');
+    expect(view.getByTestId('e2e-prd-input')).toBeInTheDocument();
+
+    fireEvent.click(view.getByRole('tab', { name: 'Usar Brain' }));
+    expect(view.getByRole('tab', { name: 'Usar Brain' })).toHaveAttribute('aria-selected', 'true');
+    expect(view.getByTestId('e2e-brain-panel')).toBeInTheDocument();
+    expect(view.queryByTestId('e2e-prd-input')).toBeNull();
+
+    fireEvent.change(view.getByLabelText('Nome da execução'), { target: { value: 'ama' } });
+    fireEvent.change(view.getByLabelText('URL base'), {
+      target: { value: 'https://sample.trycloudflare.com' },
+    });
+    await chooseRepository(view);
+    fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
+    await waitFor(() => expect(client.createE2eCreation).toHaveBeenCalled());
+    const input = client.createE2eCreation.mock.calls[0]![0] as Record<string, unknown>;
+    expect(input).toMatchObject({ prd: '', prdFileNames: [], useBrain: true });
+    expect(onCreated).toHaveBeenCalled();
+  });
+
+  it('opens an existing Brain run on the Brain tab', async () => {
+    const { view } = setup({
+      creationId: 'c1',
+      getCreation: vi.fn().mockResolvedValue(existing({ useBrain: true, prd: '' })),
+    });
+    expect(await view.findByTestId('e2e-brain-panel')).toBeInTheDocument();
+    expect(view.getByRole('tab', { name: 'Usar Brain' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('submits a frontend run with uploaded and pasted specs and credentials', async () => {
@@ -605,6 +471,8 @@ describe('E2eConfigForm', () => {
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: 'c1' }));
     expect(client.createE2eCreation).toHaveBeenCalledWith({
+      // A new run is only saved: nothing starts until the user asks.
+      start: false,
       repository: { provider: 'github', id: '42', branch: 'feature/e2e', path: 'e2e/questions' },
       name: 'ama',
       agentId: 'doc',
@@ -631,7 +499,6 @@ describe('E2eConfigForm', () => {
     for (const message of [
       'Informe o nome da execução.',
       'Informe uma URL http(s) válida.',
-      'Envie ou cole o documento do produto.',
       'Cole ou carregue o diff do código.',
       'Selecione o repositório e a branch.',
     ])
@@ -642,8 +509,49 @@ describe('E2eConfigForm', () => {
 
     fireEvent.change(view.getByLabelText('Nome da execução'), { target: { value: 'x' } });
     expect(view.queryByText('Informe o nome da execução.')).toBeNull();
-    fireEvent.change(view.getByLabelText('Ou cole o conteúdo'), { target: { value: 'p' } });
+  });
+
+  it('saves a run without a product document: the tests are generated later', async () => {
+    const { view, client, onCreated } = setup();
+    await waitFor(() =>
+      expect((view.getByLabelText('Agente') as HTMLSelectElement).value).toBe('qa'),
+    );
+    // Neither the knowledge nor the document is required: they are optional context.
     expect(view.queryByText('Envie ou cole o documento do produto.')).toBeNull();
+    for (const title of ['Conhecimento do produto', 'Documento de especificação do produto'])
+      expect(within(view.getByText(title).parentElement!).getByText('(Opcional)')).toBeTruthy();
+
+    fireEvent.change(view.getByLabelText('Nome da execução'), { target: { value: 'ama' } });
+    fireEvent.change(view.getByLabelText('URL base'), {
+      target: { value: 'https://sample.trycloudflare.com' },
+    });
+    await chooseRepository(view);
+    fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(client.createE2eCreation).toHaveBeenCalledWith(
+      expect.objectContaining({ start: false, prd: '', prdFileNames: [] }),
+    );
+  });
+
+  it('counts the extra instructions and refuses ones the API would reject', async () => {
+    const { view, client } = setup();
+    await waitFor(() => expect(client.getAgents).toHaveBeenCalled());
+    const field = view.getByLabelText('Instruções extras');
+    const count = view.getByTestId('e2e-instructions-count');
+    expect(count).toHaveTextContent(/^0 \/ 20\.000$|^0 \/ 20,000$/);
+
+    fireEvent.change(field, { target: { value: 'a'.repeat(20_001) } });
+    expect(count.className).toContain('text-red-400');
+    fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
+    expect(
+      view.getByText(/As instruções extras são longas demais/, { selector: 'p' }),
+    ).toBeInTheDocument();
+    expect(client.createE2eCreation).not.toHaveBeenCalled();
+
+    // Shortening the text clears the error and the count stops warning.
+    fireEvent.change(field, { target: { value: 'a'.repeat(20_000) } });
+    expect(view.queryByText(/As instruções extras são longas demais/)).toBeNull();
+    expect(count.className).not.toContain('text-red-400');
   });
 
   it('submits a backend diff run with an uploaded patch', async () => {
@@ -701,12 +609,7 @@ describe('E2eConfigForm', () => {
       target: { value: 'https://sample.trycloudflare.com' },
     });
     fireEvent.change(view.getByLabelText('Ou cole o conteúdo'), { target: { value: 'PRD' } });
-    await waitFor(() =>
-      expect(view.getByLabelText('Repositório').querySelectorAll('option').length).toBe(3),
-    );
-    fireEvent.change(view.getByLabelText('Repositório'), {
-      target: { value: 'azure_devops:guid-1' },
-    });
+    await pickRepository(REPOSITORY_NAMES, 'azure_devops:guid-1');
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
     await waitFor(() => expect(client.createE2eCreation).toHaveBeenCalled());
     expect(client.createE2eCreation.mock.calls[0]![0].repository).toMatchObject({
@@ -837,40 +740,42 @@ describe('E2eConfigForm', () => {
         onCancel={vi.fn()}
       />,
     );
-    await waitFor(() =>
-      expect(
-        branchView.getByLabelText('Repositório').querySelectorAll('option').length,
-      ).toBeGreaterThan(1),
-    );
-    fireEvent.change(branchView.getByLabelText('Repositório'), { target: { value: 'github:42' } });
-    fireEvent.change(branchView.getByLabelText('Repositório'), {
-      target: { value: 'azure_devops:guid-1' },
-    });
+    await pickRepository(REPOSITORY_NAMES, 'github:42');
+    await pickRepository(REPOSITORY_NAMES, 'azure_devops:guid-1');
     branchView.unmount();
     resolveBranches([{ name: 'main', isDefault: true }]);
     rejectBranches(new Error('gone'));
     await Promise.resolve();
   });
 
-  it('filters long repository lists by name and keeps the chosen one listed', async () => {
+  it('searches long repository lists inside the select and keeps the chosen one', async () => {
     const { view } = setup();
-    const select = view.getByLabelText('Repositório');
-    const names = () => [...select.querySelectorAll('option')].map((option) => option.textContent);
-    await waitFor(() => expect(names()).toContain('Finance/app'));
+    await repositoriesLoaded(view);
     expect(
       view.getByText(/2 repositórios encontrados\. Faltou algum\? Verifique/),
     ).toBeInTheDocument();
-    const search = view.getByLabelText('Buscar repositórios');
-    fireEvent.change(search, { target: { value: '  FINANCE ' } });
-    expect(names()).toEqual(['Selecione um repositório', 'Finance/app']);
-    fireEvent.change(search, { target: { value: 'nothing' } });
-    expect(names()).toEqual(['Nenhum repositório corresponde à busca']);
+    const field = view.getByRole('combobox', { name: 'Repositório' }) as HTMLInputElement;
+    // There is no separate search box: typing in the select itself narrows the list.
+    expect(view.queryByLabelText('Buscar repositórios')).toBeNull();
+    fireEvent.focus(field);
+    expect(
+      within(view.getByRole('listbox'))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['acme/demo-app (GitHub)', 'Finance/app (Azure DevOps)']);
+    fireEvent.change(field, { target: { value: '  FINANCE ' } });
+    expect(
+      within(view.getByRole('listbox'))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Finance/app (Azure DevOps)']);
+    fireEvent.change(field, { target: { value: 'nothing' } });
+    expect(within(view.getByRole('listbox')).queryAllByRole('option')).toEqual([]);
+    expect(view.getByText('Nenhum repositório corresponde à busca')).toBeInTheDocument();
 
-    fireEvent.change(search, { target: { value: '' } });
-    await chooseRepository(view);
-    fireEvent.change(search, { target: { value: 'nothing' } });
-    expect(names()).toEqual(['Nenhum repositório corresponde à busca', 'acme/demo-app']);
-    expect((select as HTMLSelectElement).value).toBe('github:42');
+    fireEvent.change(field, { target: { value: '' } });
+    fireEvent.click(view.getByRole('option', { name: /^acme\/demo-app/ }));
+    await waitFor(() => expect(field.value).toBe('acme/demo-app (GitHub)'));
   });
 
   it('picks the first branch when none is marked as default', async () => {
@@ -901,6 +806,17 @@ describe('E2eConfigForm', () => {
     expect(onOpenIntegrations).toHaveBeenCalled();
     empty.view.unmount();
 
+    const unreadable = setup({
+      repositories: {
+        repositories: [],
+        warnings: [{ provider: 'azure_devops', code: 'CREDENTIALS_UNREADABLE' }],
+      },
+    });
+    expect(
+      await unreadable.view.findByText(/token salvo com esta chave de criptografia/),
+    ).toBeInTheDocument();
+    unreadable.view.unmount();
+
     const failed = setup({ repositories: new Error('Sem acesso') });
     expect(await failed.view.findByText(/Sem acesso/)).toBeInTheDocument();
     expect(failed.view.queryByRole('button', { name: 'Integrações' })).toBeNull();
@@ -926,12 +842,7 @@ describe('E2eConfigForm', () => {
     opaque.unmount();
 
     const branches = setup({ branches: new Error('Branch indisponível') });
-    await waitFor(() =>
-      expect(branches.view.getByLabelText('Repositório').querySelectorAll('option').length).toBe(3),
-    );
-    fireEvent.change(branches.view.getByLabelText('Repositório'), {
-      target: { value: 'github:42' },
-    });
+    await pickRepository(REPOSITORY_NAMES, 'github:42');
     expect(await branches.view.findByText('Branch indisponível')).toBeInTheDocument();
     // Without branch data the repository's default branch is still offered.
     await waitFor(() =>
@@ -941,23 +852,10 @@ describe('E2eConfigForm', () => {
 
     const opaqueBranches = setup({ branches: [] });
     opaqueBranches.client.getE2eBranches.mockRejectedValueOnce('boom');
-    await waitFor(() =>
-      expect(
-        opaqueBranches.view.getByLabelText('Repositório').querySelectorAll('option').length,
-      ).toBe(3),
-    );
-    fireEvent.change(opaqueBranches.view.getByLabelText('Repositório'), {
-      target: { value: 'azure_devops:guid-1' },
-    });
+    await pickRepository(REPOSITORY_NAMES, 'azure_devops:guid-1');
     expect(
       await opaqueBranches.view.findByText('Não foi possível carregar as branches.'),
     ).toBeInTheDocument();
-    fireEvent.change(opaqueBranches.view.getByLabelText('Repositório'), {
-      target: { value: '' },
-    });
-    expect((opaqueBranches.view.getByLabelText('Branch base') as HTMLSelectElement).disabled).toBe(
-      true,
-    );
   });
 
   it('edits an existing run, keeping its stored password unless retyped', async () => {
@@ -1070,6 +968,12 @@ describe('E2eConfigForm', () => {
   });
 });
 
+/** Picks an option of a searchable select: its list is drawn on the page, not inside the field. */
+async function pickSaved(root: ReturnType<typeof within>, label: string, option: string) {
+  fireEvent.focus(root.getByRole('combobox', { name: label }));
+  fireEvent.click(await within(document.body).findByRole('option', { name: option }));
+}
+
 describe('E2eConfigForm with test cases saved in ADK', () => {
   async function fillRun(view: ReturnType<typeof render>) {
     await waitFor(() =>
@@ -1085,9 +989,11 @@ describe('E2eConfigForm with test cases saved in ADK', () => {
   it('automates chosen cases of a suite and of one of its Test Plans', async () => {
     const { client, view, onCreated } = setup();
     await fillRun(view);
-    fireEvent.click(view.getByRole('radio', { name: 'Test cases salvos no ADK' }));
+    fireEvent.change(view.getByRole('combobox', { name: 'Origem dos testes' }), {
+      target: { value: 'saved' },
+    });
     const picker = await view.findByTestId('e2e-saved-case-picker');
-    fireEvent.change(within(picker).getByLabelText('Suíte'), { target: { value: 'root' } });
+    await pickSaved(within(picker), 'Test Plan', 'Sprint 10');
     // The suite brings the cases of its child suites; cases without an id are left out.
     expect(within(picker).getByText('3 de 3 selecionados')).toBeInTheDocument();
     expect(within(picker).queryByText('Legacy')).toBeNull();
@@ -1099,9 +1005,7 @@ describe('E2eConfigForm with test cases saved in ADK', () => {
       expect.objectContaining({ prd: '', savedCases: { suiteId: 'root', caseIds: ['c1', 'c2'] } }),
     );
 
-    fireEvent.change(within(picker).getByLabelText('Test Plan'), {
-      target: { value: 'plan-login' },
-    });
+    await pickSaved(within(picker), 'Test Suite', 'Login');
     expect(within(picker).getByText('2 de 2 selecionados')).toBeInTheDocument();
     fireEvent.click(within(picker).getByLabelText(/Todos os casos/));
     expect(within(picker).getByText('0 de 2 selecionados')).toBeInTheDocument();
@@ -1116,7 +1020,10 @@ describe('E2eConfigForm with test cases saved in ADK', () => {
         expect.objectContaining({ savedCases: { planId: 'plan-login' } }),
       ),
     );
-    fireEvent.change(within(picker).getByLabelText('Test Plan'), { target: { value: '' } });
+    // Typing in the field clears the Test Plan, so the suite's cases are all back.
+    fireEvent.change(within(picker).getByRole('combobox', { name: 'Test Suite' }), {
+      target: { value: 'L' },
+    });
     expect(within(picker).getByText('3 de 3 selecionados')).toBeInTheDocument();
   });
 
@@ -1124,15 +1031,18 @@ describe('E2eConfigForm with test cases saved in ADK', () => {
     const { client, view } = setup({
       initialSavedCases: { planId: 'plan-login', caseIds: ['c2'] },
     });
-    expect(view.getByRole('radio', { name: 'Test cases salvos no ADK' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
+    expect(
+      (view.getByRole('combobox', { name: 'Origem dos testes' }) as HTMLSelectElement).value,
+    ).toBe('saved');
     const picker = await view.findByTestId('e2e-saved-case-picker');
-    expect((within(picker).getByLabelText('Suíte') as HTMLSelectElement).value).toBe('login');
-    expect((within(picker).getByLabelText('Test Plan') as HTMLSelectElement).value).toBe(
-      'plan-login',
-    );
+    expect(
+      (
+        within(picker).getByRole('combobox', { name: 'Test Plan' }) as HTMLInputElement
+      ).value.trim(),
+    ).toBe('Login');
+    expect(
+      (within(picker).getByRole('combobox', { name: 'Test Suite' }) as HTMLInputElement).value,
+    ).toBe('Login');
     expect(within(picker).getByText('1 de 2 selecionados')).toBeInTheDocument();
     await fillRun(view);
     fireEvent.click(view.getByRole('button', { name: 'Continuar' }));
@@ -1143,20 +1053,23 @@ describe('E2eConfigForm with test cases saved in ADK', () => {
     );
     // Resetting keeps the cases the form was opened with.
     fireEvent.click(view.getByRole('button', { name: 'Limpar' }));
-    expect(view.getByRole('radio', { name: 'Test cases salvos no ADK' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
+    expect(
+      (view.getByRole('combobox', { name: 'Origem dos testes' }) as HTMLSelectElement).value,
+    ).toBe('saved');
   });
 
   it('explains when there is nothing saved to automate', async () => {
     const empty = setup({ savedPlans: [] });
-    fireEvent.click(empty.view.getByRole('radio', { name: 'Test cases salvos no ADK' }));
+    fireEvent.change(empty.view.getByRole('combobox', { name: 'Origem dos testes' }), {
+      target: { value: 'saved' },
+    });
     expect(await empty.view.findByText(/Ainda não há Test Plans salvos/)).toBeInTheDocument();
     empty.view.unmount();
 
     const failing = setup({ savedPlans: new Error('offline') });
-    fireEvent.click(failing.view.getByRole('radio', { name: 'Test cases salvos no ADK' }));
+    fireEvent.change(failing.view.getByRole('combobox', { name: 'Origem dos testes' }), {
+      target: { value: 'saved' },
+    });
     expect(await failing.view.findByText('offline')).toBeInTheDocument();
     failing.view.unmount();
 
@@ -1185,6 +1098,32 @@ describe('E2eSavedCasePicker', () => {
   });
 });
 
+describe('E2eConfigForm default execution', () => {
+  const selected = (view: ReturnType<typeof setup>['view'], name: string) =>
+    view.getByRole('radio', { name }).getAttribute('aria-checked') === 'true';
+
+  it('starts a new run on the user computer when the server prefers it', async () => {
+    const { view, client } = setup({ defaultExecutionTarget: 'local' });
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    await waitFor(() => expect(selected(view, 'Meu computador')).toBe(true));
+    expect(selected(view, 'Servidores do ADK')).toBe(false);
+  });
+
+  it('keeps the ADK workers for a new run when that is the default', async () => {
+    const { view, client } = setup({ defaultExecutionTarget: 'remote' });
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    expect(selected(view, 'Servidores do ADK')).toBe(true);
+  });
+
+  it('does not move a run being edited to the default', async () => {
+    const { view, client } = setup({ creationId: 'c1', defaultExecutionTarget: 'local' });
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    await waitFor(() => expect(client.getE2eCreation).toHaveBeenCalled());
+    await view.findByDisplayValue('ama');
+    expect(selected(view, 'Servidores do ADK')).toBe(true);
+  });
+});
+
 describe('E2eConfigForm in a local install', () => {
   it('lets the ADK workers open a localhost target, without a tunnel or the local runner', async () => {
     const { view, client } = setup({ workersReachLocalhost: true });
@@ -1200,13 +1139,14 @@ describe('E2eConfigForm in a local install', () => {
     expect(view.queryByText('Aplicação rodando localmente')).toBeNull();
   });
 
-  it('still asks for a tunnel or the local runner when the workers cannot reach localhost', async () => {
+  it('points to the local runner when the workers cannot reach localhost', async () => {
     const { view, client } = setup({ workersReachLocalhost: false });
     await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
     fireEvent.change(view.getByLabelText('URL base'), {
       target: { value: 'http://localhost:5173/login' },
     });
-    expect(view.getByText('Aplicação rodando localmente')).toBeInTheDocument();
+    expect(view.getByRole('status')).toHaveTextContent(/Escolha “Meu computador” acima/);
+    expect(view.queryByRole('button', { name: /Iniciar o túnel/ })).toBeNull();
   });
 
   it('treats a server without the capabilities call as one whose workers cannot', async () => {
@@ -1215,6 +1155,57 @@ describe('E2eConfigForm in a local install', () => {
     fireEvent.change(view.getByLabelText('URL base'), {
       target: { value: 'http://localhost:5173/login' },
     });
-    expect(view.getByText('Aplicação rodando localmente')).toBeInTheDocument();
+    expect(view.getByRole('status')).toHaveTextContent(/Escolha “Meu computador” acima/);
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+  });
+});
+
+describe('E2eConfigForm in the desktop app', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, 'adkDesktop', {
+      value: { apiUrl: 'http://127.0.0.1:60675' },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'adkDesktop');
+  });
+
+  it('hides where the tests run, the runner and the tunnel settings', async () => {
+    const { view, client } = setup({
+      workersReachLocalhost: true,
+      defaultExecutionTarget: 'local',
+    });
+    await waitFor(() => expect(client.getCapabilities).toHaveBeenCalled());
+    fireEvent.change(view.getByLabelText('URL base'), {
+      target: { value: 'http://localhost:3000' },
+    });
+    expect(view.queryByRole('radio', { name: 'Servidores do ADK' })).toBeNull();
+    expect(view.queryByRole('radio', { name: 'Meu computador' })).toBeNull();
+    expect(view.queryByText('devkit runner')).toBeNull();
+    expect(view.queryByText('Aplicação rodando localmente')).toBeNull();
+    expect(view.queryByRole('button', { name: /Autenticação do túnel/ })).toBeNull();
+    expect(view.getByText('Mantenha a aplicação ativa durante os testes.')).toBeInTheDocument();
+  });
+
+  it('runs a run saved for the local runner on this computer', async () => {
+    const update = vi.fn().mockResolvedValue({ id: 'c1', name: 'saved' });
+    const { view } = setup({
+      creationId: 'c1',
+      update,
+      workersReachLocalhost: true,
+      getCreation: vi
+        .fn()
+        .mockResolvedValue(
+          existing({ baseUrl: 'http://localhost:3000', executionTarget: 'local' }),
+        ),
+    });
+    await view.findByDisplayValue('ama');
+    expect(view.queryByText('devkit runner')).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: 'Salvar' }));
+    await waitFor(() => expect(update).toHaveBeenCalled());
+    expect(update.mock.calls[0]![1]).toEqual(
+      expect.objectContaining({ executionTarget: 'remote' }),
+    );
   });
 });

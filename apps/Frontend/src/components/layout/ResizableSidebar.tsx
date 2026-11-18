@@ -23,6 +23,11 @@ export interface ResizableSidebarProps {
   readonly resizeEdge?: 'left' | 'right';
   readonly resizeLabel?: string;
   readonly className?: string;
+  /**
+   * The divider sits in the page gap beside the panel (a line shows on hover and while dragging),
+   * not over the panel's own edge. The parent must leave a 16px gap on that side.
+   */
+  readonly gap?: boolean;
   readonly 'aria-label'?: string;
   readonly 'data-testid'?: string;
   /**
@@ -44,6 +49,7 @@ export function ResizableSidebar({
   resizeEdge = 'right',
   resizeLabel,
   className,
+  gap = false,
   'aria-label': ariaLabel,
   'data-testid': testId,
   collapsed = false,
@@ -60,24 +66,24 @@ export function ResizableSidebar({
   const dragStart = useRef({ pointerX: 0, width: defaultWidth });
   const latest = useRef<number | null>(null);
   const frame = useRef(0);
-  const sidebarRef = useRef<HTMLElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
   const isResizing = dragWidth !== null;
 
   useEffect(() => {
     if (!isResizing) return;
 
-    // Effects run after the commit attached the ref, and the <aside> is always rendered, so the
-    // element is known here; holding it keeps a late pointer event safe after the ref detaches.
-    const sidebar = sidebarRef.current!;
     const lower = collapsible ? collapsedWidth : minWidth;
     const handlePointerMove = (event: PointerEvent) => {
       const pointerDelta = event.clientX - dragStart.current.pointerX;
       const next =
         dragStart.current.width + (resizeEdge === 'right' ? pointerDelta : -pointerDelta);
-      latest.current = Math.min(resolveMaxWidth(maxWidth, sidebar), Math.max(lower, next));
+      latest.current = Math.min(
+        resolveMaxWidth(maxWidth, sidebarRef.current),
+        Math.max(lower, next),
+      );
       // The edge follows the pointer at once, without a React render; the state (which the
       // content may depend on) catches up once per frame.
-      sidebar.style.width = `${latest.current}px`;
+      if (sidebarRef.current) sidebarRef.current.style.width = `${latest.current}px`;
       if (!frame.current)
         frame.current = window.requestAnimationFrame(() => {
           frame.current = 0;
@@ -85,12 +91,9 @@ export function ResizableSidebar({
         });
     };
     const stopResizing = () => {
-      // A second end event before the listeners are removed (pointerup then pointercancel)
-      // must not apply the drag again from its starting width.
-      const released = latest.current;
-      if (released === null) return;
       window.cancelAnimationFrame(frame.current);
       frame.current = 0;
+      const released = latest.current ?? dragStart.current.width;
       latest.current = null;
       setDragWidth(null);
       if (collapsible && released < minWidth - COLLAPSE_SLACK) {
@@ -142,57 +145,100 @@ export function ResizableSidebar({
     setWidth(step);
   };
 
-  // While dragging, `latest` always holds the pointer's width: it is set on pointer down and
-  // cleared only together with the drag itself.
-  const shownWidth = isResizing ? latest.current! : collapsed ? collapsedWidth : width;
+  const shownWidth = isResizing
+    ? /* v8 ignore next -- while dragging the stored width is always set; the fallbacks only narrow the types */
+      (latest.current ?? dragWidth ?? width)
+    : collapsed
+      ? collapsedWidth
+      : width;
+
+  const separator = (
+    <div
+      role="separator"
+      aria-label={resolvedResizeLabel}
+      aria-orientation="vertical"
+      aria-valuemin={collapsible ? collapsedWidth : minWidth}
+      aria-valuemax={resolveMaxWidth(maxWidth, sidebarRef.current)}
+      aria-valuenow={Math.round(shownWidth)}
+      tabIndex={0}
+      className={cn(
+        'absolute inset-y-0 z-20 cursor-col-resize touch-none focus-visible:outline-none',
+        gap
+          ? [
+              'w-4',
+              resizeEdge === 'right' ? '-right-4' : '-left-4',
+              "after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-transparent after:transition-colors after:content-['']",
+              'hover:after:w-0.5 hover:after:bg-[var(--fill-accent)] focus-visible:after:w-0.5 focus-visible:after:bg-[var(--fill-accent)]',
+              isResizing && 'after:w-0.5 after:bg-[var(--fill-accent)]',
+            ]
+          : [
+              'w-1 transition-colors hover:bg-[var(--fill-accent)] focus-visible:bg-[var(--fill-accent)]',
+              resizeEdge === 'right' ? 'right-0' : 'left-0',
+              isResizing && 'bg-[var(--fill-accent)]',
+            ],
+      )}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        const start = collapsed ? collapsedWidth : width;
+        dragStart.current = { pointerX: event.clientX, width: start };
+        latest.current = start;
+        setDragWidth(start);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          resizeWithKeyboard(resizeEdge === 'right' ? -1 : 1);
+        } else if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          resizeWithKeyboard(resizeEdge === 'right' ? 1 : -1);
+        }
+      }}
+    />
+  );
+  const content = typeof children === 'function' ? children(shownWidth, isResizing) : children;
+  const sizing = cn(
+    'relative flex shrink-0 flex-col',
+    // Snaps (fold, unfold, back to the minimum) animate; dragging follows the pointer as is.
+    !isResizing && 'transition-[width] duration-200 ease-out motion-reduce:transition-none',
+  );
+  const style = { width: shownWidth, maxWidth: maxWidth === 'container' ? '100%' : undefined };
+
+  // The divider lives outside the panel, so the panel can clip its content without hiding it.
+  if (gap)
+    return (
+      <div
+        ref={sidebarRef}
+        className={sizing}
+        style={style}
+        data-testid={testId}
+        data-collapsed={collapsed ? 'true' : undefined}
+      >
+        <aside
+          aria-label={ariaLabel}
+          className={cn(
+            'flex min-h-0 w-full flex-1 flex-col',
+            collapsible && 'overflow-hidden',
+            className,
+          )}
+        >
+          {content}
+        </aside>
+        {separator}
+      </div>
+    );
 
   return (
     <aside
       ref={sidebarRef}
-      className={cn(
-        'relative flex shrink-0 flex-col',
-        // Snaps (fold, unfold, back to the minimum) animate; dragging follows the pointer as is.
-        !isResizing && 'transition-[width] duration-200 ease-out motion-reduce:transition-none',
-        collapsible && 'overflow-hidden',
-        className,
-      )}
-      style={{ width: shownWidth, maxWidth: maxWidth === 'container' ? '100%' : undefined }}
+      className={cn(sizing, collapsible && 'overflow-hidden', className)}
+      style={style}
       aria-label={ariaLabel}
       data-testid={testId}
       data-collapsed={collapsed ? 'true' : undefined}
     >
-      {typeof children === 'function' ? children(shownWidth, isResizing) : children}
-      <div
-        role="separator"
-        aria-label={resolvedResizeLabel}
-        aria-orientation="vertical"
-        aria-valuemin={collapsible ? collapsedWidth : minWidth}
-        aria-valuemax={resolveMaxWidth(maxWidth, sidebarRef.current)}
-        aria-valuenow={Math.round(shownWidth)}
-        tabIndex={0}
-        className={cn(
-          'absolute inset-y-0 z-20 w-1 cursor-col-resize touch-none transition-colors hover:bg-[var(--fill-accent)] focus-visible:bg-[var(--fill-accent)] focus-visible:outline-none',
-          resizeEdge === 'right' ? 'right-0' : 'left-0',
-          isResizing && 'bg-[var(--fill-accent)]',
-        )}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return;
-          event.preventDefault();
-          const start = collapsed ? collapsedWidth : width;
-          dragStart.current = { pointerX: event.clientX, width: start };
-          latest.current = start;
-          setDragWidth(start);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowLeft') {
-            event.preventDefault();
-            resizeWithKeyboard(resizeEdge === 'right' ? -1 : 1);
-          } else if (event.key === 'ArrowRight') {
-            event.preventDefault();
-            resizeWithKeyboard(resizeEdge === 'right' ? 1 : -1);
-          }
-        }}
-      />
+      {content}
+      {separator}
     </aside>
   );
 }

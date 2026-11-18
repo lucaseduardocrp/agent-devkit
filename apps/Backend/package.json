@@ -7,6 +7,7 @@
   "scripts": {
     "build": "npm run prisma:generate && tsc -p tsconfig.build.json",
     "start": "node --env-file=.env dist/src/bootstrap/server.js",
+    "migrate:attachments": "node --env-file=.env dist/src/bootstrap/migrate-attachments.js",
     "format": "prettier --write \"**/*.{js,mjs,cjs,ts,tsx,json,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{js,mjs,cjs,ts,tsx,json,yml,yaml}\"",
     "lint": "eslint \"src/**/*.{js,mjs,cjs,ts,tsx}\"",

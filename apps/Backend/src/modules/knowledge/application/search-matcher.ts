@@ -54,7 +54,29 @@ const STOP_WORDS = new Set([
   'or',
   'is',
   'it',
+  // Words of the question itself ("what do you know about X"), not of the subject asked about.
+  'voce',
+  'você',
+  'vc',
+  'sabe',
+  'saber',
+  'conhece',
+  'fale',
+  'explique',
+  'diga',
+  'conte',
+  'respeito',
+  'what',
+  'you',
+  'know',
+  'about',
+  'tell',
+  'me',
 ]);
+
+/** Opening of a question that only introduces the subject: "o que você sabe sobre …". */
+const QUESTION_LEAD =
+  /^\s*(?:(?:o\s+que|oq|que)\s+(?:voc[eê]|vc|tu)\s+(?:sabe|conhece)|(?:me\s+)?(?:fale|explique|diga|conte)|what\s+do\s+you\s+know|tell\s+me)\s+(?:mais\s+)?(?:sobre|a\s+respeito\s+d[eoa]s?|de|da|do|about)\s+/i;
 
 export function normalizeDiacritics(text: string): string {
   return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -77,6 +99,8 @@ export function analyzeSearchPrompt(prompt: string): SearchQueryAnalysis {
       ' ',
     )
     .replace(/\b(sobre\s+(essa|esta|este)\s+(feature|funcionalidade|requisito))\b/gi, ' ')
+    .replace(QUESTION_LEAD, '')
+    .replace(/[\s?!.,;:]+$/u, '')
     .replace(/\s+/g, ' ')
     .trim();
 

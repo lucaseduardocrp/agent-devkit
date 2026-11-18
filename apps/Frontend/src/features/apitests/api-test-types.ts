@@ -1,3 +1,5 @@
+import { getMessages } from '../../lib/i18n/index.js';
+
 // Integration tests (collections) and overload tests (load scenarios), as the ADK API returns
 // them. The shapes follow apps/Backend/src/modules/apitests.
 
@@ -656,7 +658,7 @@ export function flattenItems(
 
 /** A new request of the given kind, with the defaults of its protocol. */
 export function newRequest(
-  name = 'New request',
+  name = getMessages().apiTests.newRequestName,
   kind: RequestKind = 'http',
   baseUrl = '{{baseUrl}}',
 ): ApiRequestSpec {

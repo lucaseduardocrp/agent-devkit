@@ -95,6 +95,22 @@ describe('FormattedContent', () => {
   });
 });
 
+describe('diagrams in code fences', () => {
+  it('shows the diagram without the fences that frame it', () => {
+    const fence = '```';
+    const blocks = parseScenarioBlocks(
+      `Fluxo\n\n${fence}\n┌─┐\n│ │\n└─┘\n${fence}\n\n~~~\n│ x │\n~~~`,
+    );
+    expect(blocks.filter((block) => block.type === 'diagram')).toEqual([
+      { type: 'diagram', content: '┌─┐\n│ │\n└─┘' },
+      { type: 'diagram', content: '│ x │' },
+    ]);
+    expect(
+      blocks.some((block) => block.type === 'paragraph' && /```|~~~/.test(block.content)),
+    ).toBe(false);
+  });
+});
+
 describe('test case description template', () => {
   it('decodes escaped entities without turning them into markup', () => {
     expect(

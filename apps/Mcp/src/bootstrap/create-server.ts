@@ -15,9 +15,9 @@ export const SERVER_NAME = 'adk';
 
 export function packageVersion(): string {
   const manifest = JSON.parse(readFileSync(join(packageRoot(), 'package.json'), 'utf8')) as {
-    version: string;
+    version?: string;
   };
-  return manifest.version;
+  return manifest.version ?? '0.0.0';
 }
 
 export const SERVER_INSTRUCTIONS = `ADK MCP server: Brain (knowledge base), Specs, Test Plans, Agents, Design prototypes, E2E Automation, Workspaces and Integrations.
@@ -40,6 +40,8 @@ export interface ServerDependencies {
   readonly session: Session;
   readonly skills: readonly SkillFile[];
   readonly fetch?: typeof fetch;
+  /** Replaces the default instructions: a restricted connection says what it does not have. */
+  readonly instructions?: string;
 }
 
 /** Builds the per-call context; a request token (HTTP transport) wins over the stored session. */
@@ -58,7 +60,13 @@ export function createToolContext(deps: ServerDependencies, requestToken?: strin
       };
     },
   });
-  return { api, session: deps.session, apiUrl: deps.apiUrl };
+  return {
+    api,
+    session: deps.session,
+    apiUrl: deps.apiUrl,
+    // A request token only exists on the hosted HTTP transport.
+    allowLocalFiles: requestToken === undefined,
+  };
 }
 
 export async function runTool(tool: McpTool, input: unknown, context: ToolContext) {
@@ -117,7 +125,7 @@ export async function recordToolUsage(
 export function createMcpServer(deps: ServerDependencies): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, title: 'ADK', version: packageVersion() },
-    { instructions: SERVER_INSTRUCTIONS },
+    { instructions: deps.instructions ?? SERVER_INSTRUCTIONS },
   );
 
   for (const tool of deps.registry.tools) {

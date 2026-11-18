@@ -1,3 +1,4 @@
+import { PROFILE_BLOCKED_TOOLSETS, profileAllows, type AccessProfile } from './access-profile.js';
 import type { McpPrompt } from './prompt.js';
 import { TOOLSETS, type McpTool, type Toolset } from './tool.js';
 
@@ -19,7 +20,11 @@ export class ToolRegistry {
   public readonly tools: readonly McpTool[];
   public readonly prompts: readonly McpPrompt[];
 
-  public constructor(modules: readonly McpModule[], filter: RegistryFilter = {}) {
+  public constructor(
+    private readonly modules: readonly McpModule[],
+    private readonly filter: RegistryFilter = {},
+    profile?: AccessProfile,
+  ) {
     const allTools = modules.flatMap((module) => module.tools);
     const allPrompts = modules.flatMap((module) => module.prompts ?? []);
     assertUnique(
@@ -39,11 +44,22 @@ export class ToolRegistry {
 
     const enabled = new Set<Toolset>(filter.toolsets?.length ? filter.toolsets : TOOLSETS);
     this.tools = allTools.filter(
-      (tool) => enabled.has(tool.toolset) && (!filter.readOnly || tool.access === 'read'),
+      (tool) =>
+        enabled.has(tool.toolset) &&
+        (!filter.readOnly || tool.access === 'read') &&
+        (!profile || profileAllows(profile, tool)),
     );
     this.prompts = modules
-      .filter((module) => enabled.has(module.toolset))
+      .filter(
+        (module) =>
+          enabled.has(module.toolset) && !(profile && PROFILE_BLOCKED_TOOLSETS.has(module.toolset)),
+      )
       .flatMap((module) => module.prompts ?? []);
+  }
+
+  /** The same tools, narrowed to what a restricted connection may use (see access-profile.ts). */
+  public restrictedTo(profile: AccessProfile): ToolRegistry {
+    return new ToolRegistry(this.modules, this.filter, profile);
   }
 
   public find(name: string): McpTool | undefined {

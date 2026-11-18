@@ -688,6 +688,31 @@ describe('E2E runs reported to test management platforms', () => {
     });
   });
 
+  it('links saved cases to a run and adopts the platform they were imported from', async () => {
+    const reader: SavedCaseReader = {
+      listSavedCases: vi.fn().mockResolvedValue([
+        {
+          planId: 'plan-1',
+          caseId: 'local-1',
+          title: 'Caso importado',
+          description: '',
+          steps: [],
+          remote: { provider: 'azure_devops', caseId: '50605', planId: '50398', suiteId: '50586' },
+        },
+      ]),
+    };
+    const { service, store } = setup({ savedCases: reader });
+    const created = await service.create(context, { ...runInput, planning: 'host', start: false });
+    const result = await service.linkSavedCases('ws', created.id, { planId: 'plan-1' });
+    expect(result).toMatchObject({ imported: 1, skipped: 0 });
+    expect(result.creation.reporting).toMatchObject({ provider: 'azure_devops', planId: '50398' });
+    const [test] = await store.listTests('ws', created.id);
+    expect(test).toMatchObject({
+      savedCase: { planId: 'plan-1', caseId: 'local-1' },
+      externalCase: { caseId: '50605' },
+    });
+  });
+
   it('automates saved cases without reporting when their platform is unavailable', async () => {
     const reader: SavedCaseReader = {
       listSavedCases: vi.fn().mockResolvedValue([

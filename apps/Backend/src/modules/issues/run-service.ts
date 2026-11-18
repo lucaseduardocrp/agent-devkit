@@ -25,6 +25,8 @@ import type {
   WorkflowRunState,
   WorkflowRunStepResult,
 } from './run-store.js';
+import type { AgentWorkflowNotificationConfig } from '../agents/domain/agent-workflow.js';
+import type { NotificationService } from '../notifications/application/notification-service.js';
 import type { PbiStore } from '../pbi/pbi-store.js';
 import type { E2eArtifactStore } from '../e2e/application/artifact-store.js';
 import {
@@ -32,8 +34,15 @@ import {
   loadImageAttachments,
   type ImageAttachment,
 } from '../shared/image-attachment.js';
-import type { LlmImage } from '../agents/application/agent-ports.js';
+import type { LlmFile, LlmImage } from '../agents/application/agent-ports.js';
+import { inlineFileAttachments, loadDocumentAttachments } from '../shared/document-attachment.js';
 import { InMemoryUsageStore, type LlmUsageEvent, type UsageStore } from './usage-store.js';
+
+/** What an issue run shows its model besides the text: images, and documents it can read. */
+interface IssueMedia {
+  readonly images: readonly LlmImage[];
+  readonly files: readonly LlmFile[];
+}
 
 const MAX_MICROS = 2_147_483_647;
 
@@ -66,18 +75,16 @@ function priorStepContext(results: readonly WorkflowRunStepResult[]): string {
     .join('\n\n');
 }
 
-/** Tokens reported by the workflow steps; null when no step reported usage. */
-function workflowUsage(results: readonly WorkflowRunStepResult[]) {
-  const usage = results.flatMap((result) =>
-    result.inputTokens !== undefined && result.outputTokens !== undefined
-      ? [{ input: result.inputTokens, output: result.outputTokens }]
-      : [],
-  );
-  if (!usage.length) return { inputTokens: null, outputTokens: null };
-  return {
-    inputTokens: usage.reduce((sum, item) => sum + item.input, 0),
-    outputTokens: usage.reduce((sum, item) => sum + item.output, 0),
-  };
+/** Results that report token usage; what the user answered is not the model's. */
+function usageOf(results: readonly WorkflowRunStepResult[]): WorkflowRunStepResult[] {
+  return results.filter((item) => item.kind !== 'answer' && item.inputTokens !== undefined);
+}
+
+function sumTokens(
+  results: readonly WorkflowRunStepResult[],
+  key: 'inputTokens' | 'outputTokens',
+): number {
+  return results.reduce((sum, item) => sum + (item[key] ?? 0), 0);
 }
 
 /** What the node before this one produced, which is what a condition compares and an action sends. */
@@ -95,12 +102,72 @@ export interface UsageInput {
   inputTokens: number;
   outputTokens: number;
   estimated: boolean;
+  /** How the tokens were spent: an MCP client (default), a provider CLI session or an API call. */
+  source?: 'mcp' | 'cli' | 'api';
+}
+
+/** Provider whose rates price the host model behind each MCP client. */
+const MCP_CLIENT_PROVIDERS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/claude/i, 'anthropic'],
+  [/codex|openai|gpt/i, 'openai'],
+  [/gemini/i, 'google'],
+];
+
+/**
+ * Prices a token count with the workspace rate table. MCP usage is reported as provider "mcp" and
+ * the client name, so without an explicit rate for that pair it falls back to the most expensive
+ * rate of the client's model provider (e.g. claude-code → anthropic). Overestimating keeps budgets
+ * safe; an exact "mcp" rate always wins.
+ */
+/**
+ * The adapters name themselves "Claude" and "Gemini" while the rate table uses the company
+ * ("anthropic", "google"). Both spellings price the same model.
+ */
+const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  claude: 'anthropic',
+  gemini: 'google',
+};
+const canonicalProvider = (provider: string): string => {
+  const name = provider.trim().toLowerCase();
+  return PROVIDER_ALIASES[name] ?? name;
+};
+
+function priceUsage(
+  rates: readonly CostRate[],
+  provider: string,
+  model: string,
+  usage: { inputTokens: number; outputTokens: number },
+): number | null {
+  let rate = rates.find(
+    (item) =>
+      canonicalProvider(item.provider) === canonicalProvider(provider) && item.model === model,
+  );
+  if (!rate && provider.toLowerCase() === 'mcp') {
+    const modelProvider = MCP_CLIENT_PROVIDERS.find(([pattern]) => pattern.test(model))?.[1];
+    if (modelProvider)
+      rate = rates
+        .filter((item) => canonicalProvider(item.provider) === modelProvider)
+        .sort(
+          (a, b) =>
+            b.outputUsdPerMillion - a.outputUsdPerMillion ||
+            b.inputUsdPerMillion - a.inputUsdPerMillion,
+        )[0];
+  }
+  if (!rate) return null;
+  const micros = Math.round(
+    usage.inputTokens * rate.inputUsdPerMillion + usage.outputTokens * rate.outputUsdPerMillion,
+  );
+  return Number.isSafeInteger(micros) && micros <= MAX_MICROS ? micros : null;
 }
 
 /** Current-month token usage reported by MCP clients (host model reading and writing tool data). */
 function summarizeMcpUsage(events: readonly LlmUsageEvent[]) {
   const tokens = (event: LlmUsageEvent) => event.inputTokens + event.outputTokens;
   const tools = new Map<string, { tool: string; calls: number; totalTokens: number }>();
+  const sources = new Map<
+    string,
+    { source: string; calls: number; totalTokens: number; spendMicros: number }
+  >();
   const clients = new Map<
     string,
     { provider: string; model: string; calls: number; totalTokens: number }
@@ -110,6 +177,16 @@ function summarizeMcpUsage(events: readonly LlmUsageEvent[]) {
     tool.calls += 1;
     tool.totalTokens += tokens(event);
     tools.set(event.tool, tool);
+    const origin = sources.get(event.source) ?? {
+      source: event.source,
+      calls: 0,
+      totalTokens: 0,
+      spendMicros: 0,
+    };
+    origin.calls += 1;
+    origin.totalTokens += tokens(event);
+    origin.spendMicros += event.costMicros ?? 0;
+    sources.set(event.source, origin);
     const key = `${event.provider}\u0000${event.model}`;
     const client = clients.get(key) ?? {
       provider: event.provider,
@@ -134,6 +211,7 @@ function summarizeMcpUsage(events: readonly LlmUsageEvent[]) {
     unpricedCalls: events.filter((event) => event.costMicros === null).length,
     estimated: events.some((event) => event.estimated),
     byTool: [...tools.values()].sort(byTokens).slice(0, 10),
+    bySource: [...sources.values()].sort(byTokens),
     byClient: [...clients.values()].sort(byTokens),
   };
 }
@@ -148,6 +226,7 @@ export class RunService {
     private readonly usage: UsageStore = new InMemoryUsageStore(),
     private readonly imageStore?: E2eArtifactStore,
     private readonly briefs?: Pick<IssueBriefService, 'get'>,
+    private readonly notifications?: Pick<NotificationService, 'sendForIssue'>,
   ) {}
 
   async recover(): Promise<void> {
@@ -192,7 +271,14 @@ export class RunService {
       this.usage.list(workspaceId, monthStart),
     ]);
     const monthly = runs.filter((run) => run.createdAt >= monthStart);
-    const mcpUsage = summarizeMcpUsage(monthUsage);
+    // Events recorded before a rate existed are priced now, so past MCP usage counts too.
+    const mcpUsage = summarizeMcpUsage(
+      monthUsage.map((event) =>
+        event.costMicros === null
+          ? { ...event, costMicros: priceUsage(rates, event.provider, event.model, event) }
+          : event,
+      ),
+    );
     // Totals cover agent runs and MCP usage so the dashboard reflects every token consumed.
     const totalInputTokens =
       runs.reduce((sum, run) => sum + (run.inputTokens ?? 0), 0) + usageTotals.inputTokens;
@@ -240,7 +326,7 @@ export class RunService {
     return this.usage.record({
       workspaceId,
       actorId,
-      source: 'mcp',
+      source: input.source ?? 'mcp',
       tool: input.tool,
       provider,
       model,
@@ -300,17 +386,14 @@ export class RunService {
       if (item) {
         const all = await this.pbiItems.list(workspaceId);
         const children = new Set<string>();
-        const lines: string[] = [];
-        // Imported hierarchies can be cyclic, so every descendant is visited once.
-        const collectChildren = (parentId: string, depth: number) => {
+        const collectChildren = (parentId: string) => {
           for (const child of all.filter((candidate) => candidate.parentId === parentId)) {
             if (children.has(child.id)) continue;
             children.add(child.id);
-            lines.push(`${'  '.repeat(depth)}- ${child.title}: ${child.description}`);
-            collectChildren(child.id, depth + 1);
+            collectChildren(child.id);
           }
         };
-        collectChildren(item.id, 0);
+        collectChildren(item.id);
         imageAttachments.push(...(item.attachments ?? []));
         imageAttachments.push(...inlineImageAttachments(item.description, 'pbi'));
         for (const child of all) {
@@ -320,7 +403,14 @@ export class RunService {
             ...inlineImageAttachments(child.description, 'pbi'),
           );
         }
-        pbiContext = `\n\nCurrent PBI context:\n${item.title}: ${item.description}\n${lines.join('\n')}`;
+        const visit = (parentId: string, depth: number): string[] =>
+          all
+            .filter((child) => child.parentId === parentId)
+            .flatMap((child) => [
+              `${'  '.repeat(depth)}- ${child.title}: ${child.description}`,
+              ...visit(child.id, depth + 1),
+            ]);
+        pbiContext = `\n\nCurrent PBI context:\n${item.title}: ${item.description}\n${visit(item.id, 0).join('\n')}`;
       }
     }
     const imageContext = imageAttachments.length
@@ -339,7 +429,8 @@ export class RunService {
       ? `\n\nThe latest user comment [${responseTo.id}] is a new request. Consider the issue, previous work and the full conversation. Carry out the requested work when possible. If clarification or a decision is needed, ask a specific question. Write a concise, direct reply to the user; the application will publish your answer as an issue comment. Do not claim changes you did not make.`
       : '\n\nProvide the work performed, result, and any remaining blockers. Do not claim external changes you did not make.';
     const brief = await this.briefs?.get(workspaceId, issue.id);
-    const briefContext = brief ? briefRunContext(brief) : '';
+    // Only a host (MCP) run uses the user's client model, so only it checks the recommended one.
+    const briefContext = brief ? briefRunContext(brief, { host: mode === 'host' }) : '';
     const prompt = `Work on issue #${issue.number}: ${issue.title}\n\n${issue.description}${pbiContext}${imageContext}${conversation}${briefContext}${instruction}`;
     // A flow is walked only when it has nodes the step list cannot express and a trigger wired to
     // them; anything else still runs as the plain ordered list of steps.
@@ -409,15 +500,22 @@ export class RunService {
     const controller = new AbortController();
     this.controllers.set(runId, controller);
     try {
-      const images = await this.imagesForIssue(run.workspaceId, run.issueId);
+      const media = await this.mediaForIssue(run.workspaceId, run.issueId);
+      const { images, files } = media;
       if (run.workflowState) {
-        await this.executeWorkflow(run, run.workflowState, controller.signal, images);
+        await this.executeWorkflow(run, run.workflowState, controller.signal, media);
         return;
       }
       const result = await this.agents.executeAgent(
         workspaceId,
         run.agentId,
-        { prompt: run.prompt, includeKnowledge: true, ...(images.length ? { images } : {}) },
+        {
+          prompt: run.prompt,
+          includeKnowledge: true,
+          unmetered: true,
+          ...(images.length ? { images } : {}),
+          ...(files.length ? { files } : {}),
+        },
         { requestId: run.id, workspaceId, ownerId: run.ownerId, actorId: run.actorId },
         controller.signal,
       );
@@ -459,7 +557,7 @@ export class RunService {
     run: AgentRun,
     initialState: WorkflowRunState,
     signal: AbortSignal,
-    images: readonly LlmImage[],
+    { images, files }: IssueMedia,
   ): Promise<void> {
     let state = initialState;
     const canvas = state.canvas;
@@ -501,7 +599,13 @@ export class RunService {
         step,
         stepNumber,
         state.steps.length,
-        { prompt, includeKnowledge: true, ...(images.length ? { images } : {}) },
+        {
+          prompt,
+          includeKnowledge: true,
+          unmetered: true,
+          ...(images.length ? { images } : {}),
+          ...(files.length ? { files } : {}),
+        },
         state.uncertaintyBehavior,
         {
           requestId: run.id,
@@ -550,10 +654,12 @@ export class RunService {
           question: questionResult.output || 'O agente precisa de uma informação para continuar.',
           answer: undefined,
         };
+        const usageResults = usageOf(state.results);
         await this.store.progress(run.workspaceId, run.id, state, workflowOutput(state.results), {
           provider: result.provider,
           model: result.model ?? null,
-          ...workflowUsage(state.results),
+          inputTokens: sumTokens(usageResults, 'inputTokens'),
+          outputTokens: sumTokens(usageResults, 'outputTokens'),
           costMicros: state.allStepsPriced ? state.totalCostMicros : null,
         });
         await this.pauseForUser(run, state, 'waiting_input');
@@ -579,10 +685,15 @@ export class RunService {
         answer: undefined,
         ...(canvas ? { currentNodeId: resumeNodeId } : {}),
       };
+      const usageResults = usageOf(state.results);
+      const lastResult = [...state.results]
+        .reverse()
+        .find((item) => item.kind === undefined || item.kind === 'result');
       await this.store.progress(run.workspaceId, run.id, state, workflowOutput(state.results), {
-        provider: result.provider,
-        model: result.model ?? null,
-        ...workflowUsage(state.results),
+        provider: lastResult?.provider,
+        model: lastResult?.model ?? null,
+        inputTokens: usageResults.length ? sumTokens(usageResults, 'inputTokens') : null,
+        outputTokens: usageResults.length ? sumTokens(usageResults, 'outputTokens') : null,
         costMicros: state.allStepsPriced ? state.totalCostMicros : null,
       });
       if (mustReview) {
@@ -718,6 +829,7 @@ export class RunService {
       run,
       action.toolName,
       lastResultOutput(state.results),
+      action.notification,
     );
     const next: WorkflowRunState = {
       ...state,
@@ -742,7 +854,13 @@ export class RunService {
    * The module actions a server run performs itself. Every other tool belongs to the MCP server,
    * which the backend cannot call, so naming one fails the run instead of quietly skipping it.
    */
-  private async runModuleAction(run: AgentRun, toolName: string, input: string): Promise<string> {
+  private async runModuleAction(
+    run: AgentRun,
+    toolName: string,
+    input: string,
+    notification?: AgentWorkflowNotificationConfig,
+  ): Promise<string> {
+    if (toolName === 'notifications_send') return this.notifyFromFlow(run, input, notification);
     if (toolName === 'issues_comment') {
       await this.issues.addComment(
         run.issueId,
@@ -754,6 +872,45 @@ export class RunService {
     throw new Error(
       `A server run cannot call '${toolName}'. Run this flow from an MCP client, or replace the action node with a step.`,
     );
+  }
+
+  /**
+   * The `notifications_send` action: tells people about the issue of the run. A node without who
+   * or how fails the run like any unsupported action; a notification that could not be delivered
+   * does not, and the result of the node says how each one ended.
+   */
+  private async notifyFromFlow(
+    run: AgentRun,
+    previousOutput: string,
+    config?: AgentWorkflowNotificationConfig,
+  ): Promise<string> {
+    if (!this.notifications) throw new Error('Notifications are not available on this server.');
+    if (!config || config.channels.length === 0)
+      throw new Error('A notification node needs at least one channel.');
+    if (config.userIds.length === 0 && config.roles.length === 0)
+      throw new Error('A notification node needs people or roles to notify.');
+    const issue = await this.issues.get(run.workspaceId, run.issueId);
+    if (!issue) throw new Error('The issue of this run no longer exists.');
+    const fallback = 'Issue #{{issue.number}}: {{issue.title}}';
+    const results = await this.notifications.sendForIssue({
+      workspaceId: run.workspaceId,
+      actorId: run.actorId,
+      issue,
+      roles: config.roles,
+      userIds: config.userIds,
+      channels: config.channels,
+      subject: config.subject || fallback,
+      // The previous result is text, not a template: its braces must not be filled in.
+      message: config.message || previousOutput.replace(/{{/g, '{ {') || fallback,
+    });
+    if (results.length === 0) return 'No one to notify.';
+    const count = (status: string) => results.filter((result) => result.status === status).length;
+    const problems = [
+      ...new Set(results.flatMap((result) => (result.reason ? [result.reason] : []))),
+    ];
+    return `Notified: ${count('sent')} sent, ${count('queued')} queued, ${count('failed')} failed, ${count('skipped')} skipped${
+      problems.length ? ` (${problems.join('; ')})` : ''
+    }.`;
   }
 
   /** Waits out a delay node, giving the wait up as soon as the run is cancelled. */
@@ -770,19 +927,24 @@ export class RunService {
     });
   }
 
-  private async imagesForIssue(workspaceId: string, issueId: string): Promise<LlmImage[]> {
-    if (!this.imageStore) return [];
+  /** The images and documents of the issue, of its PBI item and of that item's children. */
+  private async mediaForIssue(workspaceId: string, issueId: string): Promise<IssueMedia> {
+    if (!this.imageStore) return { images: [], files: [] };
     const issue = await this.issues.get(workspaceId, issueId);
-    if (!issue) return [];
+    if (!issue) return { images: [], files: [] };
     const attachments: ImageAttachment[] = [
       ...(issue.attachments ?? []),
       ...inlineImageAttachments(issue.description, 'issue'),
+      ...inlineFileAttachments(issue.description, 'issue'),
     ];
     if (issue.pbiItemId && this.pbiItems) {
       const item = await this.pbiItems.get(workspaceId, issue.pbiItemId);
       if (item) {
-        attachments.push(...(item.attachments ?? []));
-        attachments.push(...inlineImageAttachments(item.description, 'pbi'));
+        attachments.push(
+          ...(item.attachments ?? []),
+          ...inlineImageAttachments(item.description, 'pbi'),
+          ...inlineFileAttachments(item.description, 'pbi'),
+        );
         const all = await this.pbiItems.list(workspaceId);
         const visited = new Set<string>();
         const collect = (parentId: string) => {
@@ -792,6 +954,7 @@ export class RunService {
             attachments.push(
               ...(child.attachments ?? []),
               ...inlineImageAttachments(child.description, 'pbi'),
+              ...inlineFileAttachments(child.description, 'pbi'),
             );
             collect(child.id);
           }
@@ -799,7 +962,10 @@ export class RunService {
         collect(item.id);
       }
     }
-    return loadImageAttachments(this.imageStore, workspaceId, attachments);
+    return {
+      images: await loadImageAttachments(this.imageStore, workspaceId, attachments),
+      files: await loadDocumentAttachments(this.imageStore, workspaceId, attachments),
+    };
   }
 
   private async pauseForUser(
@@ -817,6 +983,7 @@ export class RunService {
     const last = state.results
       .filter((result) => result.kind === undefined || result.kind === 'result')
       .at(-1);
+    const usageResults = usageOf(state.results);
     const finished = await this.store.finish(
       run.workspaceId,
       run.id,
@@ -825,7 +992,8 @@ export class RunService {
         output: workflowOutput(state.results),
         provider: last?.provider ?? 'unknown',
         model: last?.model ?? null,
-        ...workflowUsage(state.results),
+        inputTokens: usageResults.length ? sumTokens(usageResults, 'inputTokens') : null,
+        outputTokens: usageResults.length ? sumTokens(usageResults, 'outputTokens') : null,
         costMicros: state.allStepsPriced ? state.totalCostMicros : null,
         workflowState: state,
       },
@@ -870,7 +1038,7 @@ export class RunService {
 
     if (input.action !== 'approve' && !input.answer?.trim())
       throw new ApplicationError('WORKFLOW_ANSWER_REQUIRED', 'A response is required.', 400);
-    const answer = input.answer?.trim() ?? '';
+    const answer = input.answer?.trim();
     // A revision re-runs the agent step that produced the result under review.
     const reviseNodeId = [...state.results]
       .reverse()
@@ -879,18 +1047,18 @@ export class RunService {
           (result.kind === undefined || result.kind === 'result') &&
           state.steps.some((step) => step.id === result.stepId),
       )?.stepId;
-    const legacyIndex =
-      input.action === 'revise' ? Math.max(0, state.currentStepIndex - 1) : state.currentStepIndex;
-    // A run always carries at least one step, so the placeholder only satisfies the index type.
-    /* v8 ignore next */
-    const legacyStepId = state.steps[legacyIndex]?.id ?? 'workflow';
-    const answerEvent = (): WorkflowRunStepResult => ({
+    // Reached only with a response: anything but an approval was rejected without one above.
+    const answerEvent = (text: string): WorkflowRunStepResult => ({
       stepId: state.canvas
         ? ((input.action === 'revise' ? reviseNodeId : state.currentNodeId) ?? 'workflow')
-        : legacyStepId,
+        : (state.steps[
+            input.action === 'revise'
+              ? Math.max(0, state.currentStepIndex - 1)
+              : state.currentStepIndex
+          ]?.id ?? 'workflow'),
       name: input.action === 'revise' ? 'Pedido de revisão' : 'Resposta do usuário',
       agentId: run.actorId,
-      output: answer,
+      output: text,
       provider: 'user',
       kind: 'answer',
     });
@@ -907,7 +1075,7 @@ export class RunService {
             ...(state.canvas && input.action === 'revise' && reviseNodeId
               ? { currentNodeId: reviseNodeId }
               : {}),
-            results: [...state.results, answerEvent()],
+            results: [...state.results, answerEvent(answer!)],
           }
         : state;
     const resumed = await this.store.resume(
@@ -979,6 +1147,76 @@ export class RunService {
       );
     return checked;
   }
+
+  /**
+   * A host (MCP) run is carried out by the user's own model, so the backend only learns where it is
+   * when the model says so. Each report moves the run on the workflow: `started` makes the node the
+   * current one, `completed` records it as done. The change reaches the open streams through the
+   * run store.
+   */
+  async reportStep(
+    workspaceId: string,
+    runId: string,
+    report: { nodeId: string; status: 'started' | 'completed'; summary?: string },
+  ): Promise<AgentRun> {
+    const run = await this.get(workspaceId, runId);
+    if (run.mode !== 'host' || run.status !== 'running')
+      throw new ApplicationError(
+        'INVALID_RUN_STATE',
+        'Only a checked-out host run can report its steps.',
+        409,
+      );
+    const state = run.workflowState;
+    if (!state?.enabled)
+      throw new ApplicationError('NO_WORKFLOW', 'This run has no workflow steps to report.', 409);
+    const stepIndex = state.steps.findIndex((candidate) => candidate.id === report.nodeId);
+    const step = stepIndex >= 0 ? state.steps[stepIndex] : undefined;
+    if (!step && !state.canvas?.nodes.some((node) => node.id === report.nodeId))
+      throw new ApplicationError(
+        'UNKNOWN_STEP',
+        'This step is not part of the workflow of the run.',
+        400,
+      );
+
+    let next: WorkflowRunState;
+    if (report.status === 'started') {
+      next = {
+        ...state,
+        currentStepIndex: step ? stepIndex : state.currentStepIndex,
+        ...(state.canvas ? { currentNodeId: report.nodeId } : {}),
+      };
+    } else {
+      const entry: WorkflowRunStepResult = {
+        stepId: report.nodeId,
+        name: step?.name ?? report.nodeId,
+        agentId: step?.agentId ?? run.agentId,
+        output: report.summary ?? '',
+        kind: step ? 'result' : 'event',
+        provider: 'host',
+      };
+      const { currentNodeId, ...rest } = state;
+      next = {
+        ...rest,
+        currentStepIndex: step
+          ? Math.max(state.currentStepIndex, stepIndex + 1)
+          : state.currentStepIndex,
+        results: [
+          ...state.results.filter(
+            (result) => !(result.stepId === entry.stepId && result.kind === entry.kind),
+          ),
+          entry,
+        ],
+        // Only the node that was just completed stops being the current one.
+        ...(currentNodeId !== undefined && currentNodeId !== report.nodeId
+          ? { currentNodeId }
+          : {}),
+      };
+    }
+    const updated = await this.store.progress(workspaceId, runId, next, run.output ?? '', {});
+    if (!updated) throw new ApplicationError('INVALID_RUN_STATE', 'Run already finished.', 409);
+    return updated;
+  }
+
   async completeHost(
     workspaceId: string,
     runId: string,
@@ -1054,13 +1292,6 @@ export class RunService {
       usage.outputTokens < 0
     )
       return null;
-    const rate = (await this.store.rates(workspaceId)).find(
-      (item) => item.provider.toLowerCase() === provider.toLowerCase() && item.model === model,
-    );
-    if (!rate) return null;
-    const micros = Math.round(
-      usage.inputTokens * rate.inputUsdPerMillion + usage.outputTokens * rate.outputUsdPerMillion,
-    );
-    return Number.isSafeInteger(micros) && micros <= MAX_MICROS ? micros : null;
+    return priceUsage(await this.store.rates(workspaceId), provider, model, usage);
   }
 }

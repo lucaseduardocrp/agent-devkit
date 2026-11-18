@@ -195,6 +195,8 @@ describe('WorkView typed issues', () => {
     const detail = await screen.findByRole('dialog');
     const type = await within(detail).findByRole('combobox', { name: 'Tipo' });
     fireEvent.change(type, { target: { value: 'task' } });
+    // The change is a draft of the card until it is saved.
+    fireEvent.click(within(detail).getByRole('button', { name: 'Salvar' }));
     await waitFor(() => expect(spies.updateIssue).toHaveBeenCalledWith('i1', { type: 'task' }));
   });
 });

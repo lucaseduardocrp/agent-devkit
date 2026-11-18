@@ -32,7 +32,7 @@ Cloudflare R2 video storage are optional.
 
 ### Deployment Dependencies
 
-- Source code: https://github.com/lucaseduardocrp/Agent-Development-Kit
+- Source code: https://github.com/lucaseduardocrp/agent-devkit
 - CLI for assistants: https://www.npmjs.com/package/@agent-devkit/cli
 - MCP specification: https://modelcontextprotocol.io
 

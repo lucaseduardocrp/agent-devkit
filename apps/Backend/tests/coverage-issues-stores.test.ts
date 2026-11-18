@@ -208,6 +208,29 @@ describe('InMemoryRunStore', () => {
   });
 });
 
+describe('InMemoryIssueStore.search', () => {
+  it('pages the issues and narrows them by title or number', async () => {
+    const store = new InMemoryIssueStore();
+    await store.create('ws', 'u', { title: 'Fix Login' });
+    await store.create('ws', 'u', { title: 'Billing' });
+    await store.create('ws', 'u', { title: 'Login page' });
+    await store.create('other', 'u', { title: 'Elsewhere' });
+    const titles = (result: { issues: { title: string }[] }) => result.issues.map((i) => i.title);
+
+    const all = await store.search('ws', { page: 1, pageSize: 2 });
+    expect(all).toMatchObject({ total: 3, page: 1, pageSize: 2 });
+    expect(all.issues).toHaveLength(2);
+    expect((await store.search('ws', { page: 2, pageSize: 2 })).issues).toHaveLength(1);
+    expect(titles(await store.search('ws', { q: 'LOGIN', page: 1, pageSize: 10 })).sort()).toEqual([
+      'Fix Login',
+      'Login page',
+    ]);
+    expect(titles(await store.search('ws', { q: '#2', page: 1, pageSize: 10 }))).toEqual([
+      'Billing',
+    ]);
+  });
+});
+
 function prismaIssueDb() {
   const issue = { id: 'issue-1', workspaceId: 'ws', title: 'T' };
   const tx = {
@@ -224,6 +247,7 @@ function prismaIssueDb() {
     issueRecord: {
       findMany: vi.fn().mockResolvedValue([issue]),
       findFirst: vi.fn().mockResolvedValue(issue),
+      count: vi.fn().mockResolvedValue(42),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
@@ -249,6 +273,37 @@ describe('PrismaIssueStore', () => {
     expect(await store.get('ws', 'issue-1')).toEqual(issue);
     expect(db.issueRecord.findFirst).toHaveBeenCalledWith({
       where: { id: 'issue-1', workspaceId: 'ws', deletedAt: null },
+    });
+  });
+
+  it('searches one page by title or number, counting the matches in the database', async () => {
+    const { db, store, issue } = prismaIssueDb();
+    const result = await store.search('ws', { q: ' #12 ', page: 3, pageSize: 10 });
+    expect(result).toEqual({ issues: [issue], total: 42, page: 3, pageSize: 10 });
+    const where = {
+      workspaceId: 'ws',
+      deletedAt: null,
+      OR: [{ title: { contains: '12', mode: 'insensitive' } }, { number: 12 }],
+    };
+    expect(db.issueRecord.findMany).toHaveBeenLastCalledWith({
+      where,
+      orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+      skip: 20,
+      take: 10,
+    });
+    expect(db.issueRecord.count).toHaveBeenLastCalledWith({ where });
+    // Text is only matched against titles; no text means no filter.
+    await store.search('ws', { q: 'login', page: 1, pageSize: 5 });
+    expect(db.issueRecord.count).toHaveBeenLastCalledWith({
+      where: {
+        workspaceId: 'ws',
+        deletedAt: null,
+        OR: [{ title: { contains: 'login', mode: 'insensitive' } }],
+      },
+    });
+    await store.search('ws', { page: 1, pageSize: 5 });
+    expect(db.issueRecord.count).toHaveBeenLastCalledWith({
+      where: { workspaceId: 'ws', deletedAt: null },
     });
   });
 

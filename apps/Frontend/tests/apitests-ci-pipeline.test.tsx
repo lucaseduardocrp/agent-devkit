@@ -10,6 +10,7 @@ import type {
 } from '../src/features/apitests/api-test-types.js';
 import type { CiPipelineContext } from '../src/features/apitests/integration/CiPipelineSettings.js';
 import { CollectionSettingsPane } from '../src/features/apitests/integration/CollectionSettingsPane.js';
+import { pickRepository } from './helpers/pick-repository.js';
 import { ApiClient } from '../src/lib/api-client.js';
 
 const github: CiConfig = {
@@ -122,9 +123,7 @@ describe('Pipeline tab', () => {
     expect(
       within(pane).getByText('Escolha o repositório, a branch e a pasta primeiro.'),
     ).toBeTruthy();
-    const repository = within(pane).getByLabelText<HTMLSelectElement>('Repositório');
-    await waitFor(() => expect(repository.disabled).toBe(false));
-    fireEvent.change(repository, { target: { value: 'github:42' } });
+    await pickRepository({ 'github:42': 'acme/app' }, 'github:42');
     await waitFor(() => expect(api.listApiTestBranches).toHaveBeenCalledWith('github', '42'));
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({

@@ -8,6 +8,11 @@ import {
 } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import {
+  parseAccessProfile,
+  profileInstructions,
+  type AccessProfile,
+} from '../../core/access-profile.js';
 import type { ToolRegistry } from '../../core/registry.js';
 import { MemorySessionStore, Session } from '../../core/session.js';
 import type { McpConfig } from '../config.js';
@@ -39,6 +44,27 @@ interface RecoveredSession {
 
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 const LOOPBACK_BIND = new Set(['127.0.0.1', 'localhost', '::1']);
+
+const WORKSPACE_PARAMETER = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * The workspace a connection was opened for (`/mcp?workspace=<id>`). A client that works for one
+ * workspace, such as the AI CLI behind an agent, is pinned to it from the first call instead of
+ * relying on the operator's default. It is a starting point, not a permission: the ADK API still
+ * checks, on every call, that the token's user belongs to the workspace.
+ */
+export function requestedWorkspace(req: Pick<Request, 'query'>): string | undefined {
+  const value = req.query['workspace'];
+  return typeof value === 'string' && WORKSPACE_PARAMETER.test(value) ? value : undefined;
+}
+
+/**
+ * The profile a connection asked for (`/mcp?profile=standard`). It can only narrow what the
+ * connection may do, never widen it, and a value nobody knows gets the narrowest profile.
+ */
+export function requestedProfile(req: Pick<Request, 'query'>): AccessProfile | undefined {
+  return parseAccessProfile(req.query['profile']);
+}
 
 export function bearerToken(header: string | undefined): string | undefined {
   const match = /^Bearer\s+(\S+)$/i.exec(header?.trim() ?? '');
@@ -104,6 +130,14 @@ export function createHttpServer(
       ? [`resource_metadata="${getOAuthProtectedResourceMetadataUrl(resourceUrl)}"`]
       : []),
   ].join(', ');
+
+  /** The tools (and the instructions saying so) a connection gets: all, or what its profile allows. */
+  const scopedTo = (req: Request) => {
+    const profile = requestedProfile(req);
+    return profile
+      ? { registry: registry.restrictedTo(profile), instructions: profileInstructions(profile) }
+      : { registry };
+  };
 
   const app = express();
   app.disable('x-powered-by');
@@ -236,7 +270,7 @@ export function createHttpServer(
           recovered?.session ??
           new Session(new MemorySessionStore(), {
             apiUrl: config.apiUrl,
-            workspaceId: config.workspaceId,
+            workspaceId: requestedWorkspace(req) ?? config.workspaceId,
           });
         if (!recovered) {
           if (recoveredSessions.size >= maxSessions) {
@@ -248,7 +282,13 @@ export function createHttpServer(
           sessionIdGenerator: undefined,
           enableJsonResponse: true,
         });
-        const mcp = createMcpServer({ ...config, registry, session, skills, fetch: options.fetch });
+        const mcp = createMcpServer({
+          ...config,
+          ...scopedTo(req),
+          session,
+          skills,
+          fetch: options.fetch,
+        });
         await mcp.connect(transport);
         try {
           await transport.handleRequest(req, res, body);
@@ -282,7 +322,7 @@ export function createHttpServer(
         apiUrl: config.apiUrl,
         // A shared operator token must never be lent to anonymous remote callers.
         token: LOOPBACK_BIND.has(config.http.host) ? config.token : undefined,
-        workspaceId: config.workspaceId,
+        workspaceId: requestedWorkspace(req) ?? config.workspaceId,
       });
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
@@ -292,7 +332,13 @@ export function createHttpServer(
       });
       // Only initialized sessions are ever closed (idle sweep or DELETE), so the id is set here.
       transport.onclose = () => sessions.delete(transport.sessionId!);
-      const mcp = createMcpServer({ ...config, registry, session, skills, fetch: options.fetch });
+      const mcp = createMcpServer({
+        ...config,
+        ...scopedTo(req),
+        session,
+        skills,
+        fetch: options.fetch,
+      });
       await mcp.connect(transport);
       await transport.handleRequest(req, res, body);
     })().catch((error: unknown) => {

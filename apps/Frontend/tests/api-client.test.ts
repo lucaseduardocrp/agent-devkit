@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentWorkflowCanvasDto } from '../src/features/agents/agent-types.js';
 import { ApiClient, ApiClientError } from '../src/lib/api-client.js';
+import type { AgentWorkflowCanvasDto } from '../src/features/agents/agent-types.js';
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -434,6 +434,28 @@ describe('ApiClient', () => {
         format: 'azure',
         agentId: 'agent-qa-1',
       });
+    });
+
+    it('sends the PBIs, issues and Brain documents picked as context, and nothing when none', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const client = new ApiClient({
+        fetcher: async (_input, init) => {
+          bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return jsonResponse({ plans: [], csv: '' }, true, 200);
+        },
+      });
+      const context = [
+        { kind: 'pbi', id: 'p1' },
+        { kind: 'brain', id: 'src:page' },
+      ] as const;
+
+      await client.generateTestPlan('Prompt', { context });
+      await client.generateTestPlan('Prompt', { context: [] });
+      await client.generateTestPlan('Prompt');
+
+      expect(bodies[0]).toEqual({ prompt: 'Prompt', context });
+      expect(bodies[1]).toEqual({ prompt: 'Prompt' });
+      expect(bodies[2]).toEqual({ prompt: 'Prompt' });
     });
 
     it('throws error when server returns error status', async () => {
@@ -925,6 +947,28 @@ describe('ApiClient', () => {
       await expect(client.getKnowledgeDocuments()).rejects.toMatchObject({
         status: 500,
       });
+    });
+
+    it('searchKnowledgeDocuments asks for a page of titles and reports its failure', async () => {
+      const page = { documents: [{ id: 'd1', title: 'Billing' }], total: 1 };
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(jsonResponse(page))
+        .mockResolvedValueOnce(jsonResponse(page))
+        .mockResolvedValueOnce(jsonResponse({}, false, 500));
+      const client = new ApiClient({ fetcher });
+
+      await expect(
+        client.searchKnowledgeDocuments({ q: '  bill ', page: 2, pageSize: 25 }),
+      ).resolves.toEqual(page);
+      expect(String(fetcher.mock.calls[0]![0])).toContain(
+        '/knowledge/documents?page=2&pageSize=25&q=bill',
+      );
+      await client.searchKnowledgeDocuments({ q: '   ', page: 1, pageSize: 10 });
+      expect(String(fetcher.mock.calls[1]![0])).not.toContain('q=');
+      await expect(
+        client.searchKnowledgeDocuments({ q: '', page: 1, pageSize: 10 }),
+      ).rejects.toMatchObject({ status: 500 });
     });
 
     it('manages user-defined knowledge correlations', async () => {
@@ -1605,7 +1649,7 @@ describe('ApiClient', () => {
   });
 
   describe('agent workflow canvas', () => {
-    const canvas = {
+    const canvas: AgentWorkflowCanvasDto = {
       nodes: [
         {
           id: 'start',
@@ -1627,7 +1671,7 @@ describe('ApiClient', () => {
         { id: 'e1', from: 'start', to: 'step-a' },
         { id: 'e2', from: 'cond', fromPort: 'false', to: 'step-a' },
       ],
-    } as AgentWorkflowCanvasDto;
+    };
 
     const workflow = {
       enabled: true,
@@ -1690,5 +1734,38 @@ describe('ApiClient', () => {
       });
       expect((await client.getAgentWorkflow()).canvas).toBeUndefined();
     });
+  });
+});
+
+describe('ApiClient paged searches for selects', () => {
+  it('asks the API for one page of issues, with the typed text only when there is some', async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ issues: [], total: 0 }));
+    const client = new ApiClient({ fetcher });
+    const signal = new AbortController().signal;
+
+    await client.searchIssues({ q: '  login ', page: 2, pageSize: 25 }, signal);
+    expect(String(fetcher.mock.calls[0]![0])).toBe(
+      'http://localhost:3000/issues?page=2&pageSize=25&q=login',
+    );
+    expect(fetcher.mock.calls[0]![1]).toMatchObject({ signal });
+    await client.searchIssues({ q: '   ', page: 1, pageSize: 10 });
+    expect(String(fetcher.mock.calls[1]![0])).toBe(
+      'http://localhost:3000/issues?page=1&pageSize=10',
+    );
+  });
+
+  it('asks the API for one compact page of backlog items', async () => {
+    const page = { items: [{ id: 'p1', title: 'Fix', type: 'Bug' }], total: 1 };
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse(page));
+    const client = new ApiClient({ fetcher });
+
+    await expect(client.searchPbiItems({ q: '42', page: 1, pageSize: 25 })).resolves.toEqual(page);
+    expect(String(fetcher.mock.calls[0]![0])).toBe(
+      'http://localhost:3000/pbi?compact=true&page=1&pageSize=25&q=42',
+    );
+    await client.searchPbiItems({ q: '', page: 3, pageSize: 5 });
+    expect(String(fetcher.mock.calls[1]![0])).toBe(
+      'http://localhost:3000/pbi?compact=true&page=3&pageSize=5',
+    );
   });
 });

@@ -49,12 +49,20 @@ export type E2eRunnerTaskInput =
       readonly locale: string;
       readonly credentials: E2eCredentials;
       readonly accessToken: AccessServiceToken | null;
+      /** Custom variables of the run's environment; runners older than them ignore the field. */
+      readonly variables?: Readonly<Record<string, string>>;
     }
   | {
       readonly kind: 'explore';
       readonly mode: E2eMode;
       readonly url: string;
       readonly accessToken: AccessServiceToken | null;
+      /** Test account the runner signs in with before exploring; older runners ignore it. */
+      readonly credentials?: E2eCredentials;
+      /** What to explore (a feature, a bug…); older runners explore everything. */
+      readonly focus?: string;
+      /** Map the whole application (a Source exploration); older runners sample it. */
+      readonly thorough?: boolean;
     };
 
 /** One top-level step as reported by the runner; screenshots are uploaded separately. */

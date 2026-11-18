@@ -1,6 +1,6 @@
 import { ActionsMenu } from '../../components/ui/actions-menu.js';
 import { HistoryViewer } from '../audit/HistoryViewer.js';
-import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '../../lib/utils.js';
 import { ResizableSidebar } from '../../components/layout/ResizableSidebar.js';
 import { Input } from '../../components/ui/input.js';
@@ -18,6 +18,8 @@ import type {
   KnowledgePushInput,
 } from '../../lib/api-client.js';
 import { MarkdownViewer } from './MarkdownViewer.js';
+import { clearPassageHighlight, highlightPassage } from '../shared/highlight-passage.js';
+import type { ReferenceFocus } from '../shared/reference-focus.js';
 import { stripLeadingTitleHeading } from './markdown-parser.js';
 import { BrainGraph } from './BrainGraph.js';
 import { createBrainGraphState } from './brain-graph-model.js';
@@ -28,14 +30,9 @@ import { useActivityRunner } from '../activities/ActivityCenter.js';
 import type { CustomAgentDto } from '../agents/agent-types.js';
 import { usePermissions } from '../workspaces/permissions.js';
 import { AttachmentPanel } from '../shared/AttachmentPanel.js';
-import { IMAGE_ACCEPT, type Attachment } from '../shared/attachment-types.js';
-import {
-  ImageInputStatus,
-  discardDrafts,
-  markdownImage,
-  saveWithDrafts,
-  useMarkdownImageInput,
-} from '../shared/media.js';
+import type { Attachment } from '../shared/attachment-types.js';
+import { discardDrafts, markdownImage, saveWithDrafts } from '../shared/media.js';
+import { MarkdownEditor } from '../shared/markdown-editor/MarkdownEditor.js';
 
 export interface BrainViewProps {
   readonly apiClient?: ApiClient;
@@ -43,6 +40,9 @@ export interface BrainViewProps {
   readonly initialDocuments?: readonly KnowledgeDocumentDto[];
   readonly isReadOnly?: boolean;
   readonly className?: string;
+  /** An item another module sent the user to; opened once its data is there. */
+  readonly focus?: ReferenceFocus | null;
+  readonly onFocusHandled?: () => void;
 }
 
 export interface OpenTabItem {
@@ -140,6 +140,8 @@ export function BrainView({
   initialDocuments,
   isReadOnly = false,
   className,
+  focus,
+  onFocusHandled,
 }: BrainViewProps) {
   const { t, formatDate } = useI18n();
   const { runActivity } = useActivityRunner();
@@ -161,7 +163,6 @@ export function BrainView({
   const [newParentPageId, setNewParentPageId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
-  const [editPreview, setEditPreview] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [wikilinkQuery, setWikilinkQuery] = useState<{
@@ -172,7 +173,6 @@ export function BrainView({
   const [wikilinkIndex, setWikilinkIndex] = useState(0);
   const [pendingRelationIds, setPendingRelationIds] = useState<readonly string[]>([]);
   const editorRef = useRef<HTMLTextAreaElement>(null);
-  const editorImages = useMarkdownImageInput('brain', setEditContent);
   const [docAttachments, setDocAttachments] = useState<readonly Attachment[]>([]);
   const [editAttachments, setEditAttachments] = useState<readonly Attachment[]>([]);
   const [editAttachmentsChanged, setEditAttachmentsChanged] = useState(false);
@@ -218,11 +218,11 @@ export function BrainView({
     try {
       setRelations(await client.createKnowledgeRelation(document.pageId, linkTarget));
       setLinkTarget('');
-      setSyncFeedback({ type: 'success', message: 'Link adicionado ao documento.' });
+      setSyncFeedback({ type: 'success', message: t('brain.linkAddedToDocument') });
     } catch (error) {
       setSyncFeedback({
         type: 'error',
-        message: error instanceof Error ? error.message : 'Falha ao adicionar link.',
+        message: error instanceof Error ? error.message : t('brain.addLinkFailed'),
       });
     } finally {
       setIsLinking(false);
@@ -237,7 +237,8 @@ export function BrainView({
   const [stats, setStats] = useState<{
     documentsCount: number;
     chunksCount: number;
-    lastSync: string;
+    /** ISO timestamp of the most recent sync; null when unknown. */
+    lastSync: string | null;
   } | null>(null);
   const [documents, setDocuments] = useState<readonly KnowledgeDocumentDto[]>(
     initialDocuments ?? [],
@@ -270,7 +271,12 @@ export function BrainView({
         setStats({
           documentsCount: data.documentsCount,
           chunksCount: data.chunksCount,
-          lastSync: t('brain.recent'),
+          lastSync:
+            docs
+              .map((doc) => doc.updatedAt)
+              .filter((value) => Boolean(value) && !Number.isNaN(Date.parse(value)))
+              .sort((a, b) => Date.parse(a) - Date.parse(b))
+              .at(-1) ?? null,
         });
         setDocuments(docs);
       })
@@ -305,7 +311,7 @@ export function BrainView({
 
     try {
       const res = await runActivity(
-        { kind: 'sync', title: 'Sincronizando documentos', detail: 'Azure DevOps' },
+        { kind: 'sync', title: t('brain.syncingDocuments'), detail: 'Azure DevOps' },
         () => apiClient.syncKnowledge(),
       );
       const [updatedStats, updatedDocs, updatedRelations] = await Promise.all([
@@ -316,7 +322,7 @@ export function BrainView({
       setStats({
         documentsCount: updatedStats.documentsCount,
         chunksCount: updatedStats.chunksCount,
-        lastSync: t('brain.justNow'),
+        lastSync: new Date().toISOString(),
       });
       const removedIds = new Set(
         (res.removed ?? []).map((item) => `${item.source}:${item.pageId}`),
@@ -352,7 +358,11 @@ export function BrainView({
     setSyncFeedback(null);
     try {
       const result = await runActivity(
-        { kind: 'push', title: `Enviando “${doc.title}”`, detail: providerName },
+        {
+          kind: 'push',
+          title: t('brain.pushingDocument', { title: doc.title }),
+          detail: providerName,
+        },
         () => client.pushKnowledgeDocument(doc.pageId, input),
       );
       const [updatedDocs, updatedRelations] = await Promise.all([
@@ -376,13 +386,13 @@ export function BrainView({
             : tab;
         }),
       );
-      // Publishing is only available while a document tab is active, so a tab is selected.
-      setActiveTabId((prev) => published.get(prev!) ?? prev);
+      /* v8 ignore next -- publishing is only available while a document tab is active */
+      setActiveTabId((prev) => published.get(prev ?? '') ?? prev);
       const updatedStats = await client.getKnowledgeStats(defaultOwnerId);
       setStats({
         documentsCount: updatedStats.documentsCount,
         chunksCount: updatedStats.chunksCount,
-        lastSync: t('brain.justNow'),
+        lastSync: new Date().toISOString(),
       });
       setSyncFeedback({
         type: 'success',
@@ -445,15 +455,13 @@ export function BrainView({
         const results = await apiClient.searchKnowledge(trimmed, defaultOwnerId);
         setSearchResults(results);
       } catch (error) {
-        setSearchError(
-          error instanceof Error ? error.message : 'Falha ao realizar busca de conhecimento.',
-        );
+        setSearchError(error instanceof Error ? error.message : t('brain.knowledgeSearchFailed'));
         setSearchResults(null);
       } finally {
         setIsSearching(false);
       }
     },
-    [apiClient, defaultOwnerId],
+    [apiClient, defaultOwnerId, t],
   );
 
   // Live auto-search as user types
@@ -469,24 +477,22 @@ export function BrainView({
       return;
     }
 
-    const timer = setTimeout(() => {
+    searchTimeoutRef.current = setTimeout(() => {
       void executeSearch(searchQuery);
     }, 150);
-    searchTimeoutRef.current = timer;
 
-    return () => clearTimeout(timer);
+    // The timer is always set when this cleanup exists: the effect returns early without one.
+    return () => clearTimeout(searchTimeoutRef.current!);
   }, [searchQuery, executeSearch]);
 
   const handleSearch = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
+    clearTimeout(searchTimeoutRef.current!);
     await executeSearch(searchQuery);
   };
 
   const handleClearSearch = () => {
-    // Clearing the query runs the auto-search effect cleanup, which cancels a pending search.
+    clearTimeout(searchTimeoutRef.current!);
     setSearchQuery('');
     setSearchResults(null);
     setSearchError(null);
@@ -531,7 +537,6 @@ export function BrainView({
     setEditContent('');
     setEditAttachments([]);
     setEditAttachmentsChanged(false);
-    setEditPreview(false);
     setSaveError(null);
     setWikilinkQuery(null);
     setPendingRelationIds([]);
@@ -548,10 +553,9 @@ export function BrainView({
     setEditingDoc(doc);
     setEditTitle(doc.title);
     setEditContent(stripLeadingTitleHeading(doc.content ?? '', doc.title));
-    // Only the open document is edited, so its loaded attachments are the ones to edit.
+    // Editing starts from the open document, whose attachments are already loaded.
     setEditAttachments(docAttachments);
     setEditAttachmentsChanged(false);
-    setEditPreview(false);
     setSaveError(null);
     setWikilinkQuery(null);
     setPendingRelationIds([]);
@@ -585,7 +589,10 @@ export function BrainView({
     };
     const history = [...assistantMessages, userMessage]
       .slice(-8)
-      .map((item) => `${item.role === 'user' ? 'Usuário' : 'Assistente'}: ${item.content}`)
+      .map(
+        (item) =>
+          `${item.role === 'user' ? t('brain.roleUser') : t('brain.roleAssistant')}: ${item.content}`,
+      )
       .join('\n\n');
     setAssistantMessages((current) => [...current, userMessage]);
     setAssistantMessage('');
@@ -595,13 +602,17 @@ export function BrainView({
       const response = await runActivity(
         {
           kind: 'agent',
-          title: 'Agente auxiliando a documentação',
-          detail: editTitle || 'Novo documento',
+          title: t('brain.assistantActivity'),
+          detail: editTitle || t('brain.assistantNewDocument'),
         },
         () =>
           apiClient.executeAgent(assistantAgentId, {
             useKnowledge: true,
-            prompt: `Você está ajudando a escrever documentação Markdown. Título: ${editTitle || 'Sem título'}.\n\nConteúdo atual:\n${editContent.slice(-8000)}\n\nConversa:\n${history}\n\nResponda em Markdown, com uma sugestão pronta para inserir quando for apropriado.`,
+            prompt: t('brain.assistantPrompt', {
+              title: editTitle || t('brain.assistantUntitled'),
+              content: editContent.slice(-8000),
+              history,
+            }),
           }),
       );
       setAssistantMessages((current) => [
@@ -609,9 +620,7 @@ export function BrainView({
         { id: crypto.randomUUID(), role: 'assistant', content: response.content },
       ]);
     } catch (error) {
-      setAssistantError(
-        error instanceof Error ? error.message : 'Não foi possível consultar o agente.',
-      );
+      setAssistantError(error instanceof Error ? error.message : t('brain.assistantFailed'));
     } finally {
       setIsAssistantWorking(false);
     }
@@ -636,7 +645,10 @@ export function BrainView({
     };
     const history = researchMessages
       .slice(-8)
-      .map((item) => `${item.role === 'user' ? 'Usuário' : 'Agente'}: ${item.content}`)
+      .map(
+        (item) =>
+          `${item.role === 'user' ? t('brain.roleUser') : t('brain.roleAgent')}: ${item.content}`,
+      )
       .join('\n\n');
     setResearchMessages((current) => [...current, userMessage]);
     setResearchMessage('');
@@ -649,9 +661,7 @@ export function BrainView({
         { id: crypto.randomUUID(), role: 'assistant', content: result.content },
       ]);
     } catch (error) {
-      setResearchError(
-        error instanceof Error ? error.message : 'Não foi possível consultar o Brain.',
-      );
+      setResearchError(error instanceof Error ? error.message : t('brain.researchFailed'));
     } finally {
       setIsResearching(false);
     }
@@ -672,8 +682,7 @@ export function BrainView({
       )
     : [];
 
-  const handleEditorChange = (value: string, cursor: number) => {
-    setEditContent(value);
+  const updateWikilinkQuery = (value: string, cursor: number) => {
     const beforeCursor = value.slice(0, cursor);
     const start = beforeCursor.lastIndexOf('[[');
     const lastClosed = beforeCursor.lastIndexOf(']]');
@@ -684,10 +693,6 @@ export function BrainView({
     } else {
       setWikilinkQuery(null);
     }
-  };
-
-  const handleEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    handleWikilinkKeyDown(event);
   };
 
   const selectWikilink = (document: KnowledgeDocumentDto) => {
@@ -754,8 +759,7 @@ export function BrainView({
                     newParentPageId,
                   )
                 : await apiClient.createKnowledgeDocument(trimmedTitle, files.content)
-              : // Saving is only offered from the editor, so a document is being edited.
-                await apiClient.updateKnowledgeDocument(
+              : await apiClient.updateKnowledgeDocument(
                   editingDoc!.pageId,
                   trimmedTitle,
                   files.content,
@@ -767,7 +771,7 @@ export function BrainView({
           return saved;
         },
       );
-      if (editingDoc === 'new') {
+      if (savedDocument && editingDoc === 'new') {
         const newDoc = newParentPageId
           ? { ...savedDocument, parentPageId: newParentPageId }
           : savedDocument;
@@ -777,17 +781,15 @@ export function BrainView({
           type: 'success',
           message: t('brain.documentCreated', { title: newDoc.title }),
         });
-      } else {
-        // Saving is only offered from the editor, so a document is being edited.
-        const editedDoc = editingDoc!;
+      } else if (savedDocument && editingDoc && editingDoc !== 'new') {
         const updatedDoc = savedDocument;
-        setDocuments((prev) => prev.map((d) => (d.pageId === editedDoc.pageId ? updatedDoc : d)));
+        setDocuments((prev) => prev.map((d) => (d.pageId === editingDoc.pageId ? updatedDoc : d)));
         setTabs((prev) =>
           prev.map((t) =>
-            t.id === editedDoc.id ? { ...t, id: updatedDoc.id, title: updatedDoc.title } : t,
+            t.id === editingDoc.id ? { ...t, id: updatedDoc.id, title: updatedDoc.title } : t,
           ),
         );
-        if (activeTabId === editedDoc.id) {
+        if (activeTabId === editingDoc.id) {
           setActiveTabId(updatedDoc.id);
         }
         setSyncFeedback({
@@ -796,21 +798,23 @@ export function BrainView({
         });
       }
 
-      let updatedRelations = relations;
-      for (const targetPageId of pendingRelationIds) {
-        updatedRelations = await apiClient.createKnowledgeRelation(
-          savedDocument.pageId,
-          targetPageId,
-        );
+      if (savedDocument) {
+        let updatedRelations = relations;
+        for (const targetPageId of pendingRelationIds) {
+          updatedRelations = await apiClient.createKnowledgeRelation(
+            savedDocument.pageId,
+            targetPageId,
+          );
+        }
+        setRelations(updatedRelations);
+        setPendingRelationIds([]);
       }
-      setRelations(updatedRelations);
-      setPendingRelationIds([]);
 
       const updatedStats = await apiClient.getKnowledgeStats(defaultOwnerId);
       setStats({
         documentsCount: updatedStats.documentsCount,
         chunksCount: updatedStats.chunksCount,
-        lastSync: t('brain.justNow'),
+        lastSync: new Date().toISOString(),
       });
       setEditingDoc(null);
     } catch (error) {
@@ -837,7 +841,7 @@ export function BrainView({
       setStats({
         documentsCount: updatedStats.documentsCount,
         chunksCount: updatedStats.chunksCount,
-        lastSync: t('brain.justNow'),
+        lastSync: new Date().toISOString(),
       });
 
       setSyncFeedback({
@@ -874,7 +878,7 @@ export function BrainView({
       if (prev.some((t) => t.id === 'graph')) {
         return prev;
       }
-      return [...prev, { id: 'graph', title: 'Graph view', type: 'graph' }];
+      return [...prev, { id: 'graph', title: t('brain.graphView'), type: 'graph' }];
     });
     setActiveTabId('graph');
   };
@@ -956,17 +960,49 @@ export function BrainView({
   const wordCount = fullTextContent.trim().split(/\s+/).filter(Boolean).length;
   const charCount = fullTextContent.length;
 
+  // Another module sent the user to a page: open its tab and, when it came with the passage
+  // that matched, show the page at that passage.
+  const docContent = useRef<HTMLDivElement>(null);
+  const [passage, setPassage] = useState<{ docId: string; text: string } | null>(null);
+  const handledFocus = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.kind !== 'brain' || handledFocus.current === focus.nonce) return;
+    const target = documents.find((candidate) => candidate.pageId === focus.ref);
+    if (!target) return;
+    handledFocus.current = focus.nonce;
+    openDocumentTab(target);
+    setPassage(focus.excerpt ? { docId: target.id, text: focus.excerpt } : null);
+    onFocusHandled?.();
+  }, [focus, documents, onFocusHandled]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const container = docContent.current;
+    if (!passage || !container || activeDoc?.id !== passage.docId) return;
+    // The page renders after the tab opens, so look for the passage until it is there.
+    let frame = 0;
+    let attempts = 0;
+    const look = () => {
+      if (highlightPassage(container, passage.text) || attempts++ > 30) return;
+      frame = requestAnimationFrame(look);
+    };
+    look();
+    return () => {
+      cancelAnimationFrame(frame);
+      clearPassageHighlight();
+    };
+  }, [passage, activeDoc?.id, fullTextContent]);
+
   return (
     <div
-      className={cn('flex h-full w-full overflow-hidden bg-[#181818] text-[#dcddde]', className)}
+      className={cn('flex h-full w-full gap-4 overflow-hidden text-[#dcddde]', className)}
       data-testid="screen-brain"
     >
       {/* ========================================================================= */}
       {/* 1. LEFT SIDEBAR: MINIMALIST OBSIDIAN VAULT TREE                           */}
       {/* ========================================================================= */}
       <ResizableSidebar
-        className="border-r border-[#262626] bg-[#1a1a1a] text-sm select-none"
-        defaultWidth={260}
+        gap
+        className="overflow-hidden rounded-lg border border-[#262626] bg-[#1a1a1a] text-sm select-none"
+        defaultWidth={520}
         minWidth={220}
         maxWidth="container"
         aria-label={t('brain.docSource')}
@@ -1246,7 +1282,7 @@ export function BrainView({
       {/* ========================================================================= */}
       {/* 2. MAIN WORKSPACE: TABS BAR + NAV HEADER + CONTENT AREA                   */}
       {/* ========================================================================= */}
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#161616]">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[#262626] bg-[#161616]">
         {/* ======================================================================= */}
         {/* TOP MULTI-TABS BAR (Supports N tabs open at the same time)              */}
         {/* ======================================================================= */}
@@ -1445,151 +1481,150 @@ export function BrainView({
               data-testid="folder-view"
             >
               <div className="flex-1 overflow-y-auto px-10 py-12">
-                <article className="mx-auto max-w-[780px] space-y-6">
+                <article className={cn('space-y-6', !editingDoc && 'mx-auto max-w-[780px]')}>
                   {/* Search input for knowledge base with floating dropdown */}
-                  <div className="relative z-30">
-                    <form
-                      onSubmit={(e) => void handleSearch(e)}
-                      className="relative flex items-center"
-                    >
-                      <Input
-                        type="text"
-                        placeholder={t('brain.searchPlaceholder')}
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        aria-label={t('brain.searchKnowledge')}
-                        className="border-[#2a2a2a] bg-[#1a1a1a] text-[#f5f5f5] placeholder:text-[#666666] focus-visible:border-[#4a8fe8]"
-                      />
-                      {searchQuery && (
-                        <button
-                          type="button"
-                          onClick={handleClearSearch}
-                          aria-label={t('common.clear')}
-                          className="absolute right-3 text-[#7d7d7d] hover:text-white"
-                        >
-                          <i className="ti ti-x text-sm" />
-                        </button>
-                      )}
-                      <button
-                        type="submit"
-                        disabled={isSearching}
-                        className="sr-only"
-                        aria-label={t('brain.executeSearch')}
+                  {!editingDoc && (
+                    <div className="relative z-30">
+                      <form
+                        onSubmit={(e) => void handleSearch(e)}
+                        className="relative flex items-center"
                       >
-                        {t('brain.executeSearch')}
-                      </button>
-                    </form>
-
-                    {/* Search Loading & Error States */}
-                    {isSearching && (
-                      <div
-                        className="absolute left-0 right-0 top-full mt-1.5 z-50 rounded-lg border border-[#2e2e2e] bg-[#1a1a1a] p-3 text-sm text-[#4a8fe8] shadow-2xl space-y-2"
-                        data-testid="search-loading"
-                      >
-                        <div className="flex items-center gap-2">
-                          <i className="ti ti-refresh animate-spin text-base" />
-                          <span>{t('brain.syncing')}</span>
-                        </div>
-                        <SkeletonRow className="py-1" />
-                        <SkeletonRow className="py-1" />
-                      </div>
-                    )}
-
-                    {searchError && (
-                      <div
-                        className="absolute left-0 right-0 top-full mt-1.5 z-50 flex items-center rounded-lg border border-[#4d2d2d] bg-[#281818] p-3 text-sm text-[#fca5a5] shadow-2xl"
-                        role="alert"
-                      >
-                        <i className="ti ti-alert-circle mr-2 text-base" />
-                        <span>{searchError}</span>
-                      </div>
-                    )}
-
-                    {/* Floating Search Results Dropdown */}
-                    {searchResults !== null && !isSearching && (
-                      <div
-                        className="absolute left-0 right-0 top-full mt-1.5 z-50 max-h-[460px] overflow-y-auto space-y-2 rounded-lg border border-[#2e2e2e] bg-[#1a1a1a] p-3.5 shadow-2xl thin-scrollbar"
-                        data-testid="search-results"
-                      >
-                        <div className="flex items-center justify-between pb-2 border-b border-[#262626] text-xs font-semibold uppercase tracking-wider text-[#a0a0a0]">
-                          <span>{t('brain.searchResults', { count: searchResults.length })}</span>
+                        <Input
+                          type="text"
+                          placeholder={t('brain.searchPlaceholder')}
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          aria-label={t('brain.searchKnowledge')}
+                          className="border-[#2a2a2a] bg-[#1a1a1a] text-[#f5f5f5] placeholder:text-[#666666] focus-visible:border-[#4a8fe8]"
+                        />
+                        {searchQuery && (
                           <button
                             type="button"
                             onClick={handleClearSearch}
-                            className="text-xs text-[#808080] hover:text-white capitalize"
+                            aria-label={t('common.clear')}
+                            className="absolute right-3 text-[#7d7d7d] hover:text-white"
                           >
-                            {t('common.clear')}
+                            <i className="ti ti-x text-sm" />
                           </button>
-                        </div>
-                        {searchResults.length === 0 ? (
-                          <div className="py-4 text-center text-sm text-[#7d7d7d]">
-                            {t('brain.noSearchChunks')}
+                        )}
+                        <button
+                          type="submit"
+                          disabled={isSearching}
+                          className="sr-only"
+                          aria-label={t('brain.executeSearch')}
+                        >
+                          {t('brain.executeSearch')}
+                        </button>
+                      </form>
+
+                      {/* Search Loading & Error States */}
+                      {isSearching && (
+                        <div
+                          className="absolute left-0 right-0 top-full mt-1.5 z-50 rounded-lg border border-[#2e2e2e] bg-[#1a1a1a] p-3 text-sm text-[#4a8fe8] shadow-2xl space-y-2"
+                          data-testid="search-loading"
+                        >
+                          <div className="flex items-center gap-2">
+                            <i className="ti ti-refresh animate-spin text-base" />
+                            <span>{t('brain.syncing')}</span>
                           </div>
-                        ) : (
-                          searchResults.map((chunk) => {
-                            const docTitle = resolveChunkDocTitle(chunk);
-                            return (
-                              <div
-                                key={`${chunk.source}-${chunk.pageId}-${chunk.chunkIndex}`}
-                                onClick={() => {
-                                  const targetDoc = currentDocs.find(
-                                    (d) =>
-                                      d.id === chunk.pageId ||
-                                      d.pageId === chunk.pageId ||
-                                      d.source === chunk.source,
-                                  );
-                                  if (targetDoc) {
-                                    openDocumentTab(targetDoc);
-                                  } else {
-                                    const fallbackDoc: KnowledgeDocumentDto = {
-                                      id: chunk.pageId || chunk.source,
-                                      pageId: chunk.pageId,
-                                      source: chunk.source,
-                                      title: docTitle,
-                                      chunksCount: 1,
-                                      totalCharacters: chunk.content.length,
-                                      content: chunk.content,
-                                      updatedAt: chunk.createdAt,
-                                    };
-                                    setDocuments((prev) => [...prev, fallbackDoc]);
-                                    openDocumentTab(fallbackDoc);
-                                  }
-                                  handleClearSearch();
-                                }}
-                                className="group cursor-pointer rounded-lg border border-[#262626] bg-[#202020] p-3 text-sm transition hover:border-[#4a8fe8]/60 hover:bg-[#252525] min-w-0 max-w-full overflow-hidden"
-                                data-testid={`search-result-item-${chunk.chunkIndex}`}
-                              >
-                                <div className="mb-1.5 flex items-center justify-between gap-3 min-w-0">
-                                  <div className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
-                                    <i className="ti ti-file-text text-sm text-[#4a8fe8] shrink-0" />
-                                    <span
-                                      className="truncate font-semibold text-sm text-[#4a8fe8] group-hover:underline"
-                                      title={docTitle}
-                                    >
-                                      {docTitle}
+                          <SkeletonRow className="py-1" />
+                          <SkeletonRow className="py-1" />
+                        </div>
+                      )}
+
+                      {searchError && (
+                        <div
+                          className="absolute left-0 right-0 top-full mt-1.5 z-50 flex items-center rounded-lg border border-[#4d2d2d] bg-[#281818] p-3 text-sm text-[#fca5a5] shadow-2xl"
+                          role="alert"
+                        >
+                          <i className="ti ti-alert-circle mr-2 text-base" />
+                          <span>{searchError}</span>
+                        </div>
+                      )}
+
+                      {/* Floating Search Results Dropdown */}
+                      {searchResults !== null && !isSearching && (
+                        <div
+                          className="absolute left-0 right-0 top-full mt-1.5 z-50 max-h-[460px] overflow-y-auto space-y-2 rounded-lg border border-[#2e2e2e] bg-[#1a1a1a] p-3.5 shadow-2xl thin-scrollbar"
+                          data-testid="search-results"
+                        >
+                          <div className="flex items-center justify-between pb-2 border-b border-[#262626] text-xs font-semibold uppercase tracking-wider text-[#a0a0a0]">
+                            <span>{t('brain.searchResults', { count: searchResults.length })}</span>
+                            <button
+                              type="button"
+                              onClick={handleClearSearch}
+                              className="text-xs text-[#808080] hover:text-white capitalize"
+                            >
+                              {t('common.clear')}
+                            </button>
+                          </div>
+                          {searchResults.length === 0 ? (
+                            <div className="py-4 text-center text-sm text-[#7d7d7d]">
+                              {t('brain.noSearchChunks')}
+                            </div>
+                          ) : (
+                            searchResults.map((chunk) => {
+                              const docTitle = resolveChunkDocTitle(chunk);
+                              return (
+                                <div
+                                  key={`${chunk.source}-${chunk.pageId}-${chunk.chunkIndex}`}
+                                  onClick={() => {
+                                    const targetDoc = currentDocs.find(
+                                      (d) =>
+                                        d.id === chunk.pageId ||
+                                        d.pageId === chunk.pageId ||
+                                        d.source === chunk.source,
+                                    );
+                                    if (targetDoc) {
+                                      openDocumentTab(targetDoc);
+                                    } else {
+                                      const fallbackDoc: KnowledgeDocumentDto = {
+                                        id: chunk.pageId || chunk.source,
+                                        pageId: chunk.pageId,
+                                        source: chunk.source,
+                                        title: docTitle,
+                                        chunksCount: 1,
+                                        totalCharacters: chunk.content.length,
+                                        content: chunk.content,
+                                        updatedAt: chunk.createdAt,
+                                      };
+                                      setDocuments((prev) => [...prev, fallbackDoc]);
+                                      openDocumentTab(fallbackDoc);
+                                    }
+                                    handleClearSearch();
+                                  }}
+                                  className="group cursor-pointer rounded-lg border border-[#262626] bg-[#202020] p-3 text-sm transition hover:border-[#4a8fe8]/60 hover:bg-[#252525] min-w-0 max-w-full overflow-hidden"
+                                  data-testid={`search-result-item-${chunk.chunkIndex}`}
+                                >
+                                  <div className="mb-1.5 flex items-center justify-between gap-3 min-w-0">
+                                    <div className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                                      <i className="ti ti-file-text text-sm text-[#4a8fe8] shrink-0" />
+                                      <span
+                                        className="truncate font-semibold text-sm text-[#4a8fe8] group-hover:underline"
+                                        title={docTitle}
+                                      >
+                                        {docTitle}
+                                      </span>
+                                    </div>
+                                    <span className="shrink-0 text-xs text-[#707070]">
+                                      {formatDate(chunk.createdAt)}
                                     </span>
                                   </div>
-                                  <span className="shrink-0 text-xs text-[#707070]">
-                                    {formatDate(chunk.createdAt)}
-                                  </span>
+                                  <p className="line-clamp-3 text-xs leading-relaxed text-[#c0c0c0] break-words [word-break:break-word] overflow-hidden">
+                                    {chunk.content}
+                                  </p>
                                 </div>
-                                <p className="line-clamp-3 text-xs leading-relaxed text-[#c0c0c0] break-words [word-break:break-word] overflow-hidden">
-                                  {chunk.content}
-                                </p>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    )}
-                  </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* EDITING / CREATING DOCUMENT FORM */}
                   {editingDoc ? (
-                    <div
-                      className="space-y-5 rounded-lg border border-[#28282c] bg-[#141416] p-6 shadow-xl"
-                      data-testid="document-editor"
-                    >
+                    <div className="space-y-5" data-testid="document-editor">
                       <div className="flex items-center justify-between border-b border-[#242428] pb-4">
                         <div className="flex items-center gap-2">
                           <span className="rounded border border-[#3b4b60] bg-[#1c2738] px-2.5 py-0.5 font-mono text-xs font-medium text-[#60a5fa]">
@@ -1602,20 +1637,6 @@ export function BrainView({
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setEditPreview(!editPreview)}
-                            className={cn(
-                              'flex items-center gap-1.5 rounded border border-[#2a2a2e] px-3 py-1.5 text-xs font-medium transition',
-                              editPreview
-                                ? 'bg-[#2a2a2e] text-white'
-                                : 'bg-[#1a1a1d] text-[#a0a0a0] hover:text-white',
-                            )}
-                            data-testid="btn-toggle-edit-preview"
-                          >
-                            <i className={cn('ti text-xs', editPreview ? 'ti-edit' : 'ti-eye')} />
-                            <span>{editPreview ? t('common.edit') : t('brain.editPreview')}</span>
-                          </button>
                           <button
                             type="button"
                             onClick={handleCancelEdit}
@@ -1661,7 +1682,7 @@ export function BrainView({
                           value={editTitle}
                           onChange={(e) => setEditTitle(e.target.value)}
                           placeholder={t('brain.docTitlePlaceholder')}
-                          className="border-[#2e2e32] bg-[#19191c] text-base font-semibold text-white placeholder-[#606060] focus-visible:border-[#4a8fe8]"
+                          className="text-base font-semibold"
                           data-testid="input-document-title"
                         />
                       </div>
@@ -1670,35 +1691,18 @@ export function BrainView({
                         <label className="text-xs font-medium text-[#a0a0a5]">
                           {t('brain.docContent')}
                         </label>
-                        {editPreview ? (
-                          <div
-                            className="thin-scrollbar min-h-[360px] max-h-[500px] overflow-y-auto rounded-md border border-[#2e2e32] bg-[#19191c] p-4"
-                            data-testid="editor-preview-container"
-                          >
-                            <MarkdownViewer
-                              content={editContent || t('brain.emptyPreview')}
-                              documentTitle={editTitle}
-                              showModeToggle={false}
-                              onWikilinkClick={handleOpenWikilink}
-                            />
-                          </div>
-                        ) : (
-                          <div className="relative">
-                            <textarea
-                              ref={editorRef}
-                              value={editContent}
-                              onChange={(event) =>
-                                handleEditorChange(event.target.value, event.target.selectionStart)
-                              }
-                              onKeyDown={handleEditorKeyDown}
-                              onPaste={editorImages.onPaste}
-                              onDrop={editorImages.onDrop}
-                              placeholder={t('brain.contentEditorPlaceholder')}
-                              rows={16}
-                              className="thin-scrollbar w-full resize-y rounded-md border border-[#2e2e32] bg-[#19191c] p-4 font-mono text-xs leading-relaxed text-[#e0e0e0] placeholder-[#606060] focus:border-[#4a8fe8] focus:outline-none"
-                              data-testid="textarea-document-content"
-                            />
-                            {wikilinkQuery && (
+                        <MarkdownEditor
+                          key={editingDoc === 'new' ? 'new' : editingDoc.id}
+                          scope="brain"
+                          value={editContent}
+                          onChange={setEditContent}
+                          codeRef={editorRef}
+                          codeTestId="textarea-document-content"
+                          placeholder={t('brain.contentEditorPlaceholder')}
+                          onCodeInput={updateWikilinkQuery}
+                          onCodeKeyDown={handleWikilinkKeyDown}
+                          codeOverlay={
+                            wikilinkQuery && (
                               <div
                                 role="listbox"
                                 aria-label={t('brain.wikilinkSuggestions')}
@@ -1733,29 +1737,9 @@ export function BrainView({
                                   {t('brain.wikilinkHint')}
                                 </p>
                               </div>
-                            )}
-                            <div className="mt-1.5 flex items-center justify-between gap-3">
-                              <ImageInputStatus state={editorImages} />
-                              <label className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded border border-[#2a2a2e] bg-[#1a1a1d] px-3 py-1.5 text-xs font-medium text-[#a0a0a0] transition hover:text-white has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
-                                <i className="ti ti-photo-plus text-xs" aria-hidden="true" />
-                                {t('brain.insertImage')}
-                                <input
-                                  type="file"
-                                  accept={IMAGE_ACCEPT}
-                                  multiple
-                                  className="sr-only"
-                                  data-testid="input-document-image"
-                                  onChange={(event) => {
-                                    const files = [...event.currentTarget.files!];
-                                    event.currentTarget.value = '';
-                                    // This input is rendered next to the editor textarea.
-                                    editorImages.insertFiles(editorRef.current!, files);
-                                  }}
-                                />
-                              </label>
-                            </div>
-                          </div>
-                        )}
+                            )
+                          }
+                        />
                       </div>
 
                       <AttachmentPanel
@@ -1969,15 +1953,17 @@ export function BrainView({
                       </div>
 
                       {/* MARKDOWN VIEWER */}
-                      <MarkdownViewer
-                        content={fullTextContent}
-                        documentTitle={activeDoc.title}
-                        sourceUrl={
-                          activeDoc.source.startsWith('http') ? activeDoc.source : undefined
-                        }
-                        showModeToggle={true}
-                        onWikilinkClick={handleOpenWikilink}
-                      />
+                      <div ref={docContent}>
+                        <MarkdownViewer
+                          content={fullTextContent}
+                          documentTitle={activeDoc.title}
+                          sourceUrl={
+                            activeDoc.source.startsWith('http') ? activeDoc.source : undefined
+                          }
+                          showModeToggle={true}
+                          onWikilinkClick={handleOpenWikilink}
+                        />
+                      </div>
                       <AttachmentPanel scope="brain" attachments={docAttachments} />
                     </div>
                   ) : (
@@ -2033,12 +2019,12 @@ export function BrainView({
                             className="rounded-lg border border-[#262626] bg-[#1a1a1a] p-3"
                             data-testid="card-sync"
                           >
-                            <div className="text-xs text-[#707070]">{t('brain.sync')}</div>
+                            <div className="text-xs text-[#707070]">{t('brain.syncedAt')}</div>
                             <div className="text-sm font-semibold text-white">
                               {isLoadingDocs ? (
                                 <Skeleton className="mt-1 h-5 w-20 rounded-full" />
-                              ) : stats ? (
-                                stats.lastSync
+                              ) : stats?.lastSync ? (
+                                formatDate(stats.lastSync)
                               ) : (
                                 t('brain.recent')
                               )}
@@ -2141,8 +2127,9 @@ export function BrainView({
           minWidth={280}
           maxWidth="container"
           resizeEdge="left"
-          resizeLabel="Redimensionar assistente de documentação"
-          className="overflow-hidden border-l border-[#262626] bg-[#1a1a1a]"
+          resizeLabel={t('brain.resizeAssistant')}
+          gap
+          className="overflow-hidden rounded-lg border border-[#262626] bg-[#1a1a1a]"
         >
           <section className="flex min-h-0 flex-1 flex-col p-4">
             <div className="flex items-center justify-between gap-3">
@@ -2263,7 +2250,7 @@ export function BrainView({
         </ResizableSidebar>
       ) : isResearchSidebarCollapsed ? (
         <aside
-          className="flex w-12 shrink-0 flex-col items-center border-l border-[#262626] bg-[#1a1a1a] py-3"
+          className="flex w-12 shrink-0 flex-col items-center rounded-lg border border-[#262626] bg-[#1a1a1a] py-3"
           aria-label={t('brain.researchTitle')}
         >
           <Button
@@ -2286,7 +2273,8 @@ export function BrainView({
           maxWidth="container"
           resizeEdge="left"
           resizeLabel={t('common.resizeSidebar')}
-          className="overflow-hidden border-l border-[#262626] bg-[#1a1a1a]"
+          gap
+          className="overflow-hidden rounded-lg border border-[#262626] bg-[#1a1a1a]"
         >
           <section className="flex min-h-0 flex-1 flex-col p-4">
             <div className="flex items-start justify-between gap-3">

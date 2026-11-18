@@ -80,7 +80,7 @@ export function WorkspaceLayout({
           onAuthClick={onAuthClick}
           onLogout={onLogout}
         />
-        <main className="flex-1 overflow-y-auto p-5">{children}</main>
+        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-11">{children}</main>
       </div>
     </div>
   );

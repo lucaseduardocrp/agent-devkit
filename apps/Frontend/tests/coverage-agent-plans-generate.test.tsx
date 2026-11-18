@@ -2,6 +2,7 @@ import { fireEvent, render, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { CustomAgentDto } from '../src/features/agents/agent-types.js';
 import { GenerateTestPlanFromSource } from '../src/features/testplans/GenerateTestPlanFromSource.js';
+import { pickOption } from './helpers/pick-option.js';
 import { ApiClient } from '../src/lib/api-client.js';
 
 const suite = { id: 'suite-1', workspaceId: 'w', name: 'Checkout', createdAt: '', updatedAt: '' };
@@ -22,11 +23,12 @@ function renderGenerator(client: ApiClient) {
 async function chooseAndGenerate(view: ReturnType<typeof render>) {
   fireEvent.click(view.getByRole('button', { name: 'Gerar testes' }));
   const dialog = await view.findByRole('dialog');
-  await within(dialog).findByRole('option', { name: 'Checkout' });
-  fireEvent.change(within(dialog).getByLabelText('Test suite'), { target: { value: 'suite-1' } });
-  fireEvent.change(
-    within(dialog).getByLabelText('Selecionar agente de IA para geração de testes'),
-    { target: { value: 'agent-1' } },
+  await pickOption(await within(dialog).findByRole('combobox', { name: 'Test suite' }), 'Checkout');
+  await pickOption(
+    within(dialog).getByRole('combobox', {
+      name: 'Selecionar agente de IA para geração de testes',
+    }),
+    'QA Writer',
   );
   fireEvent.click(within(dialog).getByRole('button', { name: 'Gerar testes' }));
 }

@@ -26,30 +26,30 @@ const escapeHtml = (value: string): string =>
 
 const safeUrl = (url: string): string => (/^\s*(javascript|vbscript|data):/i.test(url) ? '#' : url);
 
+// Inline code is parked behind NUL-delimited placeholders while the rest is formatted.
+// eslint-disable-next-line no-control-regex
+const CODE_PLACEHOLDER = /\u0000(\d+)\u0000/g;
+
 function inlineMarkdown(text: string): string {
   const codes: string[] = [];
   const withoutCode = text.replace(/`([^`]+)`/g, (_, code: string) => {
     codes.push(`<code>${escapeHtml(code)}</code>`);
     return `\u0000${codes.length - 1}\u0000`;
   });
-  return (
-    escapeHtml(withoutCode)
-      .replace(
-        /!\[([^\]]*)\]\(([^)\s]+)\)/g,
-        (_, alt: string, src: string) => `<img src="${safeUrl(src)}" alt="${alt}">`,
-      )
-      .replace(
-        /\[([^\]]+)\]\(([^)\s]+)\)/g,
-        (_, label: string, href: string) => `<a href="${safeUrl(href)}">${label}</a>`,
-      )
-      .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '<strong>$2</strong>')
-      .replace(/(^|[^\w*])\*(?=\S)([^*]*?\S)\*(?![\w*])/g, '$1<em>$2</em>')
-      .replace(/(^|[^\w])_(?=\S)([^_]*?\S)_(?!\w)/g, '$1<em>$2</em>')
-      .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>')
-      // The marker is a control character so that no document text can collide with it.
-      // eslint-disable-next-line no-control-regex
-      .replace(/\u0000(\d+)\u0000/g, (_, index: string) => codes[Number(index)]!)
-  );
+  return escapeHtml(withoutCode)
+    .replace(
+      /!\[([^\]]*)\]\(([^)\s]+)\)/g,
+      (_, alt: string, src: string) => `<img src="${safeUrl(src)}" alt="${alt}">`,
+    )
+    .replace(
+      /\[([^\]]+)\]\(([^)\s]+)\)/g,
+      (_, label: string, href: string) => `<a href="${safeUrl(href)}">${label}</a>`,
+    )
+    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '<strong>$2</strong>')
+    .replace(/(^|[^\w*])\*(?=\S)([^*]*?\S)\*(?![\w*])/g, '$1<em>$2</em>')
+    .replace(/(^|[^\w])_(?=\S)([^_]*?\S)_(?!\w)/g, '$1<em>$2</em>')
+    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>')
+    .replace(CODE_PLACEHOLDER, (_, index: string) => codes[Number(index)]!);
 }
 
 const listItemPattern = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;

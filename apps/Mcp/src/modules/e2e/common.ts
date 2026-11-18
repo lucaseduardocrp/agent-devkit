@@ -46,6 +46,28 @@ export const caseSelection = {
     .describe('Only these cases of the plan/suite; every case of it when omitted.'),
 };
 
+const savedId = (description: string) => z.string().trim().min(1).max(200).describe(description);
+
+/** Test cases saved in ADK (Test Plans) to link to a run: a suite or a Test Plan, optionally some cases. */
+export const savedCaseSelection = {
+  suiteId: savedId(
+    'Local suite (testplans_list_suites); its child suites are included.',
+  ).optional(),
+  planId: savedId('Saved Test Plan id (testplans_list).').optional(),
+  caseIds: z
+    .array(savedId('Local case id (metadata.caseId from testplans_get).'))
+    .min(1)
+    .max(MAX_IMPORTED_CASES)
+    .optional()
+    .describe('Only these cases of the suite or Test Plan; every case of it when omitted.'),
+};
+
+/** A test case saved in ADK: its Test Plan and its stable case id. */
+export const savedCaseReference = z.object({
+  planId: savedId('Saved Test Plan id (testplans_list).'),
+  caseId: savedId('Local case id (metadata.caseId from testplans_get).'),
+});
+
 /** Reference to a case on a test management platform; titles and steps are resolved by ADK. */
 export const caseReference = z.object({
   provider: testManagementProvider,
@@ -89,6 +111,7 @@ export interface TestDto {
   readonly analysis?: string | null;
   readonly steps?: readonly string[];
   readonly externalCase?: ExternalCaseDto | null;
+  readonly savedCase?: { readonly planId: string; readonly caseId: string } | null;
   readonly stepResults?: readonly StepResultDto[];
 }
 

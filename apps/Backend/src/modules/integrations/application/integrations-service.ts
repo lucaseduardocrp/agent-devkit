@@ -6,8 +6,33 @@ import type {
 import { decryptSecret, encryptSecret } from '../../../shared/encryption.js';
 import type { UserIntegrationRecord, UserIntegrationStore } from './integrations-store.js';
 
+/** Told after an integration is saved or deleted, e.g. so the messaging bots restart. */
+export type IntegrationChangeListener = (
+  ownerId: string,
+  category: IntegrationCategory,
+  providerId: string,
+) => void;
+
 export class IntegrationsService {
+  private readonly listeners = new Set<IntegrationChangeListener>();
+
   public constructor(private readonly store: UserIntegrationStore) {}
+
+  public onChange(listener: IntegrationChangeListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private changed(ownerId: string, category: IntegrationCategory, providerId: string): void {
+    for (const listener of this.listeners) listener(ownerId, category, providerId);
+  }
+
+  public listByProvider(
+    category: IntegrationCategory,
+    providerId: string,
+  ): Promise<readonly UserIntegrationRecord[]> {
+    return this.store.listByProvider(category, providerId);
+  }
 
   public async listIntegrations(ownerId: string): Promise<readonly IntegrationDTO[]> {
     const records = await this.store.listByOwner(ownerId);
@@ -45,6 +70,7 @@ export class IntegrationsService {
       encryptedSecrets,
     });
 
+    this.changed(ownerId, category, providerId);
     return toMaskedDTO(saved);
   }
 
@@ -53,7 +79,9 @@ export class IntegrationsService {
     category: IntegrationCategory,
     providerId: string,
   ): Promise<boolean> {
-    return this.store.delete(ownerId, category, providerId);
+    const deleted = await this.store.delete(ownerId, category, providerId);
+    if (deleted) this.changed(ownerId, category, providerId);
+    return deleted;
   }
 
   public async getDecryptedSecret(

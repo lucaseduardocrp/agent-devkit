@@ -118,6 +118,47 @@ describe('Knowledge HTTP Routes (/knowledge/sync & /knowledge/stats)', () => {
     ).toBe(204);
   });
 
+  it('lists the documents a page at a time, by title, without their content', async () => {
+    const authService = new AuthService(new InMemoryAuthRepository());
+    const app = createApp({
+      authService,
+      knowledgeRepository: new InMemoryKnowledgeChunkRepository(),
+    });
+    const registration = await request(app).post('/auth/register').send({
+      email: 'paged@example.com',
+      password: 'StrongPassword123!',
+      name: 'Paged User',
+    });
+    const authorization = `Bearer ${registration.body.token}`;
+    for (const title of ['Billing rules', 'Access', 'Billing flow'])
+      await request(app)
+        .post('/knowledge/documents')
+        .set('Authorization', authorization)
+        .send({ title, content: `About ${title}` });
+    const list = async (query: string) =>
+      (await request(app).get(`/knowledge/documents?${query}`).set('Authorization', authorization))
+        .body;
+
+    const first = await list('page=1&pageSize=2');
+    expect(first.total).toBe(3);
+    expect(first.documents.map((document: { title: string }) => document.title)).toEqual([
+      'Access',
+      'Billing flow',
+    ]);
+    expect(first.documents[0]).not.toHaveProperty('content');
+    const second = await list('page=2&pageSize=2');
+    expect(second.documents.map((document: { title: string }) => document.title)).toEqual([
+      'Billing rules',
+    ]);
+    const search = await list('page=1&q=%20BILLING%20');
+    expect(search.total).toBe(2);
+    expect((await list('page=1&q=nothing')).documents).toEqual([]);
+    // Anything unreadable falls back to the first page of 25.
+    expect((await list('page=0&pageSize=x')).total).toBe(3);
+    // Without a page, the list screens still get every document with its content.
+    expect((await list('')).documents[0]).toHaveProperty('content');
+  });
+
   it('rejects unauthenticated requests with 403', async () => {
     const app = createApp();
 

@@ -1,7 +1,21 @@
 import type { IntegrationCategory } from '../../../contracts/integrations.js';
 import type { LlmPort } from '../../agents/application/agent-ports.js';
+import { MeteredLlm, type LlmUsageRecorder } from '../../agents/application/metered-llm.js';
 import { GeminiLlmProvider } from '../../agents/adapters/gemini-llm.js';
 import { OllamaLlmProvider } from '../../agents/adapters/ollama-llm.js';
+import {
+  bridgeEndpoint,
+  llmAuthMode,
+  llmCliTransport,
+  mcpAccessOf,
+} from '../../agents/adapters/cli-llm/cli-config.js';
+import { CliLlmProvider, cliAccount, detectCli } from '../../agents/adapters/cli-llm/cli-llm.js';
+import {
+  fetchBridgeClis,
+  RemoteCliLlmProvider,
+} from '../../agents/adapters/cli-llm/remote-cli-llm.js';
+import { cliProfilePath } from '../../agents/adapters/cli-llm/cli-profiles.js';
+import { cliForProvider, type CliId } from '../../agents/adapters/cli-llm/cli-specs.js';
 import {
   AnthropicLlmProvider,
   GroqLlmProvider,
@@ -42,11 +56,23 @@ export interface AzureDevOpsProjectMembersResult {
   readonly members: readonly AzureDevOpsProjectMember[];
 }
 
+/** The login folder of the account an integration picked (by name); none for the default login. */
+function cliConfigDirOf(
+  cli: CliId,
+  settings: Record<string, unknown>,
+  workspaceId: string,
+): string | undefined {
+  const profile = asString(settings.cliProfile).trim();
+  return profile ? cliProfilePath(workspaceId, cli, profile) : undefined;
+}
+
 function asString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
 export class DynamicProviderFactory {
+  private usageRecorder: LlmUsageRecorder | undefined;
+
   public constructor(
     private readonly integrationsService: IntegrationsService,
     private readonly defaultFetcher: typeof fetch = fetch,
@@ -106,7 +132,7 @@ export class DynamicProviderFactory {
     url: URL,
   ): Promise<Record<string, string> | null> {
     const host = url.hostname.toLowerCase();
-    const firstSegment = decodeURIComponent(url.pathname.split('/')[1]!).toLowerCase();
+    const firstSegment = decodeURIComponent(url.pathname.split('/')[1] ?? '').toLowerCase();
     const sameHost = (value: unknown) => {
       try {
         return new URL(asString(value)).hostname.toLowerCase() === host;
@@ -296,11 +322,40 @@ export class DynamicProviderFactory {
     }
   }
 
+  /** Where metered LLM usage is written. Without one, models answer unmetered. */
+  public setUsageRecorder(recorder: LlmUsageRecorder | undefined): void {
+    this.usageRecorder = recorder;
+  }
+
+  /**
+   * Wraps a model so every call it answers counts in the dashboard (API key and CLI alike).
+   * `ownerId` is the workspace that owns the integration.
+   */
+  public meter(
+    llm: LlmPort,
+    ownerId: string,
+    options: { tool: string; source?: 'api' | 'cli'; actorId?: string | null; model?: string },
+  ): LlmPort {
+    if (!this.usageRecorder) return llm;
+    return new MeteredLlm(llm, this.usageRecorder, {
+      workspaceId: ownerId,
+      actorId: options.actorId ?? null,
+      tool: options.tool,
+      source: options.source ?? 'api',
+      ...(options.model ? { model: options.model } : {}),
+    });
+  }
+
+  /**
+   * `meter: false` is for a caller that records the tokens itself (issue runs keep them per run);
+   * every other caller is metered under `meter.tool`, `llm` when it names none.
+   */
   public async resolveLlmProvider(
     ownerId: string,
     providerId?: string,
     fetcher: typeof fetch = this.defaultFetcher,
     modelOverride?: string,
+    meter: false | { tool: string; actorId?: string | null } = { tool: 'llm' },
   ): Promise<LlmPort | null> {
     const integrations = await this.integrationsService.listIntegrations(ownerId);
     const llmConfig = integrations.find(
@@ -313,6 +368,26 @@ export class DynamicProviderFactory {
     if (!llmConfig) {
       return null;
     }
+    const metered = (llm: LlmPort, source: 'api' | 'cli', model: string): LlmPort =>
+      meter ? this.meter(llm, ownerId, { ...meter, source, model }) : llm;
+
+    // "AI CLI" mode: same agents, same prompts, but the tokens come from the provider's CLI.
+    if (llmAuthMode(llmConfig.settings) === 'cli') {
+      // Only the Bridge needs the stored token: a local CLI keeps its own login.
+      const secret =
+        llmCliTransport() === 'bridge'
+          ? ((await this.integrationsService.getDecryptedSecret(
+              ownerId,
+              'LLM',
+              llmConfig.providerId,
+            )) ?? undefined)
+          : undefined;
+      return metered(
+        this.createCliLlm(llmConfig.providerId, llmConfig.settings, { ownerId, secret }),
+        'cli',
+        asString(llmConfig.settings.cliModel).trim(),
+      );
+    }
 
     const secret =
       (await this.integrationsService.getDecryptedSecret(ownerId, 'LLM', llmConfig.providerId)) ??
@@ -321,21 +396,133 @@ export class DynamicProviderFactory {
 
     switch (llmConfig.providerId) {
       case 'gemini': {
-        return new GeminiLlmProvider({ apiKey: secret, model: model || undefined, fetcher });
+        return metered(
+          new GeminiLlmProvider({ apiKey: secret, model: model || undefined, fetcher }),
+          'api',
+          model,
+        );
       }
       case 'openai':
-        return new OpenAiLlmProvider({ apiKey: secret, model, fetcher });
+        return metered(new OpenAiLlmProvider({ apiKey: secret, model, fetcher }), 'api', model);
       case 'claude':
       case 'anthropic':
-        return new AnthropicLlmProvider({ apiKey: secret, model, fetcher });
+        return metered(new AnthropicLlmProvider({ apiKey: secret, model, fetcher }), 'api', model);
       case 'groq':
-        return new GroqLlmProvider({ apiKey: secret, model, fetcher });
+        return metered(new GroqLlmProvider({ apiKey: secret, model, fetcher }), 'api', model);
       case 'ollama': {
         const baseUrl = asString(llmConfig.settings.baseUrl) || undefined;
-        return new OllamaLlmProvider({ baseUrl, model: model || undefined, fetcher });
+        return metered(
+          new OllamaLlmProvider({ baseUrl, model: model || undefined, fetcher }),
+          'api',
+          model,
+        );
       }
       default:
         return null;
+    }
+  }
+
+  /**
+   * The provider CLI that stands in for an LLM integration's API key: the one on this machine, or
+   * the one in the Bridge, signed in with this workspace's own token.
+   */
+  public createCliLlm(
+    providerId: string,
+    settings: Record<string, unknown>,
+    workspace: { readonly ownerId: string; readonly secret?: string | undefined },
+  ): CliLlmProvider | RemoteCliLlmProvider {
+    const cli = cliForProvider(providerId);
+    if (!cli) {
+      throw new ApplicationError(
+        'LLM_CLI_UNSUPPORTED',
+        `${providerId} has no provider CLI. Use an API key instead.`,
+        400,
+      );
+    }
+    const transport = llmCliTransport();
+    if (!transport) {
+      throw new ApplicationError(
+        'LLM_CLI_DISABLED',
+        'Provider CLIs are disabled on this server. Set ADK_LLM_CLI=true where the API runs, or configure the Bridge.',
+        403,
+      );
+    }
+    const model = asString(settings.cliModel).trim();
+    // The ADK's tools are on unless the integration turns them off or limits them to reading.
+    const mcpAccess = mcpAccessOf(settings);
+    const configDir = cliConfigDirOf(cli, settings, workspace.ownerId);
+    try {
+      return transport === 'bridge'
+        ? new RemoteCliLlmProvider({
+            cli,
+            bridge: bridgeEndpoint()!,
+            workspaceId: workspace.ownerId,
+            credential: workspace.secret,
+            model,
+            ...(mcpAccess ? { mcpAccess } : {}),
+            fetcher: this.defaultFetcher,
+          })
+        : new CliLlmProvider({
+            cli,
+            model,
+            // Which login of this machine the CLI uses; the Bridge keeps its own, per workspace.
+            ...(configDir ? { configDir } : {}),
+            ...(mcpAccess ? { mcpAccess } : {}),
+          });
+    } catch (error) {
+      // The constructors only throw a CliLlmError, for a model id or a login folder that is not plain.
+      const field = /folder/i.test((error as Error).message) ? 'cliConfigDir' : 'cliModel';
+      throw new ApplicationError(
+        field === 'cliConfigDir' ? 'LLM_CLI_INVALID_CONFIG_DIR' : 'LLM_CLI_INVALID_MODEL',
+        (error as Error).message,
+        400,
+        [{ field }],
+      );
+    }
+  }
+
+  private async testCliConnectivity(
+    providerId: string,
+    settings: Record<string, unknown>,
+    workspace: { readonly ownerId: string; readonly secret?: string | undefined },
+  ): Promise<ConnectivityProbeResult> {
+    const llm = this.createCliLlm(providerId, settings, workspace);
+    const id = cliForProvider(providerId)!;
+    const bridged = llmCliTransport() === 'bridge';
+    try {
+      const status = bridged
+        ? (await fetchBridgeClis(bridgeEndpoint()!, workspace.ownerId, this.defaultFetcher)).find(
+            (candidate) => candidate.id === id,
+          )
+        : await detectCli(id);
+      if (!status?.installed) {
+        return {
+          ok: false,
+          message: `The ${id} CLI is not installed ${bridged ? 'in the Bridge container' : 'on the machine that runs the API'}.`,
+        };
+      }
+      // The account first: it shows which login is used even when the round trip then fails
+      // (no credit, for one). The Bridge signs in per workspace, so there is no local account.
+      const account = bridged
+        ? null
+        : await cliAccount(id, cliConfigDirOf(id, settings, workspace.ownerId)).catch(() => null);
+      const accountNote = account ? ` Account: ${account}.` : '';
+      try {
+        // A real round trip: it proves the CLI is signed in, which `--version` cannot.
+        const response = await llm.complete({ prompt: 'Reply with the single word OK.' });
+        return {
+          ok: response.text.trim().length > 0,
+          message: `${status.label} CLI ${status.version ?? ''} answered.${accountNote}`.replace(
+            /\s+/g,
+            ' ',
+          ),
+        };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'The CLI failed.';
+        return { ok: false, message: `${reason}${accountNote}` };
+      }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : 'The CLI failed.' };
     }
   }
 
@@ -346,12 +533,20 @@ export class DynamicProviderFactory {
     secret?: string,
     fetcher: typeof fetch = this.defaultFetcher,
     locale?: SupportedLocale,
+    /** The workspace being tested: a CLI run by the Bridge is signed in per workspace. */
+    ownerId?: string,
   ): Promise<ConnectivityProbeResult> {
     const localized = (
       key: Parameters<typeof translateContent>[0],
       params: Record<string, string | number>,
     ) => (locale ? translateContent(key, locale, params) : undefined);
     try {
+      if (_category === 'LLM' && llmAuthMode(settings) === 'cli') {
+        return await this.testCliConnectivity(providerId, settings, {
+          ownerId: ownerId as string,
+          secret,
+        });
+      }
       switch (providerId) {
         case 'azure_devops': {
           const organization = asString(settings.organization).trim();
@@ -383,6 +578,20 @@ export class DynamicProviderFactory {
               ? 'Trello board connection verified.'
               : `Trello returned ${res.status}.`,
           };
+        }
+        case 'telegram': {
+          const token = secret?.trim() ?? '';
+          // BotFather tokens look like 123456789:AAF...; anything else must not reach the URL.
+          if (!/^\d+:[\w-]+$/.test(token))
+            return { ok: false, message: 'Paste the bot token BotFather gave you.' };
+          const res = await fetcher(`https://api.telegram.org/bot${token}/getMe`);
+          const body = (await res.json().catch(() => null)) as {
+            ok?: boolean;
+            result?: { username?: string };
+          } | null;
+          return body?.ok
+            ? { ok: true, message: `Connected to @${body.result?.username ?? 'bot'}.` }
+            : { ok: false, message: `Telegram rejected the token (${res.status}).` };
         }
         case 'jira': {
           const baseUrl = asString(settings.baseUrl).trim().replace(/\/$/, '');

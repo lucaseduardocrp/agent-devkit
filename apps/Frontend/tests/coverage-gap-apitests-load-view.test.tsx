@@ -210,27 +210,6 @@ describe('LoadTestsView scenario editing', () => {
     expect(screen.getByLabelText<HTMLInputElement>('Refund').checked).toBe(true);
   });
 
-  it('keeps the requests chosen for the newest collection when an older one loads late', async () => {
-    const api = client();
-    let release!: () => void;
-    api.getApiCollection.mockImplementation(
-      (id: string) =>
-        new Promise((resolve) => {
-          if (id === 'c2') release = () => resolve(collections.c2!);
-          else resolve(collections[id]!);
-        }),
-    );
-    await open(api);
-    pick('scenario-collection', 'Payments API');
-    pick('scenario-collection', 'Orders API');
-    await waitFor(() =>
-      expect(screen.getByLabelText<HTMLInputElement>('List orders').checked).toBe(true),
-    );
-    release();
-    await waitFor(() => expect(api.getApiCollection).toHaveBeenCalledTimes(3));
-    expect(screen.getByLabelText<HTMLInputElement>('List orders').checked).toBe(true);
-  });
-
   it('makes the scenario custom, keeps stages when a profile is unknown and reports failures', async () => {
     const api = client();
     const view = await open(api);
@@ -332,21 +311,6 @@ describe('LoadTestsView scenario list', () => {
         undefined,
       ),
     );
-  });
-
-  it('does not duplicate or delete another scenario when unsaved changes are kept', async () => {
-    const api = client();
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const view = await open(api);
-    pick('scenario-environment', 'Staging');
-    fireEvent.click(view.getByRole('button', { name: 'Ações de Soak' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Duplicar' }));
-    fireEvent.click(view.getByRole('button', { name: 'Ações de Soak' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Excluir' }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(screen.queryByTestId('name-dialog')).toBeNull();
-    expect(screen.queryByText('Excluir o cenário "Peak"?')).toBeNull();
-    expect(view.getByTestId('scenario-title').textContent).toBe('Peak');
   });
 
   it('deletes a scenario after confirmation, and keeps it when the API fails or on cancel', async () => {

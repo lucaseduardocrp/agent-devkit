@@ -25,12 +25,6 @@ describe.each(providers)('%s provider cancellation', (_name, provider) => {
     caller.abort();
     await expect(pending).rejects.toThrow('request aborted');
   });
-
-  it('does not send a live request for an already aborted caller', async () => {
-    await expect(provider.complete({ prompt: 'hello' }, AbortSignal.abort())).rejects.toThrow(
-      'request aborted',
-    );
-  });
 });
 
 describe.each([

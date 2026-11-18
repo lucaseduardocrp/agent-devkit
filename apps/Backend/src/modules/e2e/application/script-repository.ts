@@ -1,4 +1,8 @@
-import type { E2eRepositoryProvider, E2eRepositoryRef } from '../domain/e2e.js';
+import type {
+  E2eRepositoryLocation,
+  E2eRepositoryProvider,
+  E2eRepositoryRef,
+} from '../domain/e2e.js';
 
 export interface E2eRepository {
   readonly id: string;
@@ -9,6 +13,16 @@ export interface E2eRepository {
   readonly webUrl?: string;
 }
 
+/** A folder of this computer chosen as the place of the specs (desktop app only). */
+export interface E2eLocalFolder {
+  /** Absolute path. */
+  readonly id: string;
+  /** Folder name. */
+  readonly name: string;
+  /** The branch checked out in it, or "local" when it is not a Git repository. */
+  readonly defaultBranch: string;
+}
+
 export interface E2eBranch {
   readonly name: string;
   readonly isDefault: boolean;
@@ -16,7 +30,8 @@ export interface E2eBranch {
 
 export interface E2eRepositoryWarning {
   readonly provider: E2eRepositoryProvider;
-  readonly code: 'CREDENTIALS_MISSING' | 'NOT_CONFIGURED' | 'PROVIDER_UNAVAILABLE';
+  readonly code:
+    'CREDENTIALS_MISSING' | 'CREDENTIALS_UNREADABLE' | 'NOT_CONFIGURED' | 'PROVIDER_UNAVAILABLE';
 }
 
 /**
@@ -30,7 +45,7 @@ export interface E2eScriptRepository {
   }>;
   listBranches(
     workspaceId: string,
-    provider: E2eRepositoryProvider,
+    provider: E2eRepositoryLocation,
     repositoryId: string,
   ): Promise<readonly E2eBranch[]>;
   /** Repository-relative paths of every file under `ref.path`. */
@@ -54,6 +69,11 @@ export interface E2eScriptRepository {
     changes: readonly { readonly path: string; readonly content: string | null }[],
     message: string,
   ): Promise<string | null>;
+  /**
+   * Reads a folder of this computer as a repository. Present only where the app runs on the
+   * person's own computer (desktop); absent, a "local" repository is refused.
+   */
+  resolveFolder?(folder: string): Promise<E2eLocalFolder>;
   /** Browser link to the file, when the provider exposes one. */
   fileUrl(workspaceId: string, ref: E2eRepositoryRef, filePath: string): Promise<string | null>;
 }

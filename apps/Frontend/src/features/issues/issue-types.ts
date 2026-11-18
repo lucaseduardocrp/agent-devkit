@@ -18,6 +18,8 @@ export interface Issue {
   readonly type?: string;
   readonly assigneeAgentId: string | null;
   readonly assigneeUserId: string | null;
+  /** Reviewer: the issue also shows in this user's inbox. */
+  readonly proofreaderUserId?: string | null;
   readonly pbiItemId?: string | null;
   readonly createdBy: string;
   readonly createdAt: string;
@@ -43,6 +45,11 @@ export interface InboxRun {
 }
 
 /** Private inbox entry: an issue with the runs executed while it was assigned to the user. */
+/** What the inbox stream says: which issue moved. The inbox is read again from the API. */
+export interface InboxEvent {
+  readonly issueId: string;
+}
+
 export interface InboxItem {
   readonly issue: Issue;
   /** Newest first; never empty. */
@@ -107,6 +114,10 @@ export interface AgentRun {
       readonly kind?: 'result' | 'question' | 'answer' | 'event';
     }[];
     readonly question?: string;
+    /** Set when the workflow is a flow (conditions, module actions) walked node by node. */
+    readonly canvas?: { readonly nodes: readonly { readonly id: string }[] };
+    /** The node the run is on; absent between nodes and once the flow has ended. */
+    readonly currentNodeId?: string;
   } | null;
   readonly provider: string | null;
   readonly model: string | null;
@@ -117,6 +128,12 @@ export interface AgentRun {
   readonly startedAt: string | null;
   readonly finishedAt: string | null;
 }
+
+/**
+ * A run as the live stream sends it: everything but its output, which can be large. The prompt is
+ * not part of the run the app loads either.
+ */
+export type AgentRunEvent = Omit<AgentRun, 'output'>;
 
 export interface CostRate {
   readonly provider: string;
@@ -165,6 +182,13 @@ export interface McpUsageSummary {
     readonly calls: number;
     readonly totalTokens: number;
   }[];
+  /** Where the tokens were spent: an API key, a provider CLI or an MCP client. */
+  readonly bySource?: readonly {
+    readonly source: string;
+    readonly calls: number;
+    readonly totalTokens: number;
+    readonly spendMicros: number;
+  }[];
 }
 
 export type IssueChanges = Partial<
@@ -178,5 +202,6 @@ export type IssueChanges = Partial<
     | 'type'
     | 'assigneeAgentId'
     | 'assigneeUserId'
+    | 'proofreaderUserId'
   >
 >;

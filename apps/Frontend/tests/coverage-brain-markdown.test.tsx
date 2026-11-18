@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MarkdownViewer } from '../src/features/brain/MarkdownViewer.js';
 import { parseMarkdownBlocks } from '../src/features/brain/markdown-parser.js';
-import { RenderedCode } from '../src/features/brain/RenderedCode.js';
+import { RenderedCode, highlightLines } from '../src/features/brain/RenderedCode.js';
 import { CreateSpecFromDocument } from '../src/features/brain/CreateSpecFromDocument.js';
 import { ApiClient, type SpecificationDto } from '../src/lib/api-client.js';
 import type { CustomAgentDto } from '../src/features/agents/agent-types.js';
@@ -122,5 +122,29 @@ describe('CreateSpecFromDocument notification', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Generated');
     fireEvent.click(screen.getByRole('button', { name: 'Fechar notificação' }));
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+  });
+});
+
+describe('highlightLines', () => {
+  it('gives the tokens of each line, with the classes a token that spans lines keeps', () => {
+    const lines = highlightLines("const a = 'x & y'; /* one\ntwo */\n\nlet b", 'ts')!;
+    expect(lines).toHaveLength(4);
+    expect(lines.map((line) => line.map((token) => token.text).join(''))).toEqual([
+      "const a = 'x & y'; /* one",
+      'two */',
+      '',
+      'let b',
+    ]);
+    expect(lines[0]![0]).toEqual({ text: 'const', className: 'hljs-keyword' });
+    expect(lines[0]!.some((token) => token.text === "'x & y'")).toBe(true);
+    expect(lines[0]!.at(-1)).toEqual({ text: '/* one', className: 'hljs-comment' });
+    expect(lines[1]).toEqual([{ text: 'two */', className: 'hljs-comment' }]);
+    expect(lines[2]).toEqual([]);
+  });
+
+  it('leaves out what it cannot or should not highlight', () => {
+    expect(highlightLines('hello', 'txt')).toBeNull();
+    expect(highlightLines('hello', '')).toBeNull();
+    expect(highlightLines('a'.repeat(200_001), 'ts')).toBeNull();
   });
 });

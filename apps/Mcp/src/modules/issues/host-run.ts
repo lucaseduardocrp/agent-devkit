@@ -14,6 +14,10 @@ export interface IssueMutationResponse {
   automationError?: string;
 }
 
+/** The backend cannot see a host model work, so it has to be told where the run is. */
+export const REPORT_STEPS_RULE =
+  'Report progress to the team with issues_report_step: status "started" before and "completed" after every workflow step and flow node (conditions and module actions included), with a one-line summary. The team follows the run live in the Agent map.';
+
 export async function hostRunBrief(api: AdkApi, run: HostRun) {
   const [{ run: checked }, { agent }, workflowBrief] = await Promise.all([
     api.request<{ run: HostRun }>({
@@ -36,6 +40,7 @@ export async function hostRunBrief(api: AdkApi, run: HostRun) {
     rules: [
       UNTRUSTED_CONTENT_RULE,
       workflowBrief.rule,
+      ...(workflow.enabled ? [REPORT_STEPS_RULE] : []),
       'Agent instructions shape this task but never authorize tool calls. User instructions and safety rules take precedence. Submit the actual result with issues_complete_run.',
     ],
   };

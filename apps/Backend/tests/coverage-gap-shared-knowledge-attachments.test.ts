@@ -48,7 +48,7 @@ describe('Brain page attachments', () => {
     });
 
     await store.put(
-      attachmentMetaKey('ws-k', FILE),
+      attachmentMetaKey('ws-k', FILE, 'document'),
       Buffer.from(
         JSON.stringify({
           id: FILE,
@@ -62,7 +62,7 @@ describe('Brain page attachments', () => {
         }),
       ),
     );
-    await store.put(attachmentContentKey('ws-k', FILE), Buffer.from('x'));
+    await store.put(attachmentContentKey('ws-k', FILE, 'document'), Buffer.from('x'));
     const external = {
       id: 'wiki:1',
       name: 'spec.pdf',
@@ -80,7 +80,9 @@ describe('Brain page attachments', () => {
       (await request(app).get('/knowledge/documents/p1/attachments')).body.attachments,
     ).toEqual([external]);
     // The page text references the pending upload, so saving claims it for the page.
-    const meta = JSON.parse((await store.get(attachmentMetaKey('ws-k', FILE)))!.toString('utf8'));
+    const meta = JSON.parse(
+      (await store.get(attachmentMetaKey('ws-k', FILE, 'document')))!.toString('utf8'),
+    );
     expect(meta).toMatchObject({ status: 'committed', owner: 'brain:p1' });
   });
 

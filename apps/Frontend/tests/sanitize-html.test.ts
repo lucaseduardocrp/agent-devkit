@@ -39,3 +39,17 @@ describe('sanitizeHtml', () => {
     expect(INLINE_HTML_TAG.test('List<String>')).toBe(false);
   });
 });
+
+describe('sanitizeHtml text colours', () => {
+  it('keeps a hex text colour on spans and drops any other style', () => {
+    expect(sanitizeHtml('<span style="color: #ef4444">a</span>')).toBe(
+      '<span style="color: #ef4444">a</span>',
+    );
+    expect(sanitizeHtml('<span style="color:#fff;">a</span>')).toContain('style="color:#fff;"');
+    expect(sanitizeHtml('<span style="color: red">a</span>')).toBe('<span>a</span>');
+    expect(sanitizeHtml('<span style="color: #fff; position: fixed">a</span>')).toBe(
+      '<span>a</span>',
+    );
+    expect(sanitizeHtml('<span>a</span>')).toBe('<span>a</span>');
+  });
+});

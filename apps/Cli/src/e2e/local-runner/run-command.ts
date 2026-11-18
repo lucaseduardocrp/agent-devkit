@@ -22,6 +22,8 @@ interface TestDto {
   readonly durationMs: number | null;
 }
 
+/** Browsers a local run opens at the same time, one per test. */
+export const DEFAULT_PARALLEL = 3;
 const ACTIVE = new Set(['queued', 'planning', 'running']);
 
 export interface LocalRunOptions {
@@ -32,6 +34,8 @@ export interface LocalRunOptions {
   readonly scriptsDir?: string;
   /** Switches a run that executes on the ADK workers to this computer. */
   readonly setLocal?: boolean;
+  /** Browsers that run tests at the same time on this computer; defaults to 3. */
+  readonly parallel?: number;
   readonly signal?: AbortSignal;
 }
 
@@ -80,6 +84,8 @@ export async function runLocally(
   await agent.serve({
     creationId: creation.id,
     waitSeconds: 5,
+    // One test needs one browser; a whole run gets one per test, up to the limit.
+    parallel: test ? 1 : (options.parallel ?? DEFAULT_PARALLEL),
     ...(options.signal ? { signal: options.signal } : {}),
     done: async () => !ACTIVE.has((creation = await getCreation(api, runPath)).status),
   });

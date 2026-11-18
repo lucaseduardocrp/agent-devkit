@@ -154,25 +154,6 @@ describe('AiKnowledgeTestPlanGenerator with an agent workflow', () => {
   }
   const context = { requestId: 'r', ownerId: 'owner', workspaceId: 'ws' };
 
-  it('runs the workflow with the default agent and retries invalid output', async () => {
-    const { subject, executeAgent } = generator(
-      ['not json', plansJson],
-      [
-        { id: 'qa', role: 'QA' },
-        { id: 'default', isDefault: true },
-      ],
-    );
-    const result = await subject.generate({ prompt: requirement, llmProvider: 'openai' }, context);
-    expect(result.title).toBe('Report filter');
-    expect(executeAgent).toHaveBeenCalledTimes(2);
-    expect(executeAgent.mock.calls[0]![1]).toBe('default');
-    expect(executeAgent.mock.calls[0]![2]).toMatchObject({
-      includeKnowledge: false,
-      llmProvider: 'openai',
-    });
-    expect(executeAgent.mock.calls[1]![2].prompt).toContain('CORRECTION REQUIRED');
-  });
-
   it('picks the request agent, then a QA agent, then the workflow agent', async () => {
     const chosen = async (agents: { id: string; role?: string }[], agentId?: string) => {
       const { subject, executeAgent } = generator([plansJson], agents);

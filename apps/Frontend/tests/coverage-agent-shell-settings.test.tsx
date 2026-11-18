@@ -270,7 +270,7 @@ describe('SettingsView member access and workspace actions', () => {
     );
     expect(onDeleteWorkspace).not.toHaveBeenCalled();
 
-    // The inline confirmation stays open; typing the new name reaches the final dialog again.
+    // The danger zone stays expanded after the first confirmation closed.
     fireEvent.change(
       view.getByRole('textbox', { name: 'Nome completo do workspace para confirmação' }),
       { target: { value: 'Squad Renomeado' } },

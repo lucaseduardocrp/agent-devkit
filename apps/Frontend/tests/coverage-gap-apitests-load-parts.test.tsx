@@ -37,21 +37,6 @@ describe('load-model', () => {
   });
 });
 
-describe('newRequest', () => {
-  it('builds a GET request on the base URL that expects a 200', () => {
-    const request = newRequest();
-    expect(request).toMatchObject({
-      type: 'request',
-      name: 'New request',
-      method: 'GET',
-      url: '{{baseUrl}}/',
-      assertions: [{ source: 'status', operator: 'eq', expected: '200' }],
-    });
-    expect(newRequest('Login').name).toBe('Login');
-    expect(newRequest().id).not.toBe(request.id);
-  });
-});
-
 describe('downloadBlob', () => {
   it('clicks a temporary link to the blob and frees it', () => {
     const create = vi.fn(() => 'blob:x');

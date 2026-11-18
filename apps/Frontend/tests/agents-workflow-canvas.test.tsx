@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentWorkflowBoard } from '../src/features/agents/AgentWorkflowBoard.js';
 import { I18nProvider } from '../src/lib/i18n/index.js';
@@ -39,10 +39,12 @@ const toolNames = Object.fromEntries(
       'design',
       'e2e',
       'releasenotes',
+      'development',
       'integrationtests',
       'loadtests',
       'audit',
       'workspaces',
+      'notifications',
     ] as AgentWorkflowToolset[]
   ).map((toolset) => [toolset, [`${toolset}_create`]]),
 ) as unknown as Record<AgentWorkflowToolset, readonly string[]>;
@@ -67,7 +69,11 @@ function Host({
   isReadOnly = false,
   isDirty = false,
   onWorkflow,
+  notificationOptions,
 }: {
+  readonly notificationOptions?: React.ComponentProps<
+    typeof AgentWorkflowBoard
+  >['notificationOptions'];
   readonly initial?: AgentWorkflowDto;
   readonly isReadOnly?: boolean;
   readonly isDirty?: boolean;
@@ -83,6 +89,7 @@ function Host({
         isDirty={isDirty}
         toolNames={toolNames}
         providerOptions={[{ id: 'github', name: 'GitHub' }]}
+        {...(notificationOptions ? { notificationOptions } : {})}
         onChange={(next) => {
           setWorkflow(next);
           onWorkflow?.(next);
@@ -270,6 +277,181 @@ describe('AgentWorkflowBoard canvas', () => {
   });
 });
 
+describe('AgentWorkflowBoard initial view', () => {
+  /** jsdom has no layout: give the canvas a size, as the browser would. */
+  function mockSurface(width: number, height: number) {
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(width),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(height),
+    ];
+    return { mockRestore: () => spies.forEach((spy) => spy.mockRestore()) };
+  }
+  const zoom = () => Number(screen.getByTestId('workflow-zoom-level').textContent.replace('%', ''));
+
+  it('opens with the whole flow in view and refits it with the reset button', () => {
+    // The default flow (trigger + 2 steps) is wider than a 640 px canvas.
+    const spy = mockSurface(640, 560);
+    try {
+      render(<Host />);
+      const fitted = zoom();
+      expect(fitted).toBeLessThan(100);
+      expect(fitted).toBeGreaterThanOrEqual(20);
+
+      // The user's own zoom is kept while editing, and reset frames the flow again.
+      fireEvent.click(screen.getByTestId('workflow-zoom-in'));
+      expect(zoom()).toBeGreaterThan(fitted);
+      fireEvent.click(screen.getByTestId('workflow-reset-view'));
+      expect(zoom()).toBe(fitted);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('frames the flow once the canvas gets its size, for a canvas laid out after it mounts', () => {
+    let resized!: () => void;
+    const disconnect = vi.fn();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          resized = callback;
+        }
+        observe() {}
+        disconnect = disconnect;
+      },
+    );
+    let width = 0;
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(560),
+    ];
+    try {
+      const view = render(<Host />);
+      expect(zoom()).toBe(100);
+      // Still no size: it keeps waiting.
+      act(() => resized());
+      expect(zoom()).toBe(100);
+      expect(disconnect).not.toHaveBeenCalled();
+
+      width = 640;
+      act(() => resized());
+      expect(zoom()).toBeLessThan(100);
+      // The canvas keeps watching its size: a larger one gets the flow framed larger.
+      expect(disconnect).not.toHaveBeenCalled();
+      width = 2000;
+      act(() => resized());
+      expect(zoom()).toBe(100);
+      view.unmount();
+      expect(disconnect).toHaveBeenCalled();
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the flow in view when the canvas is resized, until the person zooms it themselves', () => {
+    let resized!: () => void;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          resized = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    let width = 640;
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(560),
+    ];
+    try {
+      render(<Host />);
+      const fitted = zoom();
+
+      // A narrower canvas (a tablet turned upright) frames the flow smaller.
+      width = 480;
+      act(() => resized());
+      expect(zoom()).toBeLessThan(fitted);
+
+      // The person's own zoom wins over a resize ...
+      fireEvent.click(screen.getByTestId('workflow-zoom-in'));
+      const zoomed = zoom();
+      width = 2000;
+      act(() => resized());
+      expect(zoom()).toBe(zoomed);
+
+      // ... until the view is reset, which hands the framing back to the canvas.
+      fireEvent.click(screen.getByTestId('workflow-reset-view'));
+      expect(zoom()).toBe(100);
+      width = 480;
+      act(() => resized());
+      expect(zoom()).toBeLessThan(100);
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('frames the flow again when a node is added, as long as the view was left alone', () => {
+    const spy = mockSurface(640, 560);
+    try {
+      render(<Host />);
+      const fitted = zoom();
+      fireEvent.click(screen.getByTestId('workflow-add-approval'));
+      // The new node made the flow wider, and it still fits.
+      expect(zoom()).toBeLessThan(fitted);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('leaves the view alone once the canvas was panned', () => {
+    const spy = mockSurface(640, 560);
+    try {
+      render(<Host />);
+      const surface = () => canvas().firstElementChild as HTMLElement;
+      dragPointer(canvas(), { x: 100, y: 100 }, { x: 160, y: 130 });
+      const panned = surface().style.transform;
+      fireEvent.click(screen.getByTestId('workflow-add-approval'));
+      expect(surface().style.transform).toBe(panned);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('stops waiting for a size when the canvas goes away first', () => {
+    const disconnect = vi.fn();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect = disconnect;
+      },
+    );
+    try {
+      render(<Host />).unmount();
+      expect(disconnect).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not reframe the flow after the first view, even when the flow changes', () => {
+    const spy = mockSurface(640, 560);
+    try {
+      render(<Host />);
+      fireEvent.click(screen.getByTestId('workflow-zoom-in'));
+      const zoomed = zoom();
+      fireEvent.click(screen.getByTestId('workflow-add-approval'));
+      expect(zoom()).toBe(zoomed);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('AgentWorkflowBoard approval nodes', () => {
   it('adds an approval node at the open end of the flow and gates the step before it', () => {
     const onWorkflow = vi.fn();
@@ -286,23 +468,14 @@ describe('AgentWorkflowBoard approval nodes', () => {
     );
   });
 
-  it('reports the gate on the step inspector instead of a switch', () => {
+  it('keeps the approval gate out of the step inspector', () => {
     render(<Host />);
     fireEvent.click(screen.getByTestId('workflow-add-approval'));
     pointerDown(node('step-b'), { clientX: 0, clientY: 0 });
     pointerUp(node('step-b'), { clientX: 0, clientY: 0 });
-    expect(screen.getByTestId('workflow-step-review-state')).toHaveTextContent(
-      'Approval required after this step',
-    );
-  });
-
-  it('shows a step with no gate as such', () => {
-    render(<Host />);
-    pointerDown(node('step-b'), { clientX: 0, clientY: 0 });
-    pointerUp(node('step-b'), { clientX: 0, clientY: 0 });
-    expect(screen.getByTestId('workflow-step-review-state')).toHaveTextContent(
-      'No approval after this step',
-    );
+    expect(screen.getByTestId('workflow-inspector')).toBeInTheDocument();
+    expect(screen.queryByText('Approval required after this step')).not.toBeInTheDocument();
+    expect(screen.queryByText('No approval after this step')).not.toBeInTheDocument();
   });
 
   it('removes an approval node and the gate it carried', () => {
@@ -436,6 +609,20 @@ describe('AgentWorkflowBoard steps and rules', () => {
     pointerDown(node('step-a'), { clientX: 0, clientY: 0 });
     pointerUp(node('step-a'), { clientX: 0, clientY: 0 });
     expect(screen.queryByTestId('workflow-inspector')).toBeNull();
+  });
+
+  it('locks the settings that are open when the permission to edit is lost', () => {
+    const view = render(<Host />);
+    pointerDown(node(WORKFLOW_TRIGGER_NODE_ID));
+    pointerUp(node(WORKFLOW_TRIGGER_NODE_ID));
+    const finalReview = () =>
+      screen.getByRole<HTMLInputElement>('switch', {
+        name: 'Require approval of the final result',
+      });
+    expect(finalReview().disabled).toBe(false);
+
+    view.rerender(<Host isReadOnly />);
+    expect(finalReview().disabled).toBe(true);
   });
 
   it('dims the canvas while the workflow is turned off', () => {
@@ -791,6 +978,53 @@ describe('AgentWorkflowBoard action, condition and delay nodes', () => {
     expect(node(id)).toHaveTextContent('create_issue');
   });
 
+  it('configures a notification: the module picks the only action and shows its editor', () => {
+    const onWorkflow = vi.fn();
+    render(
+      <Host
+        onWorkflow={onWorkflow}
+        notificationOptions={{
+          channels: [{ id: 'email', label: 'E-mail', available: true }],
+          members: [],
+          failed: false,
+        }}
+      />,
+    );
+    const id = addKind('action', onWorkflow);
+    expect(screen.queryByTestId('notification-action-editor')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Module'), { target: { value: 'notifications' } });
+
+    expect(screen.getByTestId('notification-action-editor')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('channel-email'));
+    fireEvent.click(screen.getByTestId('node-role-assignee'));
+    fireEvent.change(screen.getByTestId('node-subject'), { target: { value: 'Hello' } });
+
+    const saved = onWorkflow.mock.lastCall![0] as AgentWorkflowDto;
+    expect(saved.canvas!.nodes.find((entry) => entry.id === id)!.action).toEqual({
+      toolset: 'notifications',
+      toolName: 'notifications_send',
+      notification: {
+        channels: ['email'],
+        userIds: [],
+        roles: ['assignee'],
+        subject: 'Hello',
+        message: '',
+      },
+    });
+
+    // Another module drops the action, and with it the notification settings.
+    fireEvent.change(screen.getByLabelText('Module'), { target: { value: 'brain' } });
+    expect(screen.queryByTestId('notification-action-editor')).toBeNull();
+  });
+
+  it('shows the notification editor without options when the board was given none', () => {
+    const onWorkflow = vi.fn();
+    render(<Host onWorkflow={onWorkflow} />);
+    addKind('action', onWorkflow);
+    fireEvent.change(screen.getByLabelText('Module'), { target: { value: 'notifications' } });
+    expect(screen.getByTestId('notification-action-editor')).toBeInTheDocument();
+  });
+
   it('forgets the action name when the module changes, and clears the provider', () => {
     const onWorkflow = vi.fn();
     render(<Host onWorkflow={onWorkflow} />);
@@ -935,5 +1169,84 @@ describe('AgentWorkflowBoard action, condition and delay nodes', () => {
     );
     expect(screen.getByTestId('workflow-add-action')).toHaveAttribute('disabled');
     expect(screen.getByTestId('workflow-port-cond-true')).toHaveAttribute('disabled');
+  });
+});
+
+describe('AgentWorkflowBoard notification nodes', () => {
+  const options = {
+    channels: [{ id: 'email', label: 'E-mail', available: true }],
+    members: [],
+    failed: false,
+  };
+
+  it('adds a notification node that is already a notifications_send action', () => {
+    const onWorkflow = vi.fn();
+    render(<Host onWorkflow={onWorkflow} notificationOptions={options} />);
+    fireEvent.click(screen.getByTestId('workflow-add-notification'));
+
+    const saved = onWorkflow.mock.lastCall![0] as AgentWorkflowDto;
+    const added = saved.canvas!.nodes.find(
+      (entry) => (entry.action as { toolset?: string } | undefined)?.toolset === 'notifications',
+    )!;
+    expect(added.kind).toBe('action');
+    expect(added.action).toEqual({ toolset: 'notifications', toolName: 'notifications_send' });
+    expect(saved.canvas!.edges.some((edge) => edge.to === added.id)).toBe(true);
+
+    // It opens on the notification editor, without the warning about actions a server cannot run.
+    expect(screen.getByTestId('notification-action-editor')).toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-action-server-limit')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Notification' })).toBeInTheDocument();
+    expect(node(added.id)).toHaveTextContent('Needs configuration');
+  });
+
+  it('shows the subject and channels on the node once it is configured', () => {
+    const onWorkflow = vi.fn();
+    render(<Host onWorkflow={onWorkflow} notificationOptions={options} />);
+    fireEvent.click(screen.getByTestId('workflow-add-notification'));
+    const id = (onWorkflow.mock.lastCall![0] as AgentWorkflowDto).canvas!.nodes.find(
+      (entry) => (entry.action as { toolset?: string } | undefined)?.toolset === 'notifications',
+    )!.id;
+
+    fireEvent.click(screen.getByTestId('channel-email'));
+    fireEvent.click(screen.getByTestId('node-role-assignee'));
+    expect(node(id)).toHaveTextContent('Notification');
+    expect(node(id)).toHaveTextContent('email');
+    expect(node(id)).not.toHaveTextContent('Needs configuration');
+
+    fireEvent.change(screen.getByTestId('node-subject'), { target: { value: 'Done' } });
+    expect(node(id)).toHaveTextContent('Done');
+  });
+
+  it('cannot be added to a read-only workflow', () => {
+    render(<Host isReadOnly />);
+    expect(screen.getByTestId('workflow-add-notification')).toHaveAttribute('disabled');
+  });
+
+  it('says no channel is chosen when a stored node has settings but no channel', () => {
+    render(
+      <Host
+        initial={{
+          ...baseWorkflow,
+          canvas: {
+            nodes: [
+              { id: WORKFLOW_TRIGGER_NODE_ID, kind: 'trigger', x: 0, y: 0 },
+              {
+                id: 'tell',
+                kind: 'action',
+                x: 300,
+                y: 0,
+                action: {
+                  toolset: 'notifications',
+                  toolName: 'notifications_send',
+                  notification: { channels: [], userIds: [], roles: [], subject: '', message: '' },
+                },
+              },
+            ],
+            edges: [],
+          },
+        }}
+      />,
+    );
+    expect(node('tell')).toHaveTextContent('Notification');
   });
 });

@@ -15,6 +15,7 @@ const test: E2eTestSummary = {
   priority: 'high',
   beforeRunInstructions: null,
   afterRunInstructions: null,
+  scriptInstructions: null,
   scriptPath: 'tests/e2e/tc001.spec.ts',
   status: 'passed',
   error: null,

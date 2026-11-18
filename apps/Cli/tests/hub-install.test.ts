@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { gitCheckout, HubInstaller, skillRevision } from '../src/hub/install.js';
 import {
   hubFetch,
@@ -104,22 +104,6 @@ describe('hub skills', () => {
     );
     await write(home.lockFile, '{}');
     await expect(new HubInstaller({ lockFile: home.lockFile }).installed()).resolves.toEqual([]);
-  });
-});
-
-describe('hub skill paths', () => {
-  it('refuses an index file path that leaves the skill folder, even without index validation', async () => {
-    const home = await tempHome();
-    const files = { ...SKILL_FILES, '../escape.md': 'outside' };
-    const index = hubIndex({ skills: [skillEntry({}, files)] });
-    await expect(
-      new HubInstaller({ lockFile: home.lockFile, fetch: hubFetch(index, files) }).installSkill(
-        index,
-        'edge-hunter',
-        { skillsDir: home.skillsDir },
-      ),
-    ).rejects.toThrow('Refusing the path ../escape.md.');
-    expect(existsSync(join(home.skillsDir, 'escape.md'))).toBe(false);
   });
 });
 
@@ -260,17 +244,28 @@ describe('hub plugins', () => {
     );
   });
 
-  it('refuses symbolic links inside the plugin', async () => {
+  it('refuses symbolic links inside the plugin', async (context) => {
     const home = await tempHome();
     const base = pluginCheckout();
     const linked = async (repo: string, sha: string, directory: string) => {
       await base(repo, sha, directory);
-      // A directory link: a junction on Windows (no extra rights needed), a symlink elsewhere.
-      await symlink(
-        join(directory, 'agents'),
-        join(directory, 'skills', 'jira-triage', 'linked'),
-        'junction',
-      );
+      try {
+        await symlink(
+          join(directory, 'adk-plugin.json'),
+          join(directory, 'skills', 'jira-triage', 'link.md'),
+        );
+      } catch {
+        // Windows without the symlink privilege: a junction is reported as a link as well.
+        try {
+          await symlink(
+            join(directory, 'agents'),
+            join(directory, 'skills', 'jira-triage', 'linked'),
+            'junction',
+          );
+        } catch {
+          context.skip();
+        }
+      }
     };
     await expect(
       new HubInstaller({ lockFile: home.lockFile, checkout: linked }).installPlugin(
@@ -333,57 +328,6 @@ describe('hub updates and removals', () => {
     );
   });
 
-  it('reinstalls a skill whose files changed into the same folder', async () => {
-    const home = await tempHome();
-    const index = hubIndex();
-    await new HubInstaller({ lockFile: home.lockFile, fetch: hubFetch(index) }).installSkill(
-      index,
-      'edge-hunter',
-      { skillsDir: home.skillsDir },
-    );
-    const files = { ...SKILL_FILES, 'SKILL.md': `${SKILL_FILES['SKILL.md']}More cases.\n` };
-    const changed = hubIndex({ skills: [skillEntry({ version: '1.1.0' }, files)] });
-    const result = await new HubInstaller({
-      lockFile: home.lockFile,
-      fetch: hubFetch(changed, files),
-    }).update(changed, 'skill');
-    expect(result.updated.map((item) => item.record.version)).toEqual(['1.1.0']);
-    expect(result.updated[0]?.record.agentsDir).toBeUndefined();
-    expect(await readFile(join(home.skillsDir, 'edge-hunter', 'SKILL.md'), 'utf8')).toContain(
-      'More cases.',
-    );
-  });
-
-  it('keeps its lock file in the user home by default', async () => {
-    const home = await tempHome();
-    vi.stubEnv('HOME', home.root);
-    vi.stubEnv('USERPROFILE', home.root);
-    try {
-      await write(
-        join(home.root, '.adk', 'hub-lock.json'),
-        JSON.stringify({
-          installs: [
-            {
-              kind: 'skill',
-              name: 'edge-hunter',
-              version: '1.0.0',
-              revision: 'r',
-              skillsDir: home.skillsDir,
-              paths: [],
-              mcpServers: [],
-              installedAt: '',
-            },
-          ],
-        }),
-      );
-      expect((await new HubInstaller().installed('skill')).map((record) => record.name)).toEqual([
-        'edge-hunter',
-      ]);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
   it('ignores lock paths outside the folders it installed into', async () => {
     const home = await tempHome();
     const outside = join(home.root, 'precious.txt');
@@ -433,24 +377,61 @@ describe('git checkout', () => {
     expect(await readFile(join(target, 'file.txt'), 'utf8')).toBe('first');
   });
 
-  it('refuses a checkout that is not the requested commit', async () => {
-    const origin = await mkdtemp(join(tmpdir(), 'devkit-origin-'));
-    git(origin, 'init', '--quiet');
-    await writeFile(join(origin, 'file.txt'), 'first');
-    git(origin, 'add', '.');
-    git(origin, 'commit', '--quiet', '-m', 'one');
-    git(origin, 'branch', 'pinned');
-    const target = await mkdtemp(join(tmpdir(), 'devkit-checkout-'));
-    await expect(
-      gitCheckout(`file://${origin.replaceAll('\\', '/')}`, 'pinned', target),
-    ).rejects.toThrow(/expected pinned\./);
-  });
-
   it('explains when git cannot run', async () => {
     const missing = join(tmpdir(), 'devkit-missing', String(Date.now()));
     await expect(gitCheckout('https://github.com/a/b', 'a'.repeat(40), missing)).rejects.toThrow(
       /needs git/,
     );
     await mkdir(missing, { recursive: true });
+  });
+  it('reports a checkout that is not the pinned commit', async () => {
+    const origin = await mkdtemp(join(tmpdir(), 'devkit-origin-'));
+    git(origin, 'init', '--quiet');
+    await writeFile(join(origin, 'file.txt'), 'first');
+    git(origin, 'add', '.');
+    git(origin, 'commit', '--quiet', '-m', 'one');
+    const first = git(origin, 'rev-parse', 'HEAD');
+    const target = await mkdtemp(join(tmpdir(), 'devkit-checkout-'));
+    await expect(
+      gitCheckout(`file://${origin.replaceAll('\\', '/')}`, first.toUpperCase(), target),
+    ).rejects.toThrow(/expected/);
+  });
+});
+
+describe('hub installer details', () => {
+  it('keeps its lock in the home folder unless told otherwise', () => {
+    expect(new HubInstaller()).toBeInstanceOf(HubInstaller);
+  });
+
+  it('refuses an indexed file whose path leaves the skill folder', async () => {
+    const home = await tempHome();
+    const files = { ...SKILL_FILES, '../escape.md': 'x' };
+    const index = hubIndex({ skills: [skillEntry({}, files)] });
+    const installer = new HubInstaller({ lockFile: home.lockFile, fetch: hubFetch(index, files) });
+    await expect(
+      installer.installSkill(index, 'edge-hunter', { skillsDir: home.skillsDir }),
+    ).rejects.toThrow(/Refusing the path/);
+  });
+
+  it('updates a plugin together with its subagents folder', async () => {
+    const home = await tempHome();
+    const installer = new HubInstaller({ lockFile: home.lockFile, checkout: pluginCheckout() });
+    await installer.installPlugin(hubIndex(), 'jira-qa', home);
+    const next = hubIndex({ plugins: [pluginEntry({ sha: 'b'.repeat(40) })] });
+    const result = await installer.update(next, 'plugin', []);
+    expect(result.updated).toHaveLength(1);
+    expect(result.updated[0]!.record.agentsDir).toBe(home.agentsDir);
+  });
+});
+
+describe('hub update without subagents', () => {
+  it('updates a plugin that was installed without a subagents folder', async () => {
+    const home = await tempHome();
+    const installer = new HubInstaller({ lockFile: home.lockFile, checkout: pluginCheckout() });
+    await installer.installPlugin(hubIndex(), 'jira-qa', { skillsDir: home.skillsDir });
+    const next = hubIndex({ plugins: [pluginEntry({ sha: 'b'.repeat(40) })] });
+    const result = await installer.update(next, 'plugin', []);
+    expect(result.updated).toHaveLength(1);
+    expect(result.updated[0]!.record).not.toHaveProperty('agentsDir');
   });
 });

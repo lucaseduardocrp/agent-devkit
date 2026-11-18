@@ -261,6 +261,7 @@ export class AzureTestSuitePublisher implements TestSuiteDestinationProvider {
         )
       ).data;
     } catch (error) {
+      // requestPage only throws ApplicationError, which carries the HTTP status in its details.
       const status = (error as ApplicationError).details?.[0]?.['status'];
       if (status === 404 || status === 400)
         throw new ApplicationError(

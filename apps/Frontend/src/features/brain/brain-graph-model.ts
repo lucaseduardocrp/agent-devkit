@@ -1,4 +1,5 @@
 import type { KnowledgeDocumentDto } from '../../lib/api-client.js';
+import { getMessages } from '../../lib/i18n/index.js';
 
 export const GRAPH_WIDTH = 1000;
 export const GRAPH_HEIGHT = 600;
@@ -71,9 +72,10 @@ export function buildWikilinkEdges(
 export function createBrainGraphState(
   documents: readonly KnowledgeDocumentDto[],
   relations: readonly BrainGraphEdge[] = [],
+  welcomeLabel: string = getMessages().brain.welcome,
 ): BrainGraphState {
   const seeds: { id: string; label: string; document?: KnowledgeDocumentDto }[] = [
-    { id: WELCOME_NODE_ID, label: 'Welcome' },
+    { id: WELCOME_NODE_ID, label: welcomeLabel },
     ...documents.map((document) => ({
       id: document.pageId,
       label: document.title,

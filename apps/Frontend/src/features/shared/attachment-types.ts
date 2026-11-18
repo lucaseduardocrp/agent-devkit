@@ -1,4 +1,4 @@
-export type AttachmentScope = 'issue' | 'pbi' | 'brain' | 'spec' | 'testcase';
+export type AttachmentScope = 'issue' | 'pbi' | 'brain' | 'spec' | 'testcase' | 'e2e';
 export type AttachmentKind = 'image' | 'video' | 'document';
 
 /**

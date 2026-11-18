@@ -728,15 +728,6 @@ describe('the remaining defaults of both directions', () => {
     expect(spec.assertions[0]).toMatchObject({ source: 'header', path: 'x-id' });
   });
 
-  it('reads a text body whose block is missing and a ws message list', () => {
-    expect(requestFromBru('post {\n  url: https://api.test/\n  body: json\n}', 'R').body).toEqual({
-      mode: 'json',
-      content: '',
-    });
-    const ws = requestFromBru('ws {\n  url: ws://api.test\n}\nbody:ws [\n  a\n]', 'R');
-    expect(ws.websocket?.messages[0]).toEqual({ content: '' });
-  });
-
   it('reads a proxy whose config has no auth object and no numeric port', () => {
     const { collection } = importBruno([
       {

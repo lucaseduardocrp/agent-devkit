@@ -7,6 +7,8 @@ import type {
   UpdateWorkspaceMemberInput,
   UserWorkspaceMembership,
   WorkspaceRepository,
+  MemberPage,
+  MemberSearch,
 } from '../application/workspace-repository.js';
 import type {
   PermissionGroupEntity,
@@ -126,6 +128,21 @@ export class InMemoryWorkspaceRepository implements WorkspaceRepository {
       }
     }
     return Promise.resolve(list.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()));
+  }
+
+  public async searchMembers(workspaceId: string, query: MemberSearch): Promise<MemberPage> {
+    const text = query.search.trim().toLowerCase();
+    const matching = (await this.listMembers(workspaceId)).filter(
+      (member) =>
+        !text ||
+        (member.user !== undefined &&
+          (member.user.name.toLowerCase().includes(text) ||
+            member.user.email.toLowerCase().includes(text))),
+    );
+    return {
+      members: matching.slice(query.offset, query.offset + query.limit),
+      total: matching.length,
+    };
   }
 
   public updateMember(

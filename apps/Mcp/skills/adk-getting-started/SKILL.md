@@ -16,8 +16,8 @@ The `adk` MCP server exposes every ADK capability as tools. Clients prefix them,
      access token), or `devkit login --token <token>` with a token created in the web app
      (Settings → Access tokens) for Google/GitHub accounts;
    - remote connector (claude.ai, HTTP): ask the user to reconnect the ADK connector.
-   Do not ask for passwords or tokens in chat. `auth_login` exists for exceptional cases; warn that
-   the password would be sent to the model provider.
+     Do not ask for passwords or tokens in chat. `auth_login` exists for exceptional cases; warn that
+     the password would be sent to the model provider.
 3. `system_health` tells whether the ADK API itself is up.
 
 ## 2. Pick the workspace

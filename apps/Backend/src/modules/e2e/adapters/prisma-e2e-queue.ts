@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import type { PrismaClient } from '../../../generated/prisma/client.js';
+import { jobScope, scopesCollide } from '../application/e2e-queue.js';
 import type {
+  ActiveJobFilter,
   E2eJob,
   E2eJobKind,
   E2eJobQueue,
@@ -72,21 +74,49 @@ export class PrismaE2eJobQueue implements E2eJobQueue {
   constructor(private readonly db: PrismaClient) {}
 
   async enqueue(input: NewE2eJob): Promise<E2eJob | null> {
-    // The partial unique index turns "one active job per creation" into an atomic check.
+    // The scope of a job is the one test it runs, 'explore' for an exploration, or '' for the whole
+    // run (see the migrations). A job collides with the active ones of the same scope (the partial
+    // unique index, atomic) and with any job when one of the two takes the whole run (the NOT EXISTS).
+    const scope = jobScope(input);
     const rows = await this.db.$queryRaw<RawJobRow[]>`
       INSERT INTO "e2e_jobs" ("id", "workspace_id", "creation_id", "kind", "test_ids", "requested_by")
-      VALUES (${crypto.randomUUID()}, ${input.workspaceId}, ${input.creationId}, ${input.kind},
-              ${JSON.stringify(input.testIds)}::jsonb, ${input.requestedBy ?? null})
-      ON CONFLICT ("creation_id") WHERE "status" IN ('queued', 'running') DO NOTHING
+      SELECT ${crypto.randomUUID()}::text, ${input.workspaceId}::text, ${input.creationId}::text,
+             ${input.kind}::text, ${JSON.stringify(input.testIds)}::jsonb,
+             ${input.requestedBy ?? null}::text
+      WHERE NOT EXISTS (
+        SELECT 1 FROM "e2e_jobs" AS "active"
+        WHERE "active"."creation_id" = ${input.creationId}::text
+          AND "active"."status" IN ('queued', 'running')
+          AND (${scope}::text = ''
+            OR (CASE
+                  WHEN "active"."kind" = 'execute' AND jsonb_array_length("active"."test_ids") = 1 THEN "active"."test_ids"->>0
+                  WHEN "active"."kind" = 'explore' THEN 'explore'
+                  ELSE ''
+                END) IN ('', ${scope}::text))
+      )
+      ON CONFLICT ("creation_id", (CASE WHEN "kind" = 'execute' AND jsonb_array_length("test_ids") = 1 THEN "test_ids"->>0 WHEN "kind" = 'explore' THEN 'explore' ELSE '' END))
+        WHERE "status" IN ('queued', 'running') DO NOTHING
       RETURNING *`;
     return rows[0] ? fromRaw(rows[0]) : null;
   }
 
-  async hasActive(workspaceId: string, creationId: string): Promise<boolean> {
-    const count = await this.db.e2eJobRecord.count({
-      where: { workspaceId, creationId, status: { in: ['queued', 'running'] } },
-    });
-    return count > 0;
+  async hasActive(
+    workspaceId: string,
+    creationId: string,
+    filter: ActiveJobFilter = {},
+  ): Promise<boolean> {
+    const where = { workspaceId, creationId, status: { in: ['queued', 'running'] } };
+    if (filter.testId === undefined) {
+      const count = await this.db.e2eJobRecord.count({
+        where: { ...where, ...(filter.exceptJobId ? { id: { not: filter.exceptJobId } } : {}) },
+      });
+      return count > 0;
+    }
+    const jobs = await this.db.e2eJobRecord.findMany({ where });
+    return jobs.some(
+      (job) =>
+        job.id !== filter.exceptJobId && scopesCollide(jobScope(fromModel(job)), filter.testId!),
+    );
   }
 
   async claim(workerId: string): Promise<E2eJob | null> {

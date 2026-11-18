@@ -34,8 +34,9 @@ export function SpecWorkflowAction({
     try {
       if (action === 'clear') onCleared(await apiClient.clearSpecificationMessages(spec.id));
       else
-        await runActivity({ kind: 'push', title: `Publicando “${spec.title}” no Docs` }, () =>
-          apiClient.publishSpecification(spec.id),
+        await runActivity(
+          { kind: 'push', title: t('spec.publishingToDocs', { title: spec.title }) },
+          () => apiClient.publishSpecification(spec.id),
         );
       setFeedback({
         error: false,

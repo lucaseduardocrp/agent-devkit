@@ -4,9 +4,17 @@ import {
   type E2eCreation,
   type E2eReportState,
   type E2eReportingTarget,
+  type E2eSavedCaseLink,
   type E2eStepResult,
   type E2eTestCase,
 } from '../domain/e2e.js';
+import type {
+  E2eExplorationLogEntry,
+  E2eExplorationPage,
+  E2eExplorationScript,
+  NewE2eExplorationScript,
+} from '../domain/e2e-insight.js';
+import type { E2eSource, E2eSourceDocumentation, NewE2eSource } from '../domain/e2e-source.js';
 import type { ExternalTestCase } from '../../test-management/domain/test-run.js';
 import {
   buildTestCases,
@@ -43,10 +51,19 @@ type CreationRow = Omit<
 };
 type TestRow = Omit<
   E2eTestCase,
-  'steps' | 'priority' | 'status' | 'verdict' | 'externalCase' | 'stepResults'
+  | 'steps'
+  | 'priority'
+  | 'status'
+  | 'verdict'
+  | 'externalCase'
+  | 'savedCase'
+  | 'stepResults'
+  | 'resultSource'
 > & {
+  resultSource: string;
   steps: unknown;
   externalCase: string | null;
+  savedCase: string | null;
   stepResults: unknown;
   priority: string;
   status: string;
@@ -119,7 +136,10 @@ function toTest(row: TestRow): E2eTestCase {
     ...row,
     steps: strings(row.steps),
     externalCase: parseJson<ExternalTestCase>(row.externalCase),
+    savedCase: parseJson<E2eSavedCaseLink>(row.savedCase),
     stepResults: Array.isArray(row.stepResults) ? (row.stepResults as E2eStepResult[]) : [],
+    resultSource:
+      row.resultSource === 'criteria' || row.resultSource === 'manual' ? row.resultSource : 'run',
   } as E2eTestCase;
 }
 
@@ -127,21 +147,112 @@ function toTestRow(test: E2eTestCase) {
   return {
     ...test,
     externalCase: jsonText(test.externalCase),
+    savedCase: jsonText(test.savedCase),
     stepResults: test.stepResults as unknown as object[],
   };
 }
 
 function toTestChangesRow(changes: E2eTestChanges) {
-  const { externalCase, stepResults, ...rest } = changes;
+  const { externalCase, savedCase, stepResults, ...rest } = changes;
   return {
     ...rest,
     externalCase: jsonText(externalCase),
+    savedCase: jsonText(savedCase),
     ...(stepResults === undefined ? {} : { stepResults: stepResults as unknown as object[] }),
+  };
+}
+
+interface ExplorationScriptRow extends Omit<E2eExplorationScript, 'status' | 'script' | 'pages'> {
+  status: string;
+  script: unknown;
+  pages: unknown;
+}
+
+function toExplorationScript(row: ExplorationScriptRow): E2eExplorationScript {
+  return {
+    ...row,
+    status: row.status === 'failed' ? 'failed' : 'ready',
+    script: Array.isArray(row.script) ? (row.script as E2eExplorationLogEntry[]) : [],
+    pages: Array.isArray(row.pages) ? (row.pages as E2eExplorationPage[]) : [],
+  };
+}
+
+interface SourceRow extends Omit<E2eSource, 'script' | 'pages' | 'documentation'> {
+  script: unknown;
+  pages: unknown;
+  documentation: string | null;
+}
+
+function toSource(row: SourceRow): E2eSource {
+  return {
+    ...row,
+    script: Array.isArray(row.script) ? (row.script as E2eExplorationLogEntry[]) : [],
+    pages: Array.isArray(row.pages) ? (row.pages as E2eExplorationPage[]) : [],
+    documentation: parseJson<E2eSourceDocumentation>(row.documentation),
   };
 }
 
 export class PrismaE2eStore implements E2eStore {
   constructor(private readonly db: PrismaClient) {}
+
+  async saveSource(input: NewE2eSource): Promise<E2eSource> {
+    const { workspaceId, ...rest } = input;
+    const data = {
+      ...rest,
+      script: input.script as unknown as object[],
+      pages: input.pages as unknown as object[],
+      documentation: input.documentation ? JSON.stringify(input.documentation) : null,
+    };
+    return toSource(
+      await this.db.e2eSourceRecord.upsert({
+        where: { workspaceId },
+        create: { workspaceId, ...data },
+        update: data,
+      }),
+    );
+  }
+
+  async getSource(workspaceId: string): Promise<E2eSource | null> {
+    const row = await this.db.e2eSourceRecord.findUnique({ where: { workspaceId } });
+    return row ? toSource(row) : null;
+  }
+
+  async saveExplorationScript(input: NewE2eExplorationScript): Promise<E2eExplorationScript> {
+    const row = await this.db.e2eExplorationScriptRecord.create({
+      data: {
+        ...input,
+        script: input.script as unknown as object[],
+        pages: input.pages as unknown as object[],
+      },
+    });
+    return toExplorationScript(row);
+  }
+
+  async listExplorationScripts(
+    workspaceId: string,
+    creationId?: string,
+  ): Promise<E2eExplorationScript[]> {
+    const rows = await this.db.e2eExplorationScriptRecord.findMany({
+      where: { workspaceId, ...(creationId ? { creationId } : {}) },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map(toExplorationScript);
+  }
+
+  async getExplorationScript(
+    workspaceId: string,
+    id: string,
+  ): Promise<E2eExplorationScript | null> {
+    const row = await this.db.e2eExplorationScriptRecord.findFirst({ where: { id, workspaceId } });
+    return row ? toExplorationScript(row) : null;
+  }
+
+  async deleteExplorationScript(workspaceId: string, id: string): Promise<boolean> {
+    return (
+      (await this.db.e2eExplorationScriptRecord.deleteMany({ where: { id, workspaceId } })).count >
+      0
+    );
+  }
 
   async createCreation(input: NewE2eCreation): Promise<E2eCreation> {
     return toCreation(await this.db.e2eCreationRecord.create({ data: toCreationRow(input) }));
@@ -154,10 +265,17 @@ export class PrismaE2eStore implements E2eStore {
 
   async listCreations(workspaceId: string): Promise<E2eCreation[]> {
     const rows = await this.db.e2eCreationRecord.findMany({
-      where: { workspaceId },
+      where: { workspaceId, internal: false },
       orderBy: { updatedAt: 'desc' },
     });
     return rows.map(toCreation);
+  }
+
+  async getSourceAnchor(workspaceId: string): Promise<E2eCreation | null> {
+    const row = await this.db.e2eCreationRecord.findFirst({
+      where: { workspaceId, internal: true },
+    });
+    return row ? toCreation(row) : null;
   }
 
   async updateCreation(
@@ -215,6 +333,14 @@ export class PrismaE2eStore implements E2eStore {
       orderBy: [{ creationId: 'asc' }, { position: 'asc' }],
     });
     return rows.map(toTest);
+  }
+
+  async listLinkedTests(workspaceId: string, planId: string): Promise<E2eTestCase[]> {
+    const rows = await this.db.e2eTestCaseRecord.findMany({
+      where: { workspaceId, savedCase: { contains: planId } },
+    });
+    // `contains` is only a prefilter on the JSON text: the plan id must match exactly.
+    return rows.map(toTest).filter((test) => test.savedCase?.planId === planId);
   }
 
   async getTest(workspaceId: string, id: string): Promise<E2eTestCase | null> {

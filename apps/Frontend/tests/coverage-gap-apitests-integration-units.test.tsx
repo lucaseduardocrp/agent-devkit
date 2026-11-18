@@ -396,68 +396,27 @@ function environmentsClient() {
 }
 
 describe('EnvironmentsPane', () => {
-  it('creates, edits, activates and deletes environments', async () => {
+  it('keeps the active environment when it deletes another one', async () => {
     const api = environmentsClient();
-    const onChanged = vi.fn(() => Promise.resolve());
     const onActivate = vi.fn();
+    const onChanged = vi.fn();
     const view = render(
       <EnvironmentsPane
         apiClient={api as unknown as ApiClient}
         environments={environments}
-        activeId=""
+        activeId="e2"
         readOnly={false}
         onChanged={onChanged}
         onActivate={onActivate}
       />,
     );
-    const name = view.getByTestId('environment-name') as HTMLInputElement;
-    expect(name.value).toBe('Staging');
-    const save = view.getByTestId('save-environment') as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
-    fireEvent.change(name, { target: { value: 'Staging 2' } });
-    fireEvent.change(view.getByLabelText('baseUrl'), { target: { value: 'https://stg2' } });
-    fireEvent.click(save);
-    await waitFor(() =>
-      expect(api.saveApiEnvironment).toHaveBeenCalledWith(
-        { name: 'Staging 2', variables: [{ key: 'baseUrl', value: 'https://stg2' }] },
-        'e1',
-      ),
-    );
-    expect(await view.findByRole('status')).toBeTruthy();
-    expect(onChanged).toHaveBeenCalled();
-
-    fireEvent.click(view.getByRole('button', { name: 'Usar este ambiente' }));
-    expect(onActivate).toHaveBeenCalledWith('e1');
-
-    // A new one starts with a baseUrl row and is saved without an id.
-    fireEvent.click(view.getByTestId('new-environment'));
-    expect(name.value).toBe('');
-    fireEvent.change(name, { target: { value: 'Dev' } });
-    fireEvent.click(save);
-    await waitFor(() =>
-      expect(api.saveApiEnvironment).toHaveBeenLastCalledWith(
-        { name: 'Dev', variables: [{ key: 'baseUrl', value: '' }] },
-        undefined,
-      ),
-    );
-
-    fireEvent.click(view.getByRole('button', { name: 'Prod' }));
-    fireEvent.click(view.getByRole('button', { name: /Excluir/ }));
-    fireEvent.click(await view.findByRole('button', { name: 'Cancelar' }));
+    // Staging is not the active one.
+    fireEvent.click(view.getByText('Staging'));
     fireEvent.click(view.getByRole('button', { name: /Excluir/ }));
     const dialog = await view.findByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir' }));
-    await waitFor(() => expect(api.deleteApiEnvironment).toHaveBeenCalledWith('e2'));
-    expect(onActivate).toHaveBeenCalledTimes(1);
-
-    // Nothing selected by the time the confirm fires (e.g. the selection reset meanwhile):
-    // the deletion is skipped instead of deleting the wrong environment.
-    fireEvent.click(view.getByRole('button', { name: 'Staging' }));
-    fireEvent.click(view.getByRole('button', { name: /Excluir/ }));
-    const reopened = await view.findByRole('alertdialog');
-    fireEvent.click(view.getByTestId('new-environment'));
-    fireEvent.click(within(reopened).getByRole('button', { name: 'Excluir' }));
-    expect(api.deleteApiEnvironment).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(onActivate).not.toHaveBeenCalledWith('');
   });
 
   it('deactivates the active environment it deletes and shows errors', async () => {

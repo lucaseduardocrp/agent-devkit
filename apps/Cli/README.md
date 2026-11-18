@@ -99,6 +99,44 @@ devkit agents update                            # everything with a new version;
 Updating replaces an agent's name, description and instructions with the hub version and keeps
 the model, temperature and role set in the workspace. Remove an agent on the Agents page.
 
+## Run Development sessions on your computer
+
+`devkit develop` executes the coding sessions you queue in **Development → Code** (or with
+`development_create_session`). The desktop app does this itself, with this same code: there you
+choose the repository folder in the app and need no `devkit develop`. Anywhere else, start it
+inside the repository the sessions are about:
+
+```bash
+devkit login --api-url https://<your-adk-api>   # once
+cd path/to/your/repository
+devkit develop                                  # keep open while agents work
+```
+
+For each session the runner:
+
+1. claims it (only sessions **you** queued, and only those of this repository, matched by the
+   address of `origin`; `--any-repo` lifts the repository check);
+2. creates a git worktree on the session's own branch (`adk/<slug>-<id>`) from the base branch,
+   under `../.adk-worktrees/<repository>/` (`--worktrees DIR` changes the folder). Your working
+   copy and the base branch are never touched;
+3. writes the change's artifacts (proposal, design, tasks, spec deltas) into the worktree and
+   starts the session's CLI there: `claude`, `codex` or `gemini`, which must be installed and
+   signed in;
+4. reports the timeline, the context usage and the subagents to ADK while the agent works, and
+   stops the agent when the session is cancelled in ADK;
+5. sends the tasks the agent ticked off back to the change and the diff against the base branch to
+   **Development → Review**. Nothing is committed, merged or pushed for you.
+
+| Option            | Meaning                                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| `--repo PATH`     | Repository to work in (default: the current folder).                                                        |
+| `--session ID`    | Execute this one session and exit.                                                                          |
+| `--autonomy safe` | Default. The agent may edit files of the worktree; it cannot run arbitrary commands.                        |
+| `--autonomy auto` | The agent also runs commands (tests, builds) without asking. Use it for repositories and prompts you trust. |
+
+When a reviewer requests changes, the session goes back to the queue and the runner picks it up
+again in the same worktree, with the open review comments at the top of the agent's instructions.
+
 ## Run E2E tests on your computer (local runner)
 
 `devkit runner` also executes the integration and load tests set to run on **My computer**
@@ -210,12 +248,12 @@ worker capacity and the local application's capacity determine how many tests ca
 
 ## Configuration
 
-| Variable               | Purpose                                                             |
-| ---------------------- | ------------------------------------------------------------------- |
-| `ADK_API_URL`          | ADK API base URL (default: the API of the last `devkit login`)      |
-| `ADK_CLOUDFLARED_PATH` | Optional path to the local `cloudflared` binary for `devkit tunnel` |
-| `ADK_E2E_USERNAME`     | Replaces the saved test account user name on this computer          |
-| `ADK_E2E_PASSWORD`     | Replaces the saved test account password on this computer           |
+| Variable               | Purpose                                                               |
+| ---------------------- | --------------------------------------------------------------------- |
+| `ADK_API_URL`          | ADK API base URL (default: the API of the last `devkit login`)        |
+| `ADK_CLOUDFLARED_PATH` | Optional path to the local `cloudflared` binary for `devkit tunnel`   |
+| `ADK_E2E_USERNAME`     | Replaces the saved test account user name on this computer            |
+| `ADK_E2E_PASSWORD`     | Replaces the saved test account password on this computer             |
 | `ADK_HUB_URL`          | Another ADK Hub index (URL or local file) for `devkit skills/plugins` |
 
 The MCP settings (`ADK_MCP_*`) are listed in [apps/Mcp](../Mcp/README.md#configuration).
@@ -230,6 +268,10 @@ src/
     local-runner/           devkit runner and devkit e2e: claim tasks, run Playwright, upload results
     cloudflare-tunnel.ts    devkit tunnel: cloudflared plus the authenticated local gateway
     local-bridge.ts         devkit bridge: lets the ADK web app control the tunnel
+  development/
+    runner.ts               devkit develop: claim a session, drive the agent, report, send the diff
+    agent-clis.ts           how claude, codex and gemini are started and their output is read
+    git.ts, process.ts      worktrees and diffs; streaming a process and stopping its tree
   hub/
     catalog.ts              downloads and validates the ADK Hub index, search
     install.ts              verified skill downloads, pinned plugin checkouts, hub-lock.json

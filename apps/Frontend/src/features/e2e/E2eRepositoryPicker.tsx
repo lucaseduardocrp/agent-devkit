@@ -4,7 +4,9 @@ import { useI18n } from '../../lib/i18n/index.js';
 import type { TranslationKey } from '../../lib/i18n/types.js';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
+import { SearchableSelect } from '../../components/ui/searchable-select.js';
 import { Select } from '../../components/ui/select.js';
+import { desktopDevelopment, type DesktopDevelopmentBridge } from '../../lib/desktop.js';
 import type {
   E2eBranch,
   E2eRepository,
@@ -24,9 +26,11 @@ export interface E2eRepositorySelection {
 const providerLabels: Record<E2eRepositoryProvider, string> = {
   github: 'GitHub',
   azure_devops: 'Azure DevOps',
+  local: 'Local',
 };
 const warningKeys: Record<E2eRepositoryWarning['code'], TranslationKey> = {
   CREDENTIALS_MISSING: 'e2e.repoWarningCredentials',
+  CREDENTIALS_UNREADABLE: 'e2e.repoWarningUnreadable',
   NOT_CONFIGURED: 'e2e.repoWarningNotConfigured',
   PROVIDER_UNAVAILABLE: 'e2e.repoWarningUnavailable',
 };
@@ -66,6 +70,9 @@ export function E2eRepositoryPicker({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [branches, setBranches] = useState<readonly E2eBranch[] | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
+  // In the desktop app the specs can also live in a project folder of this computer.
+  const desktop = source === 'e2e' ? desktopDevelopment() : undefined;
 
   useEffect(() => {
     let active = true;
@@ -86,6 +93,7 @@ export function E2eRepositoryPicker({
   }, [apiClient, source, t]);
 
   const { provider, id } = value;
+  const isLocal = provider === 'local';
   useEffect(() => {
     if (!provider || !id) {
       setBranches(null);
@@ -113,36 +121,39 @@ export function E2eRepositoryPicker({
 
   // Default to the repository's default branch once its branches are known.
   const selected = repositories?.find((repo) => repo.provider === provider && repo.id === id);
-  const [search, setSearch] = useState('');
-  const query = search.trim().toLowerCase();
-  // The native list cannot be searched, so long accounts are filtered here; the current
-  // choice always stays listed so the select never loses its value.
-  const visibleRepositories = (repositories ?? []).filter(
-    (repo) => !query || repo.name.toLowerCase().includes(query) || repo === selected,
-  );
+  // One flat list for the searchable select; when both hosts are connected the label says which
+  // one a repository is on.
+  const hosts = new Set((repositories ?? []).map((repo) => repo.provider));
+  const repositoryOptions = (repositories ?? []).map((repo) => ({
+    value: `${repo.provider}:${repo.id}`,
+    label: hosts.size > 1 ? `${repo.name} (${providerLabels[repo.provider]})` : repo.name,
+  }));
   useEffect(() => {
-    if (!selected || !branches || branches.some((branch) => branch.name === value.branch)) return;
+    if (
+      (!selected && !isLocal) ||
+      !branches ||
+      branches.some((branch) => branch.name === value.branch)
+    )
+      return;
     const fallback =
       branches.find((branch) => branch.isDefault)?.name ??
       branches[0]?.name ??
-      selected.defaultBranch;
+      selected?.defaultBranch ??
+      'local';
     if (fallback !== value.branch) onChange({ ...value, branch: fallback });
-  }, [branches, onChange, selected, value]);
+  }, [branches, isLocal, onChange, selected, value]);
 
   const selectRepository = (key: string) => {
-    const [nextProvider = '', ...rest] = key.split(':');
-    const nextId = rest.join(':');
-    const repository = repositories?.find(
-      (repo) => repo.provider === nextProvider && repo.id === nextId,
-    );
+    // The select only offers repositories of the loaded list.
+    const repository = repositories!.find((repo) => `${repo.provider}:${repo.id}` === key)!;
     // Start on the default branch the select already shows, so the form is valid while
     // the branch list is still loading.
     onChange({
       ...value,
-      provider: nextProvider as E2eRepositoryProvider | '',
-      id: nextId,
-      branch: repository?.defaultBranch ?? '',
-      name: repository?.name ?? '',
+      provider: repository.provider,
+      id: repository.id,
+      branch: repository.defaultBranch,
+      name: repository.name,
     });
   };
 
@@ -151,54 +162,76 @@ export function E2eRepositoryPicker({
       ? branches
       : selected
         ? [{ name: selected.defaultBranch, isDefault: true }]
-        : [];
+        : isLocal && value.branch
+          ? [{ name: value.branch, isDefault: true }]
+          : [];
+
+  // The folder is picked in the native dialog; its branch is read by the effect above.
+  const chooseFolder = async (bridge: DesktopDevelopmentBridge) => {
+    const picked = await bridge.pickFolder();
+    if (!picked.ok) return setFolderError(picked.error);
+    if (!picked.path) return;
+    setFolderError(null);
+    onChange({
+      ...value,
+      provider: 'local',
+      id: picked.path,
+      branch: '',
+      name: picked.path.split(/[\\/]/).filter(Boolean).pop() ?? picked.path,
+    });
+  };
 
   return (
     <div className="flex flex-col gap-4" data-testid="e2e-repository-picker">
-      <label className="flex flex-col gap-1.5 text-sm text-[var(--text-secondary)]">
+      <div className="flex flex-col gap-1.5 text-sm text-[var(--text-secondary)]">
         {t('e2e.repository')}
-        {repositories && repositories.length > 0 && (
-          <Input
-            type="search"
-            aria-label={t('e2e.repositorySearch')}
-            placeholder={t('e2e.repositorySearch')}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        )}
-        <Select
-          aria-label={t('e2e.repository')}
-          value={provider && id ? `${provider}:${id}` : ''}
-          onChange={(event) => selectRepository(event.target.value)}
+        {/* Search and paged scrolling live in the select itself, like the other long lists. */}
+        <SearchableSelect
+          label={t('e2e.repository')}
+          options={repositoryOptions}
+          value={provider && id && !isLocal ? `${provider}:${id}` : ''}
+          onChange={selectRepository}
+          placeholder={repositories ? t('e2e.repositoryPlaceholder') : t('e2e.repositoryLoading')}
+          emptyMessage={t('e2e.repositoryNoMatch')}
           disabled={disabled || !repositories?.length}
-          variant={invalid ? 'error' : 'default'}
-        >
-          <option value="">
-            {!repositories
-              ? t('e2e.repositoryLoading')
-              : query && !visibleRepositories.some((repo) => repo !== selected)
-                ? t('e2e.repositoryNoMatch')
-                : t('e2e.repositoryPlaceholder')}
-          </option>
-          {(['github', 'azure_devops'] as const).map((group) => {
-            const items = visibleRepositories.filter((repo) => repo.provider === group);
-            return items.length ? (
-              <optgroup key={group} label={providerLabels[group]}>
-                {items.map((repo) => (
-                  <option key={`${repo.provider}:${repo.id}`} value={`${repo.provider}:${repo.id}`}>
-                    {repo.name}
-                  </option>
-                ))}
-              </optgroup>
-            ) : null;
-          })}
-        </Select>
+          {...(invalid ? { className: 'border-red-500/50 bg-red-500/10' } : {})}
+        />
         {repositories && repositories.length > 0 && (
           <span className="text-xs text-[var(--text-muted)]">
             {t('e2e.repositoryCount', { count: repositories.length })}
           </span>
         )}
-      </label>
+      </div>
+      {desktop && (
+        <div
+          className="flex flex-col gap-1.5 text-sm text-[var(--text-secondary)]"
+          data-testid="e2e-local-folder"
+        >
+          {t('e2e.localFolder')}
+          <div className="flex gap-2">
+            <Input
+              aria-label={t('e2e.localFolder')}
+              value={isLocal ? id : ''}
+              readOnly
+              placeholder={t('e2e.localFolderPlaceholder')}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={disabled}
+              onClick={() => void chooseFolder(desktop)}
+            >
+              <i className="ti ti-folder-open" aria-hidden="true" /> {t('e2e.chooseLocalFolder')}
+            </Button>
+          </div>
+          <span className="text-xs text-[var(--text-muted)]">{t('e2e.localFolderHint')}</span>
+          {folderError && (
+            <span className="text-xs text-red-400" role="alert">
+              {folderError}
+            </span>
+          )}
+        </div>
+      )}
       {invalid && (
         <p className="-mt-2 text-xs text-red-400" role="alert">
           {t('e2e.validationRepository')}

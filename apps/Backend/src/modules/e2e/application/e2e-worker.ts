@@ -4,7 +4,7 @@ import type { E2eExecutor } from './e2e-executor.js';
 
 export interface E2eWorkerOptions {
   readonly queue: E2eJobQueue;
-  readonly executor: Pick<E2eExecutor, 'run' | 'interrupt'>;
+  readonly executor: Pick<E2eExecutor, 'run' | 'interrupt'> & Partial<Pick<E2eExecutor, 'settle'>>;
   readonly workerId?: string;
   /** Runs (from any users) executed in parallel by this worker instance. */
   readonly concurrency?: number;
@@ -28,8 +28,12 @@ export class E2eWorker {
   private readonly staleMs: number;
   private readonly maxAttempts: number;
   private readonly tasks = new Set<Promise<void>>();
+  /** Jobs being processed: a slot is free as soon as its job ends, before its task is dropped. */
+  private busySlots = 0;
   private draining: Promise<void> | null = null;
   private wakeRequested = false;
+  /** Claims go one at a time, so two of them never fill the same free slot. */
+  private claiming: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: E2eWorkerOptions) {
     this.workerId = options.workerId ?? `worker-${crypto.randomUUID()}`;
@@ -46,7 +50,11 @@ export class E2eWorker {
   /** Starts (or keeps) draining the queue. Safe to call any number of times. */
   wake(): void {
     this.wakeRequested = true;
-    if (this.draining) return;
+    if (this.draining) {
+      // A job enqueued while others run takes a free slot now, not when one of them ends.
+      this.fill().catch((error: unknown) => console.error('[E2eWorker] Claim failed:', error));
+      return;
+    }
     this.draining = this.drain()
       .catch((error: unknown) => console.error('[E2eWorker] Drain failed:', error))
       .finally(() => {
@@ -66,17 +74,27 @@ export class E2eWorker {
     this.wakeRequested = false;
     await this.sweep();
     await this.fill();
-    while (this.tasks.size) {
-      await Promise.race(this.tasks);
-      await this.fill();
-    }
+    while (this.tasks.size) await Promise.race(this.tasks);
   }
 
-  private async fill(): Promise<void> {
-    while (this.tasks.size < this.concurrency) {
+  private fill(): Promise<void> {
+    const turn = this.claiming.then(() => this.claimFree());
+    this.claiming = turn.catch(() => undefined);
+    return turn;
+  }
+
+  private async claimFree(): Promise<void> {
+    while (this.busySlots < this.concurrency) {
       const job = await this.options.queue.claim(this.workerId);
       if (!job) return;
-      const task: Promise<void> = this.process(job).finally(() => this.tasks.delete(task));
+      this.busySlots += 1;
+      // Whichever job ends hands its slot to the next one at once; the task only leaves the set
+      // after that, so the worker never looks idle while it still has work to take.
+      const task: Promise<void> = this.process(job)
+        .finally(() => (this.busySlots -= 1))
+        .then(() => this.fill())
+        .catch((error: unknown) => console.error('[E2eWorker] Claim failed:', error))
+        .finally(() => this.tasks.delete(task));
       this.tasks.add(task);
     }
   }
@@ -112,5 +130,9 @@ export class E2eWorker {
     await this.options.queue
       .finish(job.id, this.workerId, status)
       .catch((error: unknown) => console.error('[E2eWorker] Could not finish job:', error));
+    // The jobs of one run end independently: with this one no longer active, the run may be over.
+    await this.options.executor
+      .settle?.(job)
+      .catch((error: unknown) => console.error('[E2eWorker] Could not settle the run:', error));
   }
 }

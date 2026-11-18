@@ -56,17 +56,66 @@ do, restart with `adk` / `./adk.sh` afterwards.
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | *(empty)*     | Enables "Sign in with GitHub"                                  |
 | `E2E_WORKER_URL`                | `http://worker:3001`     | Set when the E2E worker runs; the API sends test runs to it    |
 | `E2E_WORKER_CONCURRENCY`        | `2`                      | Parallel test runs (about 0.5 CPU and 500 MB each)             |
+| `E2E_TEST_CONCURRENCY`          | `3`                      | Browsers running the tests of one execution at once (one per test; same cost each) |
 | `API_TESTS_WORKER_CONCURRENCY`  | `2`                      | Integration and load test runs executed at once by the worker  |
 | `API_TESTS_ALLOW_PRIVATE_NETWORK` | `false`                | Lets remote API/load tests reach private networks (10.x, 192.168.x); loopback and the metadata endpoint stay blocked |
 | `ADK_HOST_ACCESS`               | `auto`                   | Tests of `http://localhost` reach this computer. `auto`: on while the ports listen on `127.0.0.1` only, off when they are open to the network; `true` or `false` force it |
+| `E2E_DEFAULT_EXECUTION` | `remote` | Where E2E runs execute when a run does not choose: `local` runs the browser on the computer of whoever starts the run, through `devkit runner` (the server spends no CPU on browsers); `remote` uses the ADK worker |
 | `E2E_R2_URL`, `E2E_R2_ACCESS_KEY_ID`, `E2E_R2_SECRET_ACCESS_KEY`, `E2E_R2_PREFIX` | *(empty)* | Store test videos in Cloudflare R2 instead of PostgreSQL |
+| `ATTACHMENTS_R2_URL`, `ATTACHMENTS_R2_ACCESS_KEY_ID`, `ATTACHMENTS_R2_SECRET_ACCESS_KEY`, `ATTACHMENTS_R2_PREFIX`, `ATTACHMENTS_DIR` | *(empty)* | Keep attachments and images apart from the E2E artifacts. With R2 they default to the bucket root (`attachments/`, next to `e2e/`); the credentials default to the `E2E_R2_*` ones. Move older files with `npm run migrate:attachments` |
 | `ADK_HUB_URL`                   | public ADK Hub           | Another hub index for the Hub tab of the Agents page (e.g. a mirror) |
 | `ADK_HUB_GITHUB_TOKEN`          | *(empty)*                | Read-only GitHub token; lifts the limit of 60 anonymous calls an hour |
+| `ADK_LLM_CLI`                   | *(empty)*                | Where "AI CLI" runs: `true` is the CLI installed where the API runs; `bridge` or empty is the [Bridge](bridge.md), when it is configured; `false` turns it off. See [AI CLI instead of an API key](#ai-cli-instead-of-an-api-key) |
 | `LOG_LEVEL`                     | `info`                   | `debug`, `info`, `warn` or `error`                             |
 
 LLM providers, Azure DevOps, GitHub repositories and other integrations are not configured here:
 each workspace adds them in the web app under **Connect**, and their credentials are stored
 encrypted with `INTEGRATION_ENCRYPTION_KEY`.
+
+### AI CLI instead of an API key
+
+Under **Connect**, the Claude, OpenAI and Gemini cards have an **API Key | AI CLI** switch. With
+**AI CLI**, ADK answers through the provider's own command line (`claude`, `codex`, `gemini`) and
+uses the login that CLI already has, so no key is stored. Agents, the playground and every other
+feature behave exactly as with a key, and answers stream as the CLI writes them.
+
+| Card   | CLI      | Streams                      |
+| ------ | -------- | ---------------------------- |
+| Claude | `claude` | token by token               |
+| OpenAI | `codex`  | one message at a time        |
+| Gemini | `gemini` | as the CLI prints it         |
+
+The CLI can run in two places:
+
+- **In the Bridge** (the Docker way). When `BRIDGE_SHARED_TOKEN` is set the Bridge is already
+  there, and **AI CLI** turns on by itself. Each workspace pastes its own CLI token in the card,
+  so one server can serve many workspaces without them sharing an account. See
+  [The Bridge as the AI of the whole app](bridge.md#the-bridge-as-the-ai-of-the-whole-app).
+- **On the machine of the API**, with `ADK_LLM_CLI=true`. The CLI uses the login of the user that
+  runs the API, so every workspace of that install spends that one subscription: only turn it on
+  for a personal or single-team install. The Desktop app turns it on for you.
+
+The rest of this section is about the second case.
+
+- The CLI must be installed and signed in **on the machine that runs the API**, as the same user.
+  The official Docker image has no provider CLIs: on Docker use the Bridge, or run the API outside
+  the container.
+- ADK starts each request in an empty temporary directory with a minimal environment (no database
+  URL, no ADK keys, no provider API keys), and passes the prompt through stdin. Claude runs with
+  no tools, no MCP servers and no user settings. Codex runs in a read-only sandbox, which stops
+  writes but still lets it read files. ADK does not restrict Gemini's own tools. So treat a Codex
+  or Gemini CLI workspace as trusted: only people you would let read this machine should chat
+  with its agents.
+- With `ADK_MCP_URL` set, the CLI also gets the ADK tools (MCP), acting as the user who asks, in
+  a *standard* profile that leaves out credentials, members, deletion, running code and other
+  systems; the integration can narrow it to reading, widen it to full access, or turn it off. See
+  [The ADK tools of the CLI](bridge.md#the-adk-tools-of-the-cli).
+- At most four CLI processes run at once; further requests wait.
+- **Test Connection** sends a one-word prompt, so it also checks that the CLI is signed in.
+- Images are not supported through a CLI.
+
+A workspace's [Telegram bot](telegram.md) works on a local install without a public address:
+the API long-polls Telegram. Behind HTTPS it uses a webhook instead.
 
 ## Access from other devices and HTTPS
 

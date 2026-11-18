@@ -78,6 +78,12 @@ services:
       ADK_HUB_GITHUB_TOKEN: ${ADK_HUB_GITHUB_TOKEN:-}
       E2E_WORKER_URL: ${E2E_WORKER_URL:-}
       E2E_WORKER_TOKEN: ${E2E_WORKER_TOKEN:-}
+      # Turns on the AI CLIs in Telegram when BRIDGE_SHARED_TOKEN is set (docs/bridge.md).
+      BRIDGE_SHARED_TOKEN: ${BRIDGE_SHARED_TOKEN:-}
+      BRIDGE_URL: ${BRIDGE_SHARED_TOKEN:+http://bridge:3500}
+      # Address of the ADK MCP server (.../mcp): for /mcp adk in Telegram and for the ADK tools of
+      # the AI CLIs. With the mcp profile on Docker, set it to http://mcp:3333/mcp.
+      ADK_MCP_URL: ${ADK_MCP_URL:-}
       E2E_WORKER_CONCURRENCY: ${E2E_WORKER_CONCURRENCY:-2}
       API_TESTS_ALLOW_PRIVATE_NETWORK: ${API_TESTS_ALLOW_PRIVATE_NETWORK:-false}
       # Tests of http://localhost reach this computer while ADK is open to it alone (see
@@ -135,6 +141,8 @@ services:
       DATABASE_URL: *database-url
       INTEGRATION_ENCRYPTION_KEY: *encryption-key
       E2E_WORKER_TOKEN: ${E2E_WORKER_TOKEN:?Run the ADK setup wizard first (adk.cmd on Windows, ./adk.sh on macOS/Linux)}
+      # Linked from the Telegram notifications of finished runs.
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
       E2E_WORKER_CONCURRENCY: ${E2E_WORKER_CONCURRENCY:-2}
       API_TESTS_ALLOW_PRIVATE_NETWORK: ${API_TESTS_ALLOW_PRIVATE_NETWORK:-false}
       API_TESTS_WORKER_CONCURRENCY: ${API_TESTS_WORKER_CONCURRENCY:-2}
@@ -175,7 +183,9 @@ services:
       ADK_MCP_HTTP_PORT: 3333
       ADK_MCP_PUBLIC_URL: ${ADK_MCP_PUBLIC_URL:-http://localhost:3333}
       ADK_MCP_OAUTH_SECRET: ${ADK_MCP_OAUTH_SECRET:?Run the ADK setup wizard first (adk.cmd on Windows, ./adk.sh on macOS/Linux)}
-      ADK_MCP_ALLOWED_HOSTS: ${ADK_MCP_ALLOWED_HOSTS:-}
+      # "mcp" is the name the API and the Bridge reach this server by inside Docker (the AI CLIs
+      # use the ADK tools through ADK_MCP_URL=http://mcp:3333/mcp, see docs/bridge.md).
+      ADK_MCP_ALLOWED_HOSTS: mcp${ADK_MCP_ALLOWED_HOSTS:+,${ADK_MCP_ALLOWED_HOSTS}}
     ports:
       - "${ADK_BIND_ADDRESS:-127.0.0.1}:${ADK_MCP_PORT:-3333}:3333"
     healthcheck:
@@ -183,6 +193,48 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # Drives AI CLIs (Claude, Codex, Gemini, ...) from the Telegram chats paired in ADK: the API
+  # owns the bot and forwards messages here. See docs/bridge.md.
+  bridge:
+    profiles: [bridge]
+    build:
+      context: apps/Bridge
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      # Required to pair with the API (see docs/bridge.md); optional only in standalone mode.
+      BRIDGE_SHARED_TOKEN: ${BRIDGE_SHARED_TOKEN:-}
+      # An API running outside Docker (npm start) is at http://host.docker.internal:3000.
+      BRIDGE_ADK_URL: ${BRIDGE_ADK_URL:-http://api:3000}
+      BRIDGE_HTTP_PORT: 3500
+      # Standalone mode only: a separate bot that this container polls itself.
+      TELEGRAM_BOT_TOKEN: ${BRIDGE_TELEGRAM_BOT_TOKEN:-}
+      BRIDGE_ALLOWED_USER_IDS: ${BRIDGE_ALLOWED_USER_IDS:-}
+      BRIDGE_DEFAULT_CLI: ${BRIDGE_DEFAULT_CLI:-claude}
+      BRIDGE_DEFAULT_MODE: ${BRIDGE_DEFAULT_MODE:-auto}
+      BRIDGE_LANG: ${BRIDGE_LANG:-pt}
+      BRIDGE_RUN_TIMEOUT_MS: ${BRIDGE_RUN_TIMEOUT_MS:-1800000}
+      # Longest one answer for the ADK's AI CLI option (docs/bridge.md) may take.
+      BRIDGE_LLM_TIMEOUT_MS: ${BRIDGE_LLM_TIMEOUT_MS:-180000}
+      BRIDGE_CUSTOM_CLIS: ${BRIDGE_CUSTOM_CLIS:-}
+      TZ: ${TZ:-UTC}
+      # Each user connects their own account from Telegram (/auth); nothing is shared. Changing
+      # this key makes the saved accounts unreadable. Defaults to BRIDGE_SHARED_TOKEN.
+      BRIDGE_ENCRYPTION_KEY: ${BRIDGE_ENCRYPTION_KEY:-}
+    volumes:
+      # Private HOMES of the users (CLI logins), their projects, and the bridge data (encrypted
+      # credentials, chats, tasks).
+      - bridge-homes:/homes
+      - bridge-workspace:/workspace
+      - bridge-data:/data
+    # Loopback only: lets an API running outside Docker reach the Bridge at http://localhost:3500.
+    ports:
+      - "127.0.0.1:${BRIDGE_PORT:-3500}:3500"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   mailpit:
     profiles: [mail]
@@ -193,3 +245,6 @@ services:
 
 volumes:
   database-data:
+  bridge-homes:
+  bridge-workspace:
+  bridge-data:

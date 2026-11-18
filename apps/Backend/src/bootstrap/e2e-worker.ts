@@ -1,4 +1,5 @@
 import { createDatabase } from '../adapters/persistence/database-factory.js';
+import { PrismaUsageStore } from '../modules/issues/usage-store.js';
 import { loadRuntimeConfig } from '../shared/config.js';
 import { resolveEncryptionKey } from '../shared/encryption.js';
 import {
@@ -12,16 +13,22 @@ import { AgentService } from '../modules/agents/application/agent-service.js';
 import { PrismaAgentWorkflowRepository } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import type { PrismaAgentWorkflowClient } from '../modules/agents/adapters/prisma-agent-workflow-repository.js';
 import { PrismaE2eStore } from '../modules/e2e/adapters/prisma-e2e-store.js';
+import { PrismaE2eEnvironmentStore } from '../modules/e2e/adapters/prisma-e2e-environment-store.js';
+import { E2eEnvironmentService } from '../modules/e2e/application/e2e-environments.js';
 import { PrismaE2eJobQueue } from '../modules/e2e/adapters/prisma-e2e-queue.js';
 import { PrismaE2eRunnerTaskStore } from '../modules/e2e/adapters/prisma-runner-task-store.js';
 import { LocalE2eRunner } from '../modules/e2e/application/local-runner.js';
-import { createE2eArtifactStore } from '../modules/e2e/adapters/artifact-store-factory.js';
+import {
+  createAttachmentStore,
+  createE2eArtifactStore,
+} from '../modules/e2e/adapters/artifact-store-factory.js';
 import { GitScriptRepository } from '../modules/e2e/adapters/git-script-repository.js';
 import { PlaywrightE2eRunner } from '../modules/e2e/adapters/playwright-runner.js';
 import {
   FfmpegVideoTranscoder,
   resolveFfmpegPath,
 } from '../modules/e2e/adapters/ffmpeg-transcoder.js';
+import { createPrismaKnowledgeAdapters } from '../modules/knowledge/adapters/prisma-knowledge.js';
 import { AgentE2eAuthor } from '../modules/e2e/application/e2e-author.js';
 import { E2eExecutor } from '../modules/e2e/application/e2e-executor.js';
 import { E2eWorker } from '../modules/e2e/application/e2e-worker.js';
@@ -32,6 +39,8 @@ import { PrismaApiTestStore } from '../modules/apitests/adapters/prisma-api-test
 import { ApiTestService } from '../modules/apitests/application/api-test-service.js';
 import { ApiTestWorker } from '../modules/apitests/application/api-test-worker.js';
 import { chromiumHostArgs, hostAccessFetch, hostAliasFromEnv } from '../shared/host-access.js';
+import { PrismaMessagingChatStore } from '../modules/messaging/application/messaging-chat-store.js';
+import { TelegramRunNotifier } from '../modules/messaging/application/run-notifier.js';
 
 /**
  * On-demand E2E worker. Shares the API's database (queue, runs, videos) and integrations,
@@ -54,12 +63,20 @@ const integrations = new IntegrationsService(
   new PrismaUserIntegrationStore(database.client as unknown as PrismaIntegrationsClient),
 );
 const providers = new DynamicProviderFactory(integrations);
+// The worker spends tokens too (E2E authoring); they land in the same dashboard as the API's.
+providers.setUsageRecorder(new PrismaUsageStore(database.client));
 const agents = new AgentService({
   agentRepository: new PrismaAgentRepository(database.client),
   workflowRepository: new PrismaAgentWorkflowRepository(
     database.client as unknown as PrismaAgentWorkflowClient,
   ),
   dynamicProviderFactory: providers,
+});
+// Runs finished here are told to the chats paired with the workspace's Telegram bot.
+const notifier = new TelegramRunNotifier({
+  integrations,
+  chats: new PrismaMessagingChatStore(database.client),
+  frontendUrl: process.env['FRONTEND_URL']?.trim() || undefined,
 });
 const ffmpegPath = resolveFfmpegPath();
 // A local install reaches the user's localhost through Docker's host alias (shared/host-access.ts).
@@ -68,13 +85,18 @@ if (hostAlias)
   console.log(`[E2eWorker] localhost targets go to this computer through ${hostAlias}.`);
 const store = new PrismaE2eStore(database.client);
 // Same choice as the API (R2 or Postgres), so videos recorded here are served there.
-const artifacts = createE2eArtifactStore(process.env, database.client).store;
+const e2eArtifacts = createE2eArtifactStore(process.env, database.client);
+const artifacts = e2eArtifacts.store;
+// Images written in a PRD live with the attachments, apart from the videos.
+const attachments = createAttachmentStore(process.env, e2eArtifacts).store;
 
+const queue = new PrismaE2eJobQueue(database.client);
 const worker = new E2eWorker({
-  queue: new PrismaE2eJobQueue(database.client),
+  queue,
   concurrency: Number(process.env['E2E_WORKER_CONCURRENCY']) || 2,
   executor: new E2eExecutor({
     store,
+    queue,
     artifacts,
     scripts: new GitScriptRepository(integrations),
     runner: new PlaywrightE2eRunner({
@@ -87,19 +109,27 @@ const worker = new E2eWorker({
       artifacts,
     }),
     transcoder: ffmpegPath ? new FfmpegVideoTranscoder({ ffmpegPath }) : null,
-    author: new AgentE2eAuthor({ agents, providers }),
+    // Runs that use the Brain search the same knowledge base as the API.
+    author: new AgentE2eAuthor({
+      agents,
+      providers,
+      attachments,
+      knowledge: createPrismaKnowledgeAdapters(database.client).search,
+    }),
+    environments: new E2eEnvironmentService(new PrismaE2eEnvironmentStore(database.client)),
     reporter: new E2eRunReporter({
       store,
       artifacts,
       testManagement: new IntegrationTestManagementResolver(integrations),
     }),
+    notifier,
   }),
   onIdle: () => console.log('[E2eWorker] Queue empty; idle until the next wake.'),
 });
 
 // Remote integration and load runs share the worker host and its wake call.
 const apiTests = new ApiTestWorker({
-  service: new ApiTestService({ store: new PrismaApiTestStore(database.client) }),
+  service: new ApiTestService({ store: new PrismaApiTestStore(database.client), notifier }),
   concurrency: Number(process.env['API_TESTS_WORKER_CONCURRENCY']) || 2,
   allowPrivateNetwork: process.env['API_TESTS_ALLOW_PRIVATE_NETWORK'] === 'true',
   hostAlias,

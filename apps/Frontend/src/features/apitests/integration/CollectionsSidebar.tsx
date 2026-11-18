@@ -263,12 +263,13 @@ export function CollectionsSidebar({
   const text = filter.trim();
   return (
     <ResizableSidebar
-      className="border-r border-[var(--border)] bg-[var(--surface-1)]"
+      className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-1)]"
       defaultWidth={280}
       minWidth={220}
       maxWidth={520}
       aria-label={t('apiTests.collections')}
       data-testid="collections-sidebar"
+      gap
     >
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-[var(--border)] pl-3 pr-1.5">
         <h2 className="flex-1 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">

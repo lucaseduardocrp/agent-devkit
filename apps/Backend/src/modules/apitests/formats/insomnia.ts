@@ -129,8 +129,7 @@ function oauth2From(value: Json, field: (name: string) => string): RequestAuth {
   };
 }
 
-/* v8 ignore next -- splitting a string always yields at least one part */
-const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+const baseName = (path: string) => path.split(/[\\/]/).pop()!;
 
 function bodyFrom(value: unknown): RequestBody {
   if (!isObject(value)) return { mode: 'none' };
@@ -276,12 +275,8 @@ export function importInsomnia(document: Json): CollectionInput {
   };
 }
 
-function authTo(auth: RequestAuth | undefined): Json {
-  switch (auth?.type) {
-    // Every caller passes a folder's own auth only when it is set, or the ancestor auth
-    // otherwise (ultimately the collection's, which is required) — never `undefined` itself.
-    /* v8 ignore next */
-    case undefined:
+function authTo(auth: RequestAuth): Json {
+  switch (auth.type) {
     case 'inherit':
       return {};
     // Insomnia has no WSSE or EdgeGrid auth: there they need a pre-request script.

@@ -19,7 +19,7 @@ interface RawPrismaIntegrationRecord {
 
 interface PrismaIntegrationDelegate {
   findMany(arguments_: {
-    where: { ownerId: string };
+    where: { ownerId: string } | { category: IntegrationCategory; providerId: string };
     orderBy?: readonly Record<string, 'asc' | 'desc'>[];
   }): Promise<readonly RawPrismaIntegrationRecord[]>;
 
@@ -77,6 +77,14 @@ export class PrismaUserIntegrationStore implements UserIntegrationStore {
       where: { ownerId },
       orderBy: [{ category: 'asc' }, { providerId: 'asc' }],
     });
+    return raw.map(toUserIntegrationRecord);
+  }
+
+  public async listByProvider(
+    category: IntegrationCategory,
+    providerId: string,
+  ): Promise<readonly UserIntegrationRecord[]> {
+    const raw = await this.client.integrationRecord.findMany({ where: { category, providerId } });
     return raw.map(toUserIntegrationRecord);
   }
 

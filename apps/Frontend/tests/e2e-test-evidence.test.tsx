@@ -15,6 +15,7 @@ const test: E2eTestDetail = {
   priority: 'high',
   beforeRunInstructions: null,
   afterRunInstructions: null,
+  scriptInstructions: null,
   scriptPath: 'tests/tc001.spec.ts',
   status: 'passed',
   error: null,
@@ -149,5 +150,126 @@ describe('E2E test case evidence', () => {
       }),
     );
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(test));
+  });
+});
+
+describe('E2E step decisions', () => {
+  const failedStep = {
+    position: 1,
+    title: 'Abrir grupos',
+    status: 'failed' as const,
+    durationMs: 100,
+    error: 'expect(locator).toHaveCount(expected) failed',
+    hasScreenshot: false,
+  };
+  const failedTest: E2eTestDetail = { ...test, status: 'failed', stepResults: [failedStep] };
+
+  function setup(overrides: Partial<E2eTestDetail> = {}) {
+    const client = {
+      setE2eStepResult: vi.fn().mockResolvedValue(test),
+    };
+    const onChanged = vi.fn();
+    const view = render(
+      <E2eExecutedSteps
+        apiClient={client as unknown as ApiClient}
+        test={{ ...failedTest, ...overrides }}
+        isReadOnly={false}
+        onChanged={onChanged}
+      />,
+    );
+    return { client, onChanged, ...view };
+  }
+
+  it('passes a failed step with a note, and clears the note afterwards', async () => {
+    const { client, onChanged } = setup();
+    expect(screen.getByText(/toHaveCount/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/Why|Motivo/), {
+      target: { value: ' screen is right ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Mark as passed|Marcar como sucesso/ }));
+    await waitFor(() =>
+      expect(client.setE2eStepResult).toHaveBeenCalledWith(
+        'test-1',
+        1,
+        'passed',
+        'screen is right',
+      ),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(test));
+    await waitFor(() => expect(screen.getByLabelText(/Why|Motivo/)).toHaveProperty('value', ''));
+    expect(screen.queryByRole('button', { name: /Mark as failed|Marcar como falha/ })).toBeNull();
+  });
+
+  it('fails a passed step', async () => {
+    const { client } = setup({ stepResults: [{ ...failedStep, status: 'passed', error: null }] });
+    fireEvent.click(screen.getByRole('button', { name: /Mark as failed|Marcar como falha/ }));
+    await waitFor(() =>
+      expect(client.setE2eStepResult).toHaveBeenCalledWith('test-1', 1, 'failed', ''),
+    );
+  });
+
+  it('hides the error of a step the user passed, and gives the run result back', async () => {
+    const { client } = setup({
+      stepResults: [{ ...failedStep, manualStatus: 'passed', manualNote: 'it is fine' }],
+    });
+    expect(screen.queryByText(/toHaveCount/)).toBeNull();
+    expect(screen.getByText(/Set by you|Definido por você/).textContent).toContain('it is fine');
+    expect(screen.getByRole('img', { name: /Pass/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Use the run result|Usar o resultado/ }));
+    await waitFor(() =>
+      expect(client.setE2eStepResult).toHaveBeenCalledWith('test-1', 1, 'run', undefined),
+    );
+  });
+
+  it('shows a step the user failed without a note', () => {
+    setup({
+      stepResults: [{ ...failedStep, status: 'passed', error: null, manualStatus: 'failed' }],
+    });
+    expect(screen.getByText(/Set by you|Definido por você/)).toBeTruthy();
+    expect(screen.getByRole('img', { name: /Failed/ })).toBeTruthy();
+  });
+
+  it('shows the server error and keeps working', async () => {
+    const { client } = setup();
+    client.setE2eStepResult.mockRejectedValueOnce(new Error('Nope'));
+    fireEvent.click(screen.getByRole('button', { name: /Mark as passed|Marcar como sucesso/ }));
+    expect((await screen.findByRole('alert')).textContent).toBe('Nope');
+    client.setE2eStepResult.mockRejectedValueOnce('boom');
+    fireEvent.click(screen.getByRole('button', { name: /Mark as passed|Marcar como sucesso/ }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).not.toBe('Nope'));
+    expect(screen.getByLabelText(/Why|Motivo/)).toHaveProperty('disabled', false);
+  });
+
+  it('only shows the steps to someone who cannot edit', () => {
+    render(
+      <E2eExecutedSteps
+        apiClient={{} as unknown as ApiClient}
+        test={failedTest}
+        isReadOnly
+        onChanged={vi.fn()}
+      />,
+    );
+    // The only control left is the one that collapses the panel.
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.getByText(/toHaveCount/)).toBeTruthy();
+  });
+
+  it('collapses and expands the executed steps', () => {
+    render(
+      <E2eExecutedSteps
+        apiClient={{} as unknown as ApiClient}
+        test={failedTest}
+        isReadOnly
+        onChanged={vi.fn()}
+      />,
+    );
+    const toggle = screen.getByRole('button', { name: /Executed steps|Passos executados/ });
+    const body = screen.getByTestId('e2e-executed-steps-body');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(body.hidden).toBe(true);
+    fireEvent.click(toggle);
+    expect(body.hidden).toBe(false);
   });
 });

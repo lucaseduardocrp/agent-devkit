@@ -1,21 +1,30 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import { Modal } from '../../components/ui/modal.js';
+import { cn } from '../../lib/utils.js';
 import { useI18n } from '../../lib/i18n/index.js';
+import { scenarioToMarkdown } from './scenario-markdown.js';
+import { SplitHandle } from './SplitHandle.js';
 import { sanitizeRichText, testCaseFields, testCaseOrigin } from './test-case-fields.js';
+import { TestCaseFixChat, type TestCaseFixAssistant } from './TestCaseFixChat.js';
 import type { TestCase } from './TestPlansView.js';
 import { AttachmentPanel } from '../shared/AttachmentPanel.js';
 import type { Attachment } from '../shared/attachment-types.js';
-import { RichTextEditor } from '../shared/RichTextEditor.js';
+import { MarkdownEditor } from '../shared/markdown-editor/MarkdownEditor.js';
 import { RICH_TEXT } from '../shared/rich-text.js';
 import {
   discardDrafts,
+  markdownImage,
   saveWithDrafts,
   useInlineImages,
   useMediaClient,
-  useRichTextImageInput,
 } from '../shared/media.js';
+
+/** Width the chat of "Fix with AI" starts with, the least it can have and what stays for the case. */
+const CHAT_WIDTH = 460;
+const CHAT_MIN_WIDTH = 320;
+const CASE_MIN_WIDTH = 420;
 
 /** Files of the case; kept in its metadata, which the test plan stores as is. */
 function caseAttachments(metadata: Record<string, unknown> | undefined): Attachment[] {
@@ -44,44 +53,9 @@ export interface TestCaseModalProps {
   readonly onClose: () => void;
   /** Opens a new E2E run that automates this case. */
   readonly onAutomate?: () => void;
+  /** Offers "Fix with AI": a chat that rewrites the case and writes its test script again. */
+  readonly fixWithAi?: TestCaseFixAssistant;
 }
-
-const copy = {
-  'pt-BR': {
-    testCase: 'Caso de teste',
-    plan: 'Test Plan',
-    steps: 'Passos',
-    origin: 'Origem',
-    createdInAdk: 'Criado no ADK',
-    remoteId: 'ID no provedor',
-    remotePlan: 'Plano',
-    remoteSuite: 'Suíte',
-    importedAt: 'Importado em',
-    openOnPlatform: 'Abrir no provedor',
-    providerFields: 'Campos do provedor',
-    providerFieldsHint: 'Trazidos de {provider}. Importe de novo para atualizar.',
-    noProviderFields: 'Este caso não tem campos do provedor.',
-    automate: 'Automatizar com E2E',
-    close: 'Fechar',
-  },
-  'en-US': {
-    testCase: 'Test case',
-    plan: 'Test Plan',
-    steps: 'Steps',
-    origin: 'Origin',
-    createdInAdk: 'Created in ADK',
-    remoteId: 'Provider ID',
-    remotePlan: 'Plan',
-    remoteSuite: 'Suite',
-    importedAt: 'Imported on',
-    openOnPlatform: 'Open on the provider',
-    providerFields: 'Provider fields',
-    providerFieldsHint: 'Brought from {provider}. Import again to refresh them.',
-    noProviderFields: 'This case has no provider fields.',
-    automate: 'Automate with E2E',
-    close: 'Close',
-  },
-} as const;
 
 /**
  * A single test case in its own window, like PBIs and issues: title and actions on top,
@@ -97,21 +71,24 @@ export function TestCaseModal({
   onSave,
   onClose,
   onAutomate,
+  fixWithAi,
 }: TestCaseModalProps) {
-  const { t, locale, formatDate } = useI18n();
-  const c = copy[locale];
-  const [draft, setDraft] = useState<TestCase>(testCase);
-  const editor = useRef<HTMLDivElement>(null);
+  const { t, formatDate, messages } = useI18n();
+  const c = messages.testCaseEditor;
+  // The description is edited as Markdown; cases saved with rich text are converted when opened.
+  const [draft, setDraft] = useState<TestCase>(() => ({
+    ...testCase,
+    scenario: scenarioToMarkdown(testCase.scenario),
+  }));
   const origin = testCaseOrigin(testCase.metadata);
   const fields = origin ? testCaseFields(testCase.metadata, origin.provider) : [];
   const steps = draft.steps ?? [];
   const setSteps = (next: TestCase['steps']) => setDraft({ ...draft, steps: next });
   const content = useRef<HTMLDivElement>(null);
-  // The editor and the platform fields show images by their stored address.
-  useInlineImages(content, testCase);
-  const scenarioImages = useRichTextImageInput('testcase', editor, (html) =>
-    setDraft((current) => ({ ...current, scenario: sanitizeRichText(html) })),
-  );
+  const [fixing, setFixing] = useState(false);
+  const [chatWidth, setChatWidth] = useState(CHAT_WIDTH);
+  // The platform fields show images by their stored address.
+  useInlineImages(content, testCase.metadata);
   const attachments = caseAttachments(draft.metadata);
   const apiClient = useMediaClient();
   const [committing, setCommitting] = useState(false);
@@ -121,10 +98,19 @@ export function TestCaseModal({
     discardDrafts(draft);
     onClose();
   };
-  /** Pasted and attached files are drafts until the case is saved, which uploads them. */
-  const save = async () => {
+  /** An image of the case's files goes into the description, after what is written. */
+  const insertAttachment = (attachment: Attachment) =>
+    setDraft((current) => ({
+      ...current,
+      scenario: `${current.scenario.trimEnd()}${current.scenario.trim() ? '\n\n' : ''}${markdownImage(attachment)}\n`,
+    }));
+  /**
+   * Pasted and attached files are drafts until the case is saved, which uploads them. `apply`
+   * takes the saved case: it is the save of the case, or the one that also writes the script.
+   */
+  const save = async (apply: (saved: TestCase) => void | Promise<void> = onSave) => {
     if (!apiClient) {
-      onSave(draft);
+      await apply(draft);
       return;
     }
     setCommitting(true);
@@ -134,7 +120,7 @@ export function TestCaseModal({
         apiClient,
         'testcase',
         { scenario: draft.scenario, metadata: draft.metadata },
-        (files) => Promise.resolve(onSave({ ...draft, ...files })),
+        (files) => Promise.resolve(apply({ ...draft, ...files })),
       );
     } catch (reason) {
       setFileError(reason instanceof Error ? reason.message : String(reason));
@@ -146,7 +132,7 @@ export function TestCaseModal({
   return (
     <Modal open onClose={close} labelledBy="edit-testcase-title">
       <div
-        className="flex h-[min(90vh,900px)] w-[min(96vw,1400px)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)]"
+        className="flex h-[min(92vh,1000px)] w-[min(98vw,1800px)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)]"
         data-testid="test-case-modal"
       >
         <div className="flex items-center justify-between border-b border-[var(--border)] px-6 py-3 text-xs text-[var(--text-accent)]">
@@ -182,6 +168,18 @@ export function TestCaseModal({
             className="min-w-[220px] flex-1 border-0 bg-transparent px-0 text-xl font-semibold shadow-none"
           />
           {history}
+          {fixWithAi && !readOnly && (
+            <Button
+              type="button"
+              variant={fixing ? 'secondary' : 'outline'}
+              aria-pressed={fixing}
+              onClick={() => setFixing(!fixing)}
+              data-testid="btn-fix-with-ai"
+            >
+              <i className="ti ti-sparkles" aria-hidden="true" />
+              {c.fixWithAi}
+            </Button>
+          )}
           {onAutomate && (
             <Button type="button" variant="outline" onClick={onAutomate}>
               <i className="ti ti-player-play" aria-hidden="true" />
@@ -224,23 +222,33 @@ export function TestCaseModal({
 
         <div
           ref={content}
-          className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)] [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded"
+          style={fixing ? ({ '--chat-width': `${chatWidth}px` } as CSSProperties) : undefined}
+          className={cn(
+            'grid min-h-0 flex-1 overflow-y-auto [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded',
+            fixing
+              ? // With the chat open each column scrolls on its own, so the chat keeps its box in
+                // view; the divider between them sets how wide the chat is.
+                'lg:grid-cols-[minmax(0,1fr)_auto_min(var(--chat-width),70%)] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden'
+              : 'lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]',
+          )}
         >
-          <div className="space-y-6 p-6 lg:border-r lg:border-[var(--border)]">
+          <div
+            className={cn(
+              'min-w-0 space-y-6 p-6',
+              fixing ? 'lg:min-h-0 lg:overflow-y-auto' : 'lg:border-r lg:border-[var(--border)]',
+            )}
+          >
             <section>
               <h3 className="mb-3 border-b border-[var(--border)] pb-3 text-sm font-semibold">
                 <i className="ti ti-align-left mr-2 text-[var(--text-accent)]" aria-hidden="true" />
                 {t('testplans.caseScenarioLabel')}
               </h3>
-              <RichTextEditor
-                editorRef={editor}
-                initialHtml={testCase.scenario}
+              <MarkdownEditor
+                scope="testcase"
+                value={draft.scenario}
                 readOnly={readOnly}
-                ariaLabel={t('testplans.caseScenarioLabel')}
-                data-testid="input-edit-test-scenario"
+                testId="input-edit-test-scenario"
                 onChange={(scenario) => setDraft((current) => ({ ...current, scenario }))}
-                onPaste={scenarioImages.onPaste}
-                onDrop={scenarioImages.onDrop}
               />
             </section>
 
@@ -338,82 +346,103 @@ export function TestCaseModal({
               onChange={(next) =>
                 setDraft({ ...draft, metadata: { ...(draft.metadata ?? {}), attachments: next } })
               }
-              onInsertInline={scenarioImages.insertAttachment}
+              onInsertInline={insertAttachment}
             />
-            {(fileError ?? scenarioImages.error) && (
+            {fileError && (
               <p role="alert" className="text-xs text-red-300">
-                {fileError ?? scenarioImages.error}
+                {fileError}
               </p>
             )}
           </div>
 
-          <aside className="space-y-5 bg-[var(--surface-1)] p-6">
-            <section className="space-y-3" aria-label={c.origin}>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                {c.origin}
-              </h3>
-              {origin ? (
-                <dl className="space-y-2 text-xs">
-                  <Row label={c.origin} value={origin.providerName} />
-                  <Row label={c.remoteId} value={origin.caseId} />
-                  {origin.planId && <Row label={c.remotePlan} value={origin.planId} />}
-                  {origin.suiteId && <Row label={c.remoteSuite} value={origin.suiteId} />}
-                  {origin.importedAt && (
-                    <Row label={c.importedAt} value={formatDate(origin.importedAt)} />
-                  )}
-                </dl>
-              ) : (
-                <p className="text-xs text-[var(--text-muted)]">{c.createdInAdk}</p>
-              )}
-              {origin?.url && (
-                <a
-                  href={origin.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-[var(--text-accent)] underline"
-                >
-                  <i className="ti ti-external-link" aria-hidden="true" />
-                  {c.openOnPlatform}
-                </a>
-              )}
-            </section>
-
-            {origin && (
-              <section className="space-y-3" aria-label={c.providerFields}>
-                <div>
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                    {c.providerFields}
-                  </h3>
-                  <p className="mt-1 text-[11px] text-[var(--text-muted)]">
-                    {c.providerFieldsHint.replace('{provider}', origin.providerName)}
-                  </p>
-                </div>
-                {fields.length ? (
-                  <dl className="space-y-3" data-testid="test-case-provider-fields">
-                    {fields.map((field) => (
-                      <div key={field.key} className="min-w-0">
-                        <dt className="text-[11px] font-semibold text-[var(--text-secondary)]">
-                          {field.label}
-                        </dt>
-                        {field.html ? (
-                          <dd
-                            className={`mt-0.5 break-words ${RICH_TEXT}`}
-                            dangerouslySetInnerHTML={{ __html: sanitizeRichText(field.value) }}
-                          />
-                        ) : (
-                          <dd className="mt-0.5 break-words text-sm text-[var(--text-primary)]">
-                            {field.value}
-                          </dd>
-                        )}
-                      </div>
-                    ))}
+          {fixing && fixWithAi ? (
+            <>
+              <SplitHandle
+                width={chatWidth}
+                onChange={setChatWidth}
+                min={CHAT_MIN_WIDTH}
+                container={content}
+                reserve={CASE_MIN_WIDTH}
+                label={c.fixResize}
+              />
+              <TestCaseFixChat
+                assistant={fixWithAi}
+                testCase={draft}
+                onChange={setDraft}
+                onRegenerate={() => void save(fixWithAi.saveAndRegenerate)}
+                isRegenerating={isSaving || committing}
+                onClose={() => setFixing(false)}
+              />
+            </>
+          ) : (
+            <aside className="space-y-5 bg-[var(--surface-1)] p-6">
+              <section className="space-y-3" aria-label={c.origin}>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                  {c.origin}
+                </h3>
+                {origin ? (
+                  <dl className="space-y-2 text-xs">
+                    <Row label={c.origin} value={origin.providerName} />
+                    <Row label={c.remoteId} value={origin.caseId} />
+                    {origin.planId && <Row label={c.remotePlan} value={origin.planId} />}
+                    {origin.suiteId && <Row label={c.remoteSuite} value={origin.suiteId} />}
+                    {origin.importedAt && (
+                      <Row label={c.importedAt} value={formatDate(origin.importedAt)} />
+                    )}
                   </dl>
                 ) : (
-                  <p className="text-xs text-[var(--text-muted)]">{c.noProviderFields}</p>
+                  <p className="text-xs text-[var(--text-muted)]">{c.createdInAdk}</p>
+                )}
+                {origin?.url && (
+                  <a
+                    href={origin.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-[var(--text-accent)] underline"
+                  >
+                    <i className="ti ti-external-link" aria-hidden="true" />
+                    {c.openOnPlatform}
+                  </a>
                 )}
               </section>
-            )}
-          </aside>
+
+              {origin && (
+                <section className="space-y-3" aria-label={c.providerFields}>
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                      {c.providerFields}
+                    </h3>
+                    <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+                      {c.providerFieldsHint.replace('{provider}', origin.providerName)}
+                    </p>
+                  </div>
+                  {fields.length ? (
+                    <dl className="space-y-3" data-testid="test-case-provider-fields">
+                      {fields.map((field) => (
+                        <div key={field.key} className="min-w-0">
+                          <dt className="text-[11px] font-semibold text-[var(--text-secondary)]">
+                            {field.label}
+                          </dt>
+                          {field.html ? (
+                            <dd
+                              className={`mt-0.5 break-words ${RICH_TEXT}`}
+                              dangerouslySetInnerHTML={{ __html: sanitizeRichText(field.value) }}
+                            />
+                          ) : (
+                            <dd className="mt-0.5 break-words text-sm text-[var(--text-primary)]">
+                              {field.value}
+                            </dd>
+                          )}
+                        </div>
+                      ))}
+                    </dl>
+                  ) : (
+                    <p className="text-xs text-[var(--text-muted)]">{c.noProviderFields}</p>
+                  )}
+                </section>
+              )}
+            </aside>
+          )}
         </div>
       </div>
     </Modal>

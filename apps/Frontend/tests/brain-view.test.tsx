@@ -34,6 +34,7 @@ describe('BrainView', () => {
     fireEvent.change(view.getByTestId('input-document-title'), {
       target: { value: 'Created' },
     });
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     const editor = view.getByTestId('textarea-document-content');
     fireEvent.change(editor, { target: { value: '[[', selectionStart: 2 } });
     fireEvent.click(view.getByRole('option', { name: 'Target' }));
@@ -72,6 +73,7 @@ describe('BrainView', () => {
 
     fireEvent.click(await view.findByTestId('tree-item-first'));
     fireEvent.click(view.getByTestId('btn-edit-document'));
+    fireEvent.click(view.getByTestId('editor-mode-code'));
     const editor = view.getByTestId('textarea-document-content');
     fireEvent.change(editor, { target: { value: 'Links: [[', selectionStart: 9 } });
     expect(
@@ -642,7 +644,7 @@ describe('BrainView', () => {
 
     await waitFor(() => {
       expect(getByTestId('card-documentos')).toHaveTextContent('2');
-      expect(getByTestId('card-sync')).toHaveTextContent('Recente');
+      expect(getByTestId('card-sync')).toHaveTextContent('11/09/2026');
       expect(
         getAllByText('Manual do Usuário Extensivo para Todos os Agentes').length,
       ).toBeGreaterThan(0);
@@ -843,7 +845,9 @@ describe('BrainView', () => {
     expect(getByTestId('brain-tabs-bar')).not.toHaveTextContent('Documento Removido');
     fireEvent.click(getByTestId('tab-brain-overview'));
     expect(getByTestId('card-documentos')).toHaveTextContent('1');
-    expect(getByTestId('card-sync')).toHaveTextContent('Agora mesmo');
+    expect(getByTestId('card-sync')).toHaveTextContent(
+      new Intl.DateTimeFormat('pt-BR').format(new Date()),
+    );
 
     fireEvent.click(syncBtn);
     await waitFor(() => expect(syncSpy).toHaveBeenCalledTimes(2));
@@ -1267,15 +1271,16 @@ describe('BrainView', () => {
     // Enter title & content
     const titleInput = getByPlaceholderText('Digite o título do documento...');
     fireEvent.change(titleInput, { target: { value: 'Nota Nova' } });
+    fireEvent.click(getByTestId('editor-mode-code'));
     const contentTextarea = getByPlaceholderText(
       'Escreva o conteúdo do documento em formato Markdown...',
     );
     fireEvent.change(contentTextarea, { target: { value: '# Nota Nova' } });
 
-    // Toggle preview inside editor
-    fireEvent.click(getByTestId('btn-toggle-edit-preview'));
-    expect(getByTestId('editor-preview-container')).toBeInTheDocument();
-    fireEvent.click(getByTestId('btn-toggle-edit-preview'));
+    // Switch to the formatted view and back
+    fireEvent.click(getByTestId('editor-mode-formatted'));
+    expect(getByTestId('markdown-editor-formatted')).toBeInTheDocument();
+    fireEvent.click(getByTestId('editor-mode-code'));
 
     // Save new document
     fireEvent.click(getByTestId('btn-save-document'));
@@ -1300,6 +1305,7 @@ describe('BrainView', () => {
     fireEvent.change(getByPlaceholderText('Digite o título do documento...'), {
       target: { value: 'Minha Nota Editada' },
     });
+    fireEvent.click(getByTestId('editor-mode-code'));
     fireEvent.change(
       getByPlaceholderText('Escreva o conteúdo do documento em formato Markdown...'),
       {
@@ -1403,17 +1409,16 @@ describe('BrainView', () => {
     fireEvent.change(getByPlaceholderText('Digite o título do documento...'), {
       target: { value: '' },
     });
+    fireEvent.click(getByTestId('editor-mode-code'));
     fireEvent.change(
       getByPlaceholderText('Escreva o conteúdo do documento em formato Markdown...'),
       {
         target: { value: '' },
       },
     );
-    fireEvent.click(getByTestId('btn-toggle-edit-preview'));
-    expect(getByTestId('editor-preview-container')).toHaveTextContent(
-      'Nenhum conteúdo para pré-visualização.',
-    );
-    fireEvent.click(getByTestId('btn-toggle-edit-preview'));
+    fireEvent.click(getByTestId('editor-mode-formatted'));
+    expect(getByTestId('markdown-editor-formatted')).toBeInTheDocument();
+    fireEvent.click(getByTestId('editor-mode-code'));
     fireEvent.click(getByTestId('btn-cancel-edit'));
 
     // Delete with non-Error reject
@@ -1502,6 +1507,7 @@ describe('BrainView', () => {
     fireEvent.click(getByTestId('tree-item-app://local:doc-with-heading'));
     fireEvent.click(getByTestId('btn-edit-document'));
 
+    fireEvent.click(getByTestId('editor-mode-code'));
     const textarea = getByTestId('textarea-document-content') as HTMLTextAreaElement;
     expect(textarea.value).toBe('Texto do corpo da nota.');
   });

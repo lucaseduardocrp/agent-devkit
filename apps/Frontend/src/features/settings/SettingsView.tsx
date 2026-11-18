@@ -8,6 +8,7 @@ import { ResizableSidebar } from '../../components/layout/ResizableSidebar.js';
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog.js';
 import type { ApiClient } from '../../lib/api-client.js';
 import { AccessTokensPanel } from './AccessTokensPanel.js';
+import { CachePanel } from './CachePanel.js';
 import { PermissionGroupsPanel } from './PermissionGroupsPanel.js';
 import { WorkItemTypesPanel } from '../work-item-types/WorkItemTypesPanel.js';
 import { accessFor } from '../workspaces/permissions.js';
@@ -110,8 +111,8 @@ export function SettingsView({
   const canEditWorkspace = workspaceAccess.editWorkspace;
   const canDeleteWorkspace = workspaceAccess.deleteWorkspace;
   const sections: readonly SettingsSection[] = canManageGroups
-    ? ['general', 'members', 'groups', 'workspace', 'types', 'tokens']
-    : ['general', 'members', 'workspace', 'types', 'tokens'];
+    ? ['general', 'members', 'groups', 'types', 'tokens', 'workspace']
+    : ['general', 'members', 'types', 'tokens', 'workspace'];
   const groupName = (id: string) => groups.find((group) => group.id === id)?.name;
   const loadMembers = useCallback(async () => {
     if (!apiClient || !activeWorkspaceId) return;
@@ -351,6 +352,8 @@ export function SettingsView({
               </div>
             </div>
           </div>
+
+          {settingsSection === 'general' && <CachePanel />}
 
           {settingsSection === 'types' && apiClient && (
             <div className="rounded-xl border border-border bg-surface-1 p-5 shadow-sm">
@@ -699,7 +702,9 @@ export function SettingsView({
                                   }}
                                   className="text-muted hover:bg-red-500/10 hover:text-red-400"
                                   title={t('workspaces.removeMember')}
-                                  aria-label={`Remover ${displayName}`}
+                                  aria-label={t('workspaces.removeMemberNamed', {
+                                    name: displayName,
+                                  })}
                                 >
                                   <i className="ti ti-trash text-sm" aria-hidden="true" />
                                 </Button>

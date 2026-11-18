@@ -13,6 +13,7 @@ import {
   attachmentScopes,
   contentDisposition,
   detectAttachmentType,
+  readAttachmentContent,
   readAttachmentMeta,
   type Attachment,
   type AttachmentScope,
@@ -63,6 +64,7 @@ const scopeModules: Readonly<Record<AttachmentScope, PermissionModule>> = {
   brain: 'brain',
   spec: 'specs',
   testcase: 'testplans',
+  e2e: 'e2e',
 };
 
 function workspaceId(request: Request): string {
@@ -77,7 +79,7 @@ function requireModule(request: Request, scope: AttachmentScope, operation: 'vie
   requireModuleAccess(request.context, [{ module: scopeModules[scope], operation }]);
 }
 
-/** `value` already passed the schema's URL check, so it always parses. */
+/** Only called with values the attachment schema already accepted as URLs. */
 function validExternalUrl(value: string): boolean {
   const url = new URL(value);
   return url.protocol === 'https:' && !url.username && !url.password;
@@ -254,7 +256,6 @@ export function createAttachmentsRouter(
         const scope = scopeSchema.parse(request.query['scope']);
         const name = nameSchema.parse(request.query['name']);
         requireModule(request, scope, 'edit');
-        // Never trust the parsed body's type: anything but raw bytes counts as an empty upload.
         const bytes = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
         if (!bytes.length)
           throw new ApplicationError('VALIDATION_ERROR', 'The file is empty.', 400);
@@ -262,7 +263,7 @@ export function createAttachmentsRouter(
         if (!detected)
           throw new ApplicationError(
             'ATTACHMENT_TYPE_UNSUPPORTED',
-            'Supported files: images (PNG, JPEG, WebP, GIF), videos (MP4, WebM, MOV) and documents (PDF, Word, Excel, PowerPoint, ZIP, TXT, CSV, Markdown).',
+            'Supported files: images (PNG, JPEG, WebP, GIF), videos (MP4, WebM, MOV) and documents (PDF, Word, Excel, PowerPoint, ZIP, TXT, CSV, TSV, Markdown, HTML, JSON, XML, YAML).',
             415,
           );
         if (bytes.length > attachmentLimits[detected.kind])
@@ -284,9 +285,9 @@ export function createAttachmentsRouter(
           createdAt: new Date().toISOString(),
         };
         const workspace = workspaceId(request);
-        await store.put(attachmentContentKey(workspace, meta.id), bytes);
+        await store.put(attachmentContentKey(workspace, meta.id, meta.kind), bytes);
         await store.put(
-          attachmentMetaKey(workspace, meta.id),
+          attachmentMetaKey(workspace, meta.id, meta.kind),
           Buffer.from(JSON.stringify(meta), 'utf8'),
         );
         const attachment: Attachment = {
@@ -313,7 +314,7 @@ export function createAttachmentsRouter(
       const meta = await readAttachmentMeta(store, workspace, id);
       if (!meta) throw new ApplicationError('ATTACHMENT_NOT_FOUND', 'File not found.', 404);
       requireModule(request, meta.scope, 'view');
-      const bytes = await store.get(attachmentContentKey(workspace, id));
+      const bytes = await readAttachmentContent(store, workspace, id, meta.kind);
       if (!bytes) throw new ApplicationError('ATTACHMENT_NOT_FOUND', 'File not found.', 404);
       sendFile(response, bytes, meta.mimeType, meta.name, 'private, max-age=3600, immutable');
     } catch (error) {

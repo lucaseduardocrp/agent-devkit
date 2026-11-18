@@ -100,6 +100,11 @@ export class E2eLocalRunnerService {
     }));
   }
 
+  /** Whether one of the signed-in user's runners is connected right now. */
+  async hasOnlineRunner(context: RequestContext): Promise<boolean> {
+    return (await this.runners(context)).some((runner) => runner.online);
+  }
+
   /** Waits up to `waitMs` for a task of the signed-in user; null when there is none. */
   async claim(
     context: RequestContext,

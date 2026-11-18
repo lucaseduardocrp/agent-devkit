@@ -123,4 +123,45 @@ describe('LLM usage ledger', () => {
     expect(costs.mcpUsage.byTool[0]).toEqual({ tool: 'tool_11', calls: 2, totalTokens: 112 });
     expect(costs.mcpUsage.byTool.map((item) => item.tool)).not.toContain('tool_0');
   });
+
+  it('prices MCP usage with the client provider rates when no mcp rate exists', async () => {
+    const usage = new InMemoryUsageStore();
+    const runs = new RunService(
+      new InMemoryRunStore(),
+      new InMemoryIssueStore(),
+      {} as AgentService,
+      undefined,
+      usage,
+    );
+    const call = { tool: 't', provider: 'mcp', model: 'claude-code', estimated: true };
+    // Recorded before any rate exists: unpriced at record time.
+    const early = await runs.recordUsage('workspace-a', null, {
+      ...call,
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+    });
+    expect(early.costMicros).toBeNull();
+    for (const [model, input, output] of [
+      ['Sonnet', 2, 10],
+      ['Opus', 4, 20],
+    ] as const)
+      await runs.setRate({
+        workspaceId: 'workspace-a',
+        provider: 'anthropic',
+        model,
+        inputUsdPerMillion: input,
+        outputUsdPerMillion: output,
+      });
+    const late = await runs.recordUsage('workspace-a', null, {
+      ...call,
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    });
+    expect(late.costMicros).toBe(24_000_000);
+
+    const costs = await runs.costs('workspace-a');
+    // The early call is priced at read time with the most expensive anthropic rate.
+    expect(costs.mcpUsage.unpricedCalls).toBe(0);
+    expect(costs.monthSpendMicros).toBe(24_000_000 + 4_000_000);
+  });
 });

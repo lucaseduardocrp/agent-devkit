@@ -39,6 +39,8 @@ export interface BriefReference {
   label: string;
   ref: string;
   reason: string;
+  /** The exact passage that matched (Brain pages): the viewer opens the page at it. */
+  excerpt?: string;
 }
 
 export interface BriefPrompt {

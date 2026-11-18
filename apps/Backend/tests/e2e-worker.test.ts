@@ -85,7 +85,70 @@ describe('InMemoryE2eJobQueue', () => {
   });
 });
 
+describe('InMemoryE2eJobQueue scopes', () => {
+  const one = (testId: string, kind: 'execute' | 'generate' = 'execute') => ({
+    workspaceId: 'ws',
+    creationId: 'c1',
+    kind,
+    testIds: kind === 'execute' ? [testId] : [],
+  });
+
+  it('lets the tests of one run execute side by side but never one test twice', async () => {
+    const queue = new InMemoryE2eJobQueue();
+    const first = await queue.enqueue(one('t1'));
+    expect(first).not.toBeNull();
+    expect(await queue.enqueue(one('t2'))).not.toBeNull();
+    expect(await queue.enqueue(one('t1'))).toBeNull();
+    // A job that takes the whole run waits for every test, and no test starts under it.
+    expect(await queue.enqueue(one('', 'generate'))).toBeNull();
+    expect(await queue.enqueue({ ...one('t3'), testIds: ['t3', 't4'] })).toBeNull();
+
+    expect(await queue.hasActive('ws', 'c1')).toBe(true);
+    expect(await queue.hasActive('ws', 'c1', { testId: 't1' })).toBe(true);
+    expect(await queue.hasActive('ws', 'c1', { testId: 't9' })).toBe(false);
+    expect(await queue.hasActive('ws', 'c1', { exceptJobId: first!.id })).toBe(true);
+    expect(await queue.cancel('ws', 'c1')).toBe(true);
+    expect(await queue.hasActive('ws', 'c1')).toBe(false);
+
+    const wide = await queue.enqueue(one('', 'generate'));
+    expect(wide).not.toBeNull();
+    expect(await queue.enqueue(one('t1'))).toBeNull();
+    expect(await queue.hasActive('ws', 'c1', { testId: 't9' })).toBe(true);
+    expect(await queue.hasActive('ws', 'c1', { exceptJobId: wide!.id })).toBe(false);
+  });
+});
+
 describe('E2eWorker', () => {
+  it('takes a job enqueued while others run as soon as a slot is free', async () => {
+    const queue = new InMemoryE2eJobQueue();
+    const gates = new Map<string, ReturnType<typeof deferred>>();
+    const executor = {
+      run: vi.fn(async (claimed: E2eJob) => {
+        const gate = deferred();
+        gates.set(claimed.testIds[0]!, gate);
+        await gate.promise;
+      }),
+      interrupt: vi.fn(),
+      settle: vi.fn().mockResolvedValue(undefined),
+    };
+    const worker = new E2eWorker({ queue, executor, concurrency: 2, workerId: 'w' });
+    await queue.enqueue({ ...job('c1'), testIds: ['t1'] });
+    worker.wake();
+    await vi.waitFor(() => expect(gates.has('t1')).toBe(true));
+
+    await queue.enqueue({ ...job('c1'), testIds: ['t2'] });
+    worker.wake();
+    // The first job is still executing: the second one does not wait for it.
+    await vi.waitFor(() => expect(gates.has('t2')).toBe(true));
+    expect(worker.status.active).toBe(2);
+
+    gates.get('t2')!.resolve();
+    gates.get('t1')!.resolve();
+    await worker.idle();
+    expect(executor.settle).toHaveBeenCalledTimes(2);
+    expect(executor.settle).toHaveBeenCalledWith(expect.objectContaining({ testIds: ['t2'] }));
+  });
+
   it('runs different runs in parallel up to its concurrency and goes idle', async () => {
     const queue = new InMemoryE2eJobQueue();
     const gates = new Map<string, ReturnType<typeof deferred>>();
@@ -283,7 +346,7 @@ describe('E2eExecutor.interrupt', () => {
         return Promise.resolve({ startUrl: 'http://x/', pages: [] });
       }),
     };
-    const executor = new E2eExecutor({ store, artifacts, runner } as never);
+    const executor = new E2eExecutor({ store, artifacts, runner, author: {} } as never);
     await executor.interrupt({ workspaceId: 'ws', creationId: creation.id });
     expect((await store.getCreation('ws', creation.id))?.status).toBe('draft');
     await executor.run(

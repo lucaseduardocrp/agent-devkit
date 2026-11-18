@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { cn } from '../../lib/utils.js';
 import { Button } from '../../components/ui/button.js';
 import { IconButton } from '../../components/ui/icon-button.js';
@@ -17,9 +17,15 @@ import {
 import { MarkdownViewer } from '../brain/MarkdownViewer.js';
 import { AgentModal, type AgentLlmModelOption } from './AgentModal.js';
 import { AgentWorkflowBoard } from './AgentWorkflowBoard.js';
+import {
+  EMPTY_NOTIFICATION_OPTIONS,
+  type NotificationOptions,
+} from '../notifications/notification-types.js';
 import { AgentTopology } from './AgentTopology.js';
 import { AgentHubPanel } from './AgentHubPanel.js';
-import type { AgentRun, Issue } from '../issues/issue-types.js';
+import type { AgentRun, AgentRunEvent, Issue } from '../issues/issue-types.js';
+import { mergeSnapshot, upsertRun } from './live-runs.js';
+import { useRunStream } from './use-run-stream.js';
 import { ApiClient } from '../../lib/api-client.js';
 import type {
   CustomAgentDto,
@@ -45,6 +51,8 @@ export interface AgentsViewProps {
   readonly section?: AgentsSection;
   /** Lets the navigation follow a section the view itself opens (e.g. testing an agent). */
   readonly onSelectSection?: (section: AgentsSection) => void;
+  /** Takes the user to an issue (from the run flow of the Agent map). */
+  readonly onOpenIssue?: (issueId: string) => void;
   readonly className?: string;
 }
 
@@ -156,6 +164,23 @@ const workflowToolNames: Record<AgentWorkflowToolset, readonly string[]> = {
     'release_notes_generate',
     'release_notes_update',
   ],
+  development: [
+    'development_cancel_session',
+    'development_claim_session',
+    'development_comment',
+    'development_complete_session',
+    'development_create_change',
+    'development_create_session',
+    'development_delete_change',
+    'development_delete_session',
+    'development_report',
+    'development_resolve_comment',
+    'development_retry_session',
+    'development_review_session',
+    'development_submit_diff',
+    'development_transition_change',
+    'development_update_change',
+  ],
   integrationtests: [
     'integration_cancel_run',
     'integration_delete_collection',
@@ -178,6 +203,12 @@ const workflowToolNames: Record<AgentWorkflowToolset, readonly string[]> = {
     'load_save_scenario',
   ],
   audit: [],
+  notifications: [
+    'notifications_delete_rule',
+    'notifications_save_rule',
+    'notifications_send',
+    'notifications_test',
+  ],
   workspaces: [
     'workspaces_add_member',
     'workspaces_create',
@@ -200,6 +231,7 @@ export function AgentsView({
   isReadOnly = false,
   section,
   onSelectSection,
+  onOpenIssue,
   className,
 }: AgentsViewProps): React.JSX.Element {
   const { t } = useI18n();
@@ -328,6 +360,39 @@ export function AgentsView({
     void loadAgents();
   }, [loadAgents]);
 
+  // What a notification node can choose from. Needs access to Integrations; without it the node
+  // still opens, and says why the lists are empty.
+  const canViewNotifications = can('integrations');
+  const [notificationOptions, setNotificationOptions] = useState<NotificationOptions>(
+    EMPTY_NOTIFICATION_OPTIONS,
+  );
+  useEffect(() => {
+    if (activeViewTab !== 'workflow' || !activeWorkspaceId || !canViewNotifications) return;
+    let active = true;
+    void Promise.all([
+      apiClient.getNotificationChannels(),
+      apiClient.getWorkspaceMembers(activeWorkspaceId),
+    ])
+      .then(([channels, members]) => {
+        if (!active) return;
+        setNotificationOptions({
+          channels,
+          members: members.flatMap((member) =>
+            member.user
+              ? [{ userId: member.userId, name: member.user.name, email: member.user.email }]
+              : [],
+          ),
+          failed: false,
+        });
+      })
+      .catch(() => {
+        if (active) setNotificationOptions({ ...EMPTY_NOTIFICATION_OPTIONS, failed: true });
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeViewTab, activeWorkspaceId, apiClient, canViewNotifications]);
+
   const loadWorkflow = useCallback(async () => {
     if (activeWorkspaceId === null) return;
     setIsWorkflowLoading(true);
@@ -365,12 +430,22 @@ export function AgentsView({
     void loadWorkflow();
   }, [loadWorkflow]);
 
+  // Runs the stream reported while a snapshot was loading; see loadTopology.
+  const reportedRuns = useRef(new Map<string, AgentRunEvent>());
+  const knownIssueIds = useRef(new Set<string>());
+  const isLoadingIssues = useRef(false);
+  useEffect(() => {
+    knownIssueIds.current = new Set(topologyIssues.map((issue) => issue.id));
+  }, [topologyIssues]);
+
   const loadTopology = useCallback(async () => {
     if (activeWorkspaceId === null) return;
     setIsTopologyLoading(true);
     setTopologyError(null);
     try {
       if (activeWorkspaceId) apiClient.setWorkspaceId(activeWorkspaceId);
+      // What the stream reports from here on is newer than what this load returns.
+      reportedRuns.current.clear();
       const [latestAgents, issues, runs] = await Promise.all([
         apiClient.getAgents(),
         // The map shows issue runs only to members who can see issues.
@@ -379,7 +454,7 @@ export function AgentsView({
       ]);
       setAgents(Array.isArray(latestAgents) ? latestAgents : []);
       setTopologyIssues(issues);
-      setTopologyRuns(runs);
+      setTopologyRuns(mergeSnapshot(runs, reportedRuns.current));
     } catch (err) {
       setTopologyError(err instanceof Error ? err.message : t('agents.mapLoadFailed'));
     } finally {
@@ -387,12 +462,44 @@ export function AgentsView({
     }
   }, [activeWorkspaceId, apiClient, canViewIssues, t]);
 
+  // A task for an issue the map has not loaded yet: fetch the issues so it shows its title.
+  const reloadIssues = useCallback(async () => {
+    if (isLoadingIssues.current) return;
+    isLoadingIssues.current = true;
+    try {
+      setTopologyIssues(await apiClient.getIssues());
+    } catch {
+      // The task keeps its short id until the next load.
+    } finally {
+      isLoadingIssues.current = false;
+    }
+  }, [apiClient]);
+
+  const handleRunEvent = useCallback(
+    (event: AgentRunEvent) => {
+      reportedRuns.current.set(event.id, event);
+      setTopologyRuns((current) => upsertRun(current, event));
+      if (!knownIssueIds.current.has(event.issueId)) void reloadIssues();
+    },
+    [reloadIssues],
+  );
+
+  // Members who can see issues follow the runs live; everyone else keeps polling the agents.
+  const liveStatus = useRunStream({
+    enabled: activeViewTab === 'map' && canViewIssues && activeWorkspaceId !== null,
+    connect: (handlers, signal) => apiClient.streamRunEvents(handlers, signal),
+    onRun: handleRunEvent,
+    onReady: () => void loadTopology(),
+  });
+  const isLive = canViewIssues && liveStatus === 'live';
+
   useEffect(() => {
     if (activeViewTab !== 'map') return;
-    void loadTopology();
-    const timer = window.setInterval(() => void loadTopology(), 10_000);
+    // Live, the stream carries every change and this only corrects what could have been missed.
+    if (!isLive) void loadTopology();
+    const timer = window.setInterval(() => void loadTopology(), isLive ? 60_000 : 10_000);
     return () => window.clearInterval(timer);
-  }, [activeViewTab, loadTopology]);
+  }, [activeViewTab, isLive, loadTopology]);
 
   const handleOpenCreateModal = () => {
     setEditingAgent(null);
@@ -455,22 +562,58 @@ export function AgentsView({
     setExecutionResult(null);
 
     try {
-      const res = await runActivity(
+      // The answer is shown as the model writes it. This is the same call a chat uses, and it
+      // works the same whether the workspace's LLM is an API key or a provider CLI.
+      const failure: { error: Error | null } = { error: null };
+      // What the screen shows is rebuilt from this local copy on every event.
+      let answer: ExecuteAgentResponse = {
+        agent: { id: selectedAgentId, name: selectedAgent?.name ?? '', role: 'CUSTOM' },
+        content: '',
+        chunksUsed: 0,
+      };
+      const show = (next: ExecuteAgentResponse) => {
+        answer = next;
+        setExecutionResult(next);
+      };
+      await runActivity(
         {
           kind: 'agent',
           title: t('agents.executingAgent', { name: selectedAgent?.name ?? '' }),
         },
         () =>
-          apiClient.executeAgent(selectedAgentId, {
-            prompt: trimmedPrompt,
-            useKnowledge,
-            ...(selectedLlmProvider ? { llmProvider: selectedLlmProvider } : {}),
-          }),
+          apiClient.streamAgentChat(
+            selectedAgentId,
+            {
+              prompt: trimmedPrompt,
+              useKnowledge,
+              ...(selectedLlmProvider ? { llmProvider: selectedLlmProvider } : {}),
+            },
+            {
+              onStart: (started) =>
+                show({
+                  ...answer,
+                  agent: {
+                    id: started.agent.id,
+                    name: started.agent.name,
+                    role: started.agent.role as ExecuteAgentResponse['agent']['role'],
+                  },
+                  provider: started.provider,
+                }),
+              onDelta: (text) => show({ ...answer, content: answer.content + text }),
+              // The verified answer replaces what was streamed (a guard may have changed it).
+              onDone: (done) => show({ ...answer, content: done.result, provider: done.provider }),
+              onError: (error) => {
+                failure.error = error;
+              },
+            },
+          ),
       );
-      setExecutionResult(res);
+      if (failure.error) throw failure.error;
     } catch (err) {
       const msg = err instanceof Error ? err.message : t('agents.executionFailed');
       setExecutionError(msg);
+      // Whatever was streamed before the failure is dropped, as a one-shot run would have.
+      setExecutionResult(null);
       if (
         msg.toLowerCase().includes('prompt injection') ||
         msg.toLowerCase().includes('segurança') ||
@@ -539,9 +682,13 @@ export function AgentsView({
   return (
     <div
       className={cn(
-        visibleTab === 'map'
-          ? 'flex min-h-full flex-col gap-4 p-4'
-          : 'flex min-h-full flex-col gap-6 p-6',
+        // The map and the workflow fill the screen they are on, so everything is in view without
+        // scrolling; only a screen too short for them falls back to the page scroll.
+        (visibleTab === 'map' || visibleTab === 'workflow') &&
+          'flex h-full min-h-[520px] flex-col gap-3',
+        visibleTab !== 'map' &&
+          visibleTab !== 'workflow' &&
+          'flex min-h-full shrink-0 flex-col gap-6',
         className,
       )}
       data-testid="agents-view"
@@ -709,15 +856,17 @@ export function AgentsView({
           isLoading={isLoading || isTopologyLoading}
           error={topologyError}
           onRefresh={() => void loadTopology()}
+          liveStatus={canViewIssues ? liveStatus : undefined}
+          {...(onOpenIssue ? { onOpenIssue } : {})}
           workflow={workflow}
           canCreateAgents={!isReadOnly}
         />
       )}
 
       {visibleTab === 'workflow' && (
-        <div className="flex w-full flex-col gap-5" data-testid="workflow-panel">
+        <div className="flex min-h-0 w-full flex-1 flex-col gap-3" data-testid="workflow-panel">
           {isWorkflowLoading ? (
-            <div className="h-72 animate-pulse rounded-xl bg-[var(--surface-2)]" />
+            <div className="min-h-72 flex-1 animate-pulse rounded-xl bg-[var(--surface-2)]" />
           ) : (
             <AgentWorkflowBoard
               workflow={workflow}
@@ -727,6 +876,7 @@ export function AgentsView({
               isDirty={isWorkflowDirty}
               toolNames={workflowToolNames}
               providerOptions={workflowProviderOptions}
+              notificationOptions={notificationOptions}
               onChange={(next) => {
                 setWorkflow(next);
                 setIsWorkflowDirty(true);
@@ -1220,12 +1370,6 @@ export function AgentsView({
                     <i className="ti ti-robot mr-1 text-[var(--fill-accent)]" aria-hidden="true" />
                     {executionResult.agent.name}
                   </Badge>
-                  {executionResult.chunksUsed > 0 && (
-                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-xs text-emerald-400">
-                      <i className="ti ti-database text-xs" aria-hidden="true" />
-                      {executionResult.chunksUsed} {t('agents.contextChunksUsed')}
-                    </span>
-                  )}
                   {executionResult.provider && (
                     <span className="inline-flex items-center rounded-full border border-[var(--border)] px-2.5 py-0.5 text-xs">
                       {t('agents.provider')} {executionResult.provider}

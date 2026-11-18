@@ -85,7 +85,7 @@ describe('attachment type detection by content and name', () => {
 
   it('ignores unreadable stored metadata', async () => {
     const store = new InMemoryE2eArtifactStore();
-    await store.put(attachmentMetaKey('ws', ID), Buffer.from('{broken'));
+    await store.put(attachmentMetaKey('ws', ID, 'image'), Buffer.from('{broken'));
     expect(await readAttachmentMeta(store, 'ws', ID)).toBeNull();
   });
 });
@@ -299,13 +299,16 @@ describe('loading images for a model', () => {
       (_, index) => `0000000${index}-0000-4000-8000-000000000000`,
     );
     const meta = (id: string, mimeType: string, kind = 'image') =>
-      store.put(attachmentMetaKey('ws', id), Buffer.from(JSON.stringify({ id, kind, mimeType })));
+      store.put(
+        attachmentMetaKey('ws', id, kind as 'image'),
+        Buffer.from(JSON.stringify({ id, kind, mimeType })),
+      );
     await meta(ids[0]!, 'image/png');
-    await store.put(attachmentContentKey('ws', ids[0]!), PNG);
+    await store.put(attachmentContentKey('ws', ids[0]!, 'image'), PNG);
     await meta(ids[1]!, 'image/png', 'video');
     await meta(ids[2]!, 'image/tiff');
     await meta(ids[3]!, 'image/jpeg');
-    await store.put(attachmentContentKey('ws', ids[3]!), PNG);
+    await store.put(attachmentContentKey('ws', ids[3]!, 'image'), PNG);
     const adk = (id: string, extra: Partial<Attachment> = {}): Attachment => ({
       id,
       name: id,

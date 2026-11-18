@@ -15,6 +15,7 @@ const detail: Dto = {
   priority: 'medium',
   beforeRunInstructions: null,
   afterRunInstructions: null,
+  scriptInstructions: null,
   status: 'passed',
   error: null,
   analysis: null,

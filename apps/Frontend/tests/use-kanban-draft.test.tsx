@@ -237,7 +237,7 @@ describe('useKanbanDraft failures', () => {
     expect(onSaved).not.toHaveBeenCalled();
     await flushTimers(5000);
     expect(save).toHaveBeenCalledTimes(2);
-    expect(result.current.error).toBe('Could not save the move.');
+    expect(result.current.error).toBe('Não foi possível salvar o movimento.');
     await flushTimers(15_000);
     expect(save).toHaveBeenCalledTimes(3);
     expect(result.current.error).toBeNull();

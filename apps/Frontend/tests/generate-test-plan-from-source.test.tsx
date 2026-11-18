@@ -2,6 +2,7 @@ import { fireEvent, render, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ActivityCenter, ActivityProvider } from '../src/features/activities/ActivityCenter.js';
 import { GenerateTestPlanFromSource } from '../src/features/testplans/GenerateTestPlanFromSource.js';
+import { pickOption } from './helpers/pick-option.js';
 import { ApiClient } from '../src/lib/api-client.js';
 
 describe('GenerateTestPlanFromSource', () => {
@@ -52,10 +53,11 @@ describe('GenerateTestPlanFromSource', () => {
 
     fireEvent.click(view.getByRole('button', { name: 'Gerar testes' }));
     await waitFor(() => expect(view.getByRole('dialog')).toBeInTheDocument());
-    fireEvent.change(view.getByLabelText('Test suite'), { target: { value: 'suite-1' } });
-    fireEvent.change(view.getByLabelText('Selecionar agente de IA para geração de testes'), {
-      target: { value: 'agent-1' },
-    });
+    await pickOption(view.getByRole('combobox', { name: 'Test suite' }), 'Checkout');
+    await pickOption(
+      view.getByRole('combobox', { name: 'Selecionar agente de IA para geração de testes' }),
+      'QA Writer',
+    );
     const generateButton = view.getAllByRole('button', { name: 'Gerar testes' })[1];
     if (!generateButton) throw new Error('Generate button was not rendered.');
     fireEvent.click(generateButton);

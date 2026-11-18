@@ -3,8 +3,8 @@ import { isIP } from 'node:net';
 import type { E2eArtifactStore } from '../e2e/application/artifact-store.js';
 import type { LlmImage } from '../agents/application/agent-ports.js';
 import {
-  attachmentContentKey,
   attachmentKind,
+  readAttachmentContent,
   readAttachmentMeta,
   type Attachment,
   type AttachmentScope,
@@ -242,7 +242,7 @@ export async function loadImageAttachments(
     if (attachment.kind) {
       const meta = await readAttachmentMeta(store, workspaceId, attachment.id);
       if (meta?.kind !== 'image' || !isImageMimeType(meta.mimeType)) continue;
-      const bytes = await store.get(attachmentContentKey(workspaceId, attachment.id));
+      const bytes = await readAttachmentContent(store, workspaceId, attachment.id, meta.kind);
       if (bytes && bytes.length <= MAX_IMAGE_BYTES && detectImageMimeType(bytes) === meta.mimeType)
         images.push({ mimeType: meta.mimeType, data: bytes.toString('base64') });
       continue;

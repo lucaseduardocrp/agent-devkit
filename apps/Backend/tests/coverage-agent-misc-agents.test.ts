@@ -170,7 +170,7 @@ describe('POST /agents/default/brain-query', () => {
         memberRole: 'ADMIN',
       }),
     });
-    const execute = vi.spyOn(agentService, 'executeAgent');
+    const execute = vi.spyOn(agentService, 'askBrain');
     return { app, agentService, execute };
   }
 
@@ -201,12 +201,7 @@ describe('POST /agents/default/brain-query', () => {
     expect(execute).toHaveBeenLastCalledWith(
       'ws-brain',
       first.id,
-      {
-        prompt: 'Question',
-        knowledgeQuery: 'Question',
-        includeKnowledge: true,
-        knowledgeOnly: true,
-      },
+      { prompt: 'Question', knowledgeQuery: 'Question' },
       expect.objectContaining({ ownerId: 'ws-brain' }),
     );
 

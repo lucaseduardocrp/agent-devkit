@@ -126,11 +126,14 @@ describe('AgentsView extra paths', () => {
     vi.spyOn(client, 'getIssues').mockResolvedValue([]);
     vi.spyOn(client, 'getAgentRuns').mockResolvedValue([]);
     vi.spyOn(client, 'getIntegrations').mockResolvedValue([]);
-    vi.spyOn(client, 'executeAgent').mockResolvedValue({
-      content: 'Done',
-      agent: { id: 'agent-qa', name: 'QA Engineer', role: 'QA' },
-      chunksUsed: 0,
-      provider: 'Gemini',
+    vi.spyOn(client, 'streamAgentChat').mockImplementation(async (_id, _request, handlers) => {
+      handlers.onStart?.({
+        provider: 'Gemini',
+        agent: { id: 'agent-qa', name: 'QA Engineer', role: 'QA' },
+      });
+      handlers.onDelta('Do');
+      handlers.onDelta('ne');
+      handlers.onDone({ result: 'Done', provider: 'Gemini' });
     });
   });
 
@@ -153,11 +156,11 @@ describe('AgentsView extra paths', () => {
     });
     fireEvent.click(view.getByTestId('playground-execute-button'));
     await waitFor(() =>
-      expect(client.executeAgent).toHaveBeenCalledWith('agent-qa', {
-        prompt: 'Run it',
-        useKnowledge: true,
-        llmProvider: 'mistral',
-      }),
+      expect(client.streamAgentChat).toHaveBeenCalledWith(
+        'agent-qa',
+        { prompt: 'Run it', useKnowledge: true, llmProvider: 'mistral' },
+        expect.any(Object),
+      ),
     );
   });
 
@@ -179,10 +182,11 @@ describe('AgentsView extra paths', () => {
     });
     fireEvent.click(view.getByTestId('playground-execute-button'));
     await waitFor(() =>
-      expect(client.executeAgent).toHaveBeenCalledWith('agent-qa', {
-        prompt: 'Run it',
-        useKnowledge: true,
-      }),
+      expect(client.streamAgentChat).toHaveBeenCalledWith(
+        'agent-qa',
+        { prompt: 'Run it', useKnowledge: true },
+        expect.any(Object),
+      ),
     );
     expect(view.getByTestId('activity-titles').textContent).toBe('Agente  trabalhando');
   });
@@ -197,9 +201,9 @@ describe('AgentsView extra paths', () => {
     await waitFor(() => expect(view.getByTestId('agent-card-qa-engineer')).toBeInTheDocument());
     fireEvent.click(view.getByTestId('tab-map'));
     expect(await view.findByText(/Map offline/)).toBeInTheDocument();
-    fireEvent.click(view.getByRole('button', { name: 'Atualizar' }));
+    fireEvent.click(view.getByRole('button', { name: 'Tentar novamente' }));
     expect(await view.findByText(/Não foi possível carregar o mapa\./)).toBeInTheDocument();
-    fireEvent.click(view.getByRole('button', { name: 'Atualizar' }));
+    fireEvent.click(view.getByRole('button', { name: 'Tentar novamente' }));
     await waitFor(() =>
       expect(view.queryByTestId('topology-agent-agent-qa')).not.toBeInTheDocument(),
     );

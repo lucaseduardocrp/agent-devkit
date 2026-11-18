@@ -59,14 +59,20 @@ export function hostAccessFetch(alias: string): typeof fetch {
     },
   });
   return ((input: string | URL | Request, init?: RequestInit) => {
-    // A whole Request keeps its method, headers and body. undici's fetch only accepts its own
-    // Request class, not Node's global one, so the request is passed as its parts.
-    const request = input instanceof Request ? input : null;
-    const url = new URL(request ? request.url : (input as string | URL));
+    // A whole Request keeps its method and body; only its connection goes through the agent.
+    // (undici does not accept a Request built by another copy of the fetch API, so it is unpacked.)
+    if (input instanceof Request)
+      return undiciFetch(input.url, {
+        method: input.method,
+        headers: input.headers as never,
+        body: input.body as never,
+        duplex: 'half',
+        signal: input.signal,
+        ...(init as object),
+        dispatcher: agent,
+      } as never);
+    const url = new URL(String(input));
     if (url.hostname === '127.0.0.1' || url.hostname === '[::1]') url.hostname = 'localhost';
-    const parts = request
-      ? { method: request.method, headers: request.headers, body: request.body, duplex: 'half' }
-      : {};
-    return undiciFetch(url, { ...parts, ...(init as object), dispatcher: agent } as never);
+    return undiciFetch(url, { ...(init as object), dispatcher: agent });
   }) as unknown as typeof fetch;
 }

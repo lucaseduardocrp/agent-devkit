@@ -15,14 +15,22 @@ export type E2eTestStatus =
   'pending' | 'generating' | 'running' | 'passed' | 'failed' | 'error' | 'cancelled';
 export type E2ePriority = 'high' | 'medium' | 'low';
 export type E2eVerdict = 'app_bug' | 'test_issue' | 'environment';
+/**
+ * Who decided the status of a test: the run itself, the success criteria the user wrote (the AI
+ * found the evidence meets them although the script failed) or the user, by hand.
+ */
+export type E2eResultSource = 'run' | 'criteria' | 'manual';
+/** The Git hosts reached through an integration of the workspace. */
 export type E2eRepositoryProvider = 'github' | 'azure_devops';
+/** Where specs can live: a Git host, or `local`, a folder on the computer running ADK (desktop). */
+export type E2eRepositoryLocation = E2eRepositoryProvider | 'local';
 
 /** Where the run's Playwright specs live. The repository is the source of truth for scripts. */
 export interface E2eRepositoryRef {
-  provider: E2eRepositoryProvider;
-  /** GitHub numeric id or Azure DevOps repository GUID. */
+  provider: E2eRepositoryLocation;
+  /** GitHub numeric id, Azure DevOps repository GUID or, for `local`, the absolute folder path. */
   id: string;
-  /** GitHub "owner/repo" or Azure DevOps "Project/Repo". */
+  /** GitHub "owner/repo", Azure DevOps "Project/Repo" or, for `local`, the folder name. */
   name: string;
   branch: string;
   /** Folder inside the repository, without leading or trailing slashes. */
@@ -47,10 +55,16 @@ export interface E2eCreation {
   username: string | null;
   /** AES-GCM ciphertext; never returned by the API. */
   passwordSecret: string | null;
+  /** Saved environment the run was configured from; its custom variables reach the specs. */
+  environmentId?: string | null;
+  /** The hidden run that explores the workspace's Source: it is not listed and has no tests. */
+  internal?: boolean;
   /** Encrypted Cloudflare Access service token, scoped to this target origin. */
   accessSecret?: string | null;
   prd: string;
   prdFileNames: string[];
+  /** Plans and writes the tests from the Brain instead of (or besides) an uploaded PRD. */
+  useBrain: boolean;
   diff: string | null;
   instructions: string | null;
   locale: string;
@@ -99,6 +113,23 @@ export interface E2eStepResult {
   error: string | null;
   /** Artifact key of the screenshot taken when the step ended. */
   screenshotKey: string | null;
+  /** The user's own verdict on this step; it overrules `status` until the next execution. */
+  manualStatus?: 'passed' | 'failed';
+  /** Why the user decided the step by hand. */
+  manualNote?: string | null;
+}
+
+/** What a step counts as: the user's verdict when there is one, the run's otherwise. */
+export function effectiveStepStatus(
+  step: Pick<E2eStepResult, 'status' | 'manualStatus'>,
+): E2eStepResult['status'] {
+  return step.manualStatus ?? step.status;
+}
+
+/** Test case saved in ADK (Test Plans): the plan that holds it and its stable `metadata.caseId`. */
+export interface E2eSavedCaseLink {
+  planId: string;
+  caseId: string;
 }
 
 export interface E2eTestCase {
@@ -111,17 +142,42 @@ export interface E2eTestCase {
   description: string;
   steps: string[];
   priority: E2ePriority;
+  /** Feature area the test belongs to; groups the tests of a run. Null when not planned by the AI. */
+  category?: string | null;
   /** File path of the spec inside the creation's repository; the content is never stored here. */
   scriptPath: string | null;
   /** What the user tells the AI about how to write the Before Run (e.g. screens to go through). */
   beforeRunInstructions: string | null;
   /** What the user tells the AI about how to write the After Run. */
   afterRunInstructions: string | null;
+  /** What the user tells the AI about how to write the spec; applies to every rewrite of it. */
+  scriptInstructions: string | null;
+  /**
+   * How the user decides this test passes (what the screen must show, what must be absent). The
+   * spec asserts it, and a run that fails on something else but meets it counts as passed.
+   */
+  successCriteria: string | null;
+  /**
+   * Saved environment this test runs with (its URL, account and variables) instead of the run's.
+   * Null inherits the run's environment.
+   */
+  environmentId: string | null;
+  /** JSON of {@link RegenerationFeedback}: read once by the next rewrite of the spec, then cleared. */
+  regenerationFeedback: string | null;
   /** Test case on a test management platform that this test automates. */
   externalCase: ExternalTestCase | null;
+  /**
+   * Test case saved in ADK this test is linked to. Title, description and steps follow it, and
+   * editing either side updates the other.
+   */
+  savedCase: E2eSavedCaseLink | null;
   /** Steps of the latest execution, with their evidence. */
   stepResults: E2eStepResult[];
   status: E2eTestStatus;
+  /** Who decided `status`; anything but `run` is reset by the next execution. */
+  resultSource: E2eResultSource;
+  /** Why the user set the status by hand. */
+  resultNote: string | null;
   error: string | null;
   analysis: string | null;
   verdict: E2eVerdict | null;
@@ -278,6 +334,106 @@ export const HOOK_INSTRUCTION_FIELDS = {
   afterRun: 'afterRunInstructions',
 } as const satisfies Record<E2eHookKind, keyof E2eTestCase>;
 export const MAX_HOOK_INSTRUCTIONS_LENGTH = 20_000;
+export const MAX_SUCCESS_CRITERIA_LENGTH = 10_000;
+export const MAX_RESULT_NOTE_LENGTH = 2_000;
+/** Extra instructions of a run: room for acceptance criteria written as Gherkin, not just a hint. */
+export const MAX_RUN_INSTRUCTIONS_LENGTH = 20_000;
+
+/** What the next rewrite of a spec starts from: the spec it replaces and what its last run showed. */
+export interface RegenerationFeedback {
+  readonly script: string;
+  readonly problem: string;
+  /**
+   * Present when only one step of the spec is to be rewritten: every other step, the hooks and the
+   * rest of the file stay as they are. `instructions` is what the user told the AI about it.
+   */
+  readonly step?: RegenerationStep;
+}
+
+/** The step of a spec the user asked the AI to fix, and how. */
+export interface RegenerationStep {
+  /** Position of the top-level step, starting at 1. */
+  readonly position: number;
+  readonly title: string;
+  /** What the user wants or knows about the screens of the step (Markdown, may hold images). */
+  readonly instructions: string;
+}
+const MAX_FEEDBACK_LOGS = 6_000;
+const MAX_FEEDBACK_ERROR = 4_000;
+
+/**
+ * Gathers what the last execution of a test produced (error, AI analysis, failed steps, run log)
+ * so that rewriting its spec can learn from it. The user's own instructions travel separately.
+ */
+export function buildRegenerationFeedback(
+  test: Pick<E2eTestCase, 'status' | 'error' | 'analysis' | 'logs' | 'stepResults'> &
+    Partial<Pick<E2eTestCase, 'resultSource' | 'resultNote'>>,
+  script: string,
+): RegenerationFeedback {
+  const sections: string[] = [];
+  // What the user decided overrules what the run reported, so it comes first.
+  const decisions = test.stepResults
+    .filter((step) => step.manualStatus)
+    .map((step) => {
+      const note = step.manualNote ? ` - ${step.manualNote.slice(0, 1_000)}` : '';
+      return `${step.position}. ${step.title}: the user decided "${step.manualStatus}" (the run reported "${step.status}")${note}`;
+    });
+  if (test.resultSource === 'manual' && !decisions.length) {
+    const note = test.resultNote ? ` - ${test.resultNote.slice(0, 1_000)}` : '';
+    decisions.push(`The whole test: the user decided "${test.status}"${note}`);
+  }
+  if (decisions.length)
+    sections.push(
+      joinSection(
+        'Decisions of the user (they overrule the run: the script must agree with them)',
+        decisions.join('\n'),
+      ),
+    );
+  if (test.error)
+    sections.push(joinSection('Error of the last run', test.error.slice(0, MAX_FEEDBACK_ERROR)));
+  if (test.analysis) sections.push(joinSection('AI analysis of the last run', test.analysis));
+  const steps = test.stepResults.map((step) => {
+    const detail = step.error ? ` - ${step.error.slice(0, 1_000)}` : '';
+    return `${step.position}. ${step.title}: ${step.status}${detail}`;
+  });
+  if (steps.length) sections.push(joinSection('Steps of the last run', steps.join('\n')));
+  if (test.logs)
+    sections.push(joinSection('End of the last run output', test.logs.slice(-MAX_FEEDBACK_LOGS)));
+  return {
+    script,
+    problem: sections.length
+      ? [
+          `The user asked for a rewrite. The previous script ended as "${test.status}". What its last run produced:`,
+          '',
+          ...sections,
+        ].join('\n')
+      : 'The user asked for a rewrite of this script; no output of a previous run is available.',
+  };
+}
+
+const joinSection = (title: string, text: string): string => [`${title}:`, text, ''].join('\n');
+
+/** The feedback stored on a test; null when there is none or it cannot be read. */
+export function parseRegenerationFeedback(value: string | null): RegenerationFeedback | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<RegenerationFeedback>;
+    if (typeof parsed.script !== 'string' || typeof parsed.problem !== 'string') return null;
+    const step = parsed.step;
+    return step &&
+      Number.isInteger(step.position) &&
+      typeof step.title === 'string' &&
+      typeof step.instructions === 'string'
+      ? {
+          script: parsed.script,
+          problem: parsed.problem,
+          step: { position: step.position, title: step.title, instructions: step.instructions },
+        }
+      : { script: parsed.script, problem: parsed.problem };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Before Run and After Run live next to the spec (`tc001-x.before.ts`, `tc001-x.after.ts`);

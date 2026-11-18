@@ -102,3 +102,17 @@ export function E2eCreationStatusLabel({
     </span>
   );
 }
+
+/** The status of a test as its icon alone, named for screen readers. */
+export function E2eTestStatusIcon({ status }: { readonly status: E2eTestStatus }) {
+  const { t } = useI18n();
+  const config = testStatus[status];
+  return (
+    <i
+      className={cn('ti shrink-0 text-base', config.icon, config.tone)}
+      role="img"
+      aria-label={t(config.label)}
+      data-status={status}
+    />
+  );
+}

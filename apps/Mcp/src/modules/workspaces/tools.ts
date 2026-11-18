@@ -39,8 +39,11 @@ const modules = z
     design: level,
     specs: level,
     releaseNotes: level,
+    development: level,
     testplans: level,
     e2e: level,
+    integrationTests: level,
+    loadTests: level,
     integrations: level,
   })
   .describe(

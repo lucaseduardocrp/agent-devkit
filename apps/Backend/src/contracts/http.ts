@@ -14,6 +14,16 @@ export const testPlanCreateSchema = z.object({
   sourceId: z.string().trim().min(1).optional(),
   suiteId: z.string().trim().min(1).nullable().optional(),
   agentId: z.string().trim().optional(),
+  /** PBIs, issues and Brain documents the user picked to ground the generation. */
+  context: z
+    .array(
+      z.object({
+        kind: z.enum(['pbi', 'issue', 'brain']),
+        id: z.string().trim().min(1).max(500),
+      }),
+    )
+    .max(30)
+    .optional(),
 });
 
 const authoredTestStepSchema = z

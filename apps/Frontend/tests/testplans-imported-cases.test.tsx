@@ -142,7 +142,8 @@ describe('Test Plans imported from a test management platform', () => {
         plans: [
           {
             title: 'Login OK',
-            description: '<p>Sign in with a valid account</p>',
+            // A case saved with rich text is written back as Markdown.
+            description: 'Sign in with a valid account',
             steps: [{ order: 1, action: 'Sign in', expectedResult: 'Home shown' }],
             metadata: { caseId: 'case-1' },
           },

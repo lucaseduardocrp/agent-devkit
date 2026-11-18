@@ -42,12 +42,13 @@ const runnerFields = z.object({
   version: z.string().trim().min(1).max(40),
 });
 
-/**
- * Every route runs requireModulePermission or the runner check first. Both require a workspace
- * membership, which the auth context only sets together with the workspace and the actor.
- */
+/** Every route runs requireModulePermission or the runner check first, so the context exists. */
 function context(request: Request): RequestContext & { workspaceId: string; actorId: string } {
-  return request.context as RequestContext & { workspaceId: string; actorId: string };
+  const value = request.context;
+  if (!value?.workspaceId || !value.actorId) {
+    throw new ApplicationError('WORKSPACE_REQUIRED', 'Workspace context is required.', 400);
+  }
+  return value as RequestContext & { workspaceId: string; actorId: string };
 }
 
 function disconnectSignal(response: Response): AbortSignal {
@@ -741,7 +742,7 @@ export function createApiTestsRouter(service: ApiTestService): Router {
         value,
         generationInput(request, 'load'),
       );
-      send(response, 201, { scenario: result.scenario!, sources: result.sources });
+      send(response, 201, { scenario: result.scenario ?? null, sources: result.sources });
     }),
   );
 
@@ -824,7 +825,7 @@ export function createApiTestsRouter(service: ApiTestService): Router {
       const run = await service.ownedRun(workspaceId, actorId, parseParams(idParams, request).id);
       const saved = await service.finish(run, body.runnerId, {
         status: body.status,
-        result: body.result as ApiRun['result'],
+        result: (body.result ?? null) as ApiRun['result'],
         error: body.error,
         ...(body.runtime ? { runtime: body.runtime as RuntimeState } : {}),
       });

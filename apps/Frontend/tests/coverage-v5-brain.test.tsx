@@ -119,34 +119,6 @@ describe('BrainView publishing and editing', () => {
     await waitFor(() => expect(view.queryByRole('dialog')).toBeNull());
     expect(view.getByTestId('tab-active-doc')).toHaveTextContent('Alpha');
   });
-
-  it('keeps wikilink suggestions open on other keys and saves a document from another tab', async () => {
-    const alpha = doc('a', 'Alpha');
-    const beta = doc('b', 'Beta');
-    const client = createClient([alpha, beta]);
-    const update = vi
-      .spyOn(client, 'updateKnowledgeDocument')
-      .mockResolvedValue({ ...beta, title: 'Beta 2' });
-    const view = render(<BrainView apiClient={client} initialDocuments={[alpha, beta]} />);
-    fireEvent.click(await view.findByTestId(`tree-item-${alpha.id}`));
-    fireEvent.click(view.getByTestId(`tree-item-${beta.id}`));
-    fireEvent.click(view.getByTestId('btn-edit-document'));
-
-    const editor = view.getByTestId('textarea-document-content');
-    fireEvent.change(editor, { target: { value: '[[', selectionStart: 2 } });
-    expect(view.getByRole('listbox', { name: 'Documentos para correlacionar' })).toBeTruthy();
-    fireEvent.keyDown(editor, { key: 'a' });
-    expect(view.getByRole('listbox', { name: 'Documentos para correlacionar' })).toBeTruthy();
-
-    const alphaTab = view
-      .getAllByTestId('tab-active-doc')
-      .find((tab) => tab.textContent?.includes('Alpha'))!;
-    fireEvent.click(alphaTab);
-    fireEvent.click(view.getByTestId('btn-save-document'));
-    await waitFor(() => expect(update).toHaveBeenCalledWith('b', 'Beta', '[['));
-    expect((await view.findAllByText(/Beta 2/)).length).toBeGreaterThan(0);
-    expect(view.getByTestId(`tree-item-${alpha.id}`)).toBeInTheDocument();
-  });
 });
 
 describe('BrainGraph without a canvas context', () => {

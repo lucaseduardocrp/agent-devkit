@@ -143,6 +143,9 @@ describe('Azure DevOps provider', () => {
           { rel: 'System.LinkTypes.Dependency-Forward', url: workItem(3) },
           { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: workItem('') },
           { rel: 'AttachedFile', url: 'https://files/x' },
+          { rel: 'AttachedFile', url: 'https://files/y', attributes: { name: ' spec.pdf ' } },
+          { rel: 'AttachedFile', url: 'https://files/' },
+          { rel: 'AttachedFile', url: 'http://insecure/z' },
         ],
       },
       2: {

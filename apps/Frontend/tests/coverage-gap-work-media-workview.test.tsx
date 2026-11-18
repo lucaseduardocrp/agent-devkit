@@ -165,7 +165,7 @@ describe('WorkView images in descriptions', () => {
     await screen.findByRole('button', { name: '1 Prepare release' });
     fireEvent.click(screen.getByRole('button', { name: 'Nova issue' }));
     const dialog = screen.getByRole('dialog');
-    const description = within(dialog).getByRole('textbox', { name: 'Descrição' });
+    const description = within(dialog).getByRole('textbox', { name: /^Descrição/u });
     expect(
       within(dialog).getByText('Cole ou arraste imagens para colocá-las no texto.'),
     ).toBeInTheDocument();
@@ -196,7 +196,7 @@ describe('WorkView images in descriptions', () => {
     const dialog = await openDetail();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Editar' }));
     const description = within(dialog).getByRole<HTMLTextAreaElement>('textbox', {
-      name: 'Descrição',
+      name: /^Descrição/u,
     });
     description.setSelectionRange(description.value.length, description.value.length);
     fireEvent.drop(description, { dataTransfer: { files: [png()] } });

@@ -4,11 +4,18 @@ import { Select } from '../../components/ui/select.js';
 import { useI18n } from '../../lib/i18n/index.js';
 import type { TranslationKey } from '../../lib/i18n/index.js';
 import {
+  isNotificationAction,
   MAX_DELAY_MINUTES,
   WORKFLOW_CONDITION_OPERATORS,
   type WorkflowConditionOperator,
   type WorkflowConfigurableNode,
 } from './workflow-graph.js';
+import { NotificationActionEditor } from '../notifications/NotificationActionEditor.js';
+import {
+  EMPTY_NOTIFICATION_OPTIONS,
+  type NotificationOptions,
+} from '../notifications/notification-types.js';
+import { InspectorField, InspectorNotice } from './AgentWorkflowInspectorFrame.js';
 import { toolsetLabels } from './workflow-labels.js';
 import type { AgentWorkflowToolset } from './agent-types.js';
 
@@ -26,13 +33,9 @@ const operatorLabels: Record<WorkflowConditionOperator, TranslationKey> = {
 function ServerRunLimit(): React.JSX.Element {
   const { t } = useI18n();
   return (
-    <p
-      className="flex items-center gap-2 rounded-lg border border-[var(--bg-warning)] bg-[var(--bg-warning)] p-3 text-xs text-[var(--text-warning)]"
-      data-testid="workflow-action-server-limit"
-    >
-      <i className="ti ti-alert-triangle shrink-0 text-sm" aria-hidden="true" />
+    <InspectorNotice icon="ti-alert-triangle" testId="workflow-action-server-limit">
       {t('agents.workflowActionServerLimit')}
-    </p>
+    </InspectorNotice>
   );
 }
 
@@ -42,6 +45,8 @@ export interface AgentWorkflowNodeInspectorProps {
   readonly isReadOnly: boolean;
   readonly toolNames: Record<AgentWorkflowToolset, readonly string[]>;
   readonly providerOptions: readonly { readonly id: string; readonly name: string }[];
+  /** Channels and members the notifications action can choose from. */
+  readonly notificationOptions?: NotificationOptions;
   readonly onChange: (next: WorkflowConfigurableNode) => void;
 }
 
@@ -54,20 +59,19 @@ export function AgentWorkflowNodeInspector({
   isReadOnly,
   toolNames,
   providerOptions,
+  notificationOptions = EMPTY_NOTIFICATION_OPTIONS,
   onChange,
 }: AgentWorkflowNodeInspectorProps): React.JSX.Element {
   const { t } = useI18n();
 
   if (node.kind === 'action') {
     const action = node.action;
-    return (
-      <div className="flex flex-col gap-4" data-testid="workflow-action-inspector">
-        <ServerRunLimit />
-        <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-3 text-xs text-[var(--text-secondary)]">
-          {t('agents.workflowActionNodeHint')}
-        </p>
-        <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-          {t('agents.workflowRuleModule')}
+    const isNotification = isNotificationAction(action);
+    // The module, the MCP action and the provider: the whole form of a plain action, and the
+    // fine print of a notification, which has a form of its own above them.
+    const technicalFields = (
+      <>
+        <InspectorField label={t('agents.workflowRuleModule')}>
           <Select
             value={action.toolset}
             disabled={isReadOnly}
@@ -77,7 +81,9 @@ export function AgentWorkflowNodeInspector({
                 action: {
                   ...action,
                   toolset: event.target.value as AgentWorkflowToolset,
-                  toolName: undefined,
+                  // The notifications module has one action, so it is chosen for the member.
+                  toolName:
+                    event.target.value === 'notifications' ? 'notifications_send' : undefined,
                 },
               })
             }
@@ -88,9 +94,8 @@ export function AgentWorkflowNodeInspector({
               </option>
             ))}
           </Select>
-        </label>
-        <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-          {t('agents.workflowRuleAction')}
+        </InspectorField>
+        <InspectorField label={t('agents.workflowRuleAction')}>
           <Input
             value={action.toolName ?? ''}
             list={`workflow-node-actions-${node.id}`}
@@ -108,9 +113,8 @@ export function AgentWorkflowNodeInspector({
               <option key={toolName} value={toolName} />
             ))}
           </datalist>
-        </label>
-        <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-          {t('agents.workflowActionProvider')}
+        </InspectorField>
+        <InspectorField label={t('agents.workflowActionProvider')}>
           <Select
             value={action.provider ?? ''}
             disabled={isReadOnly}
@@ -128,7 +132,40 @@ export function AgentWorkflowNodeInspector({
               </option>
             ))}
           </Select>
-        </label>
+        </InspectorField>
+      </>
+    );
+    return (
+      <div className="flex flex-col gap-4" data-testid="workflow-action-inspector">
+        {isNotification ? (
+          <>
+            <NotificationActionEditor
+              value={action.notification}
+              options={notificationOptions}
+              disabled={isReadOnly}
+              onChange={(notification) =>
+                onChange({ ...node, action: { ...action, notification } })
+              }
+            />
+            <details className="group rounded-lg border border-[var(--border)] bg-[var(--surface-2)]">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fill-accent)]">
+                {t('agents.workflowAdvanced')}
+                <i
+                  className="ti ti-chevron-down text-base transition-transform group-open:rotate-180"
+                  aria-hidden="true"
+                />
+              </summary>
+              <div className="flex flex-col gap-4 border-t border-[var(--border)] p-3">
+                {technicalFields}
+              </div>
+            </details>
+          </>
+        ) : (
+          <>
+            <ServerRunLimit />
+            {technicalFields}
+          </>
+        )}
       </div>
     );
   }
@@ -137,11 +174,7 @@ export function AgentWorkflowNodeInspector({
     const condition = node.condition;
     return (
       <div className="flex flex-col gap-4" data-testid="workflow-condition-inspector">
-        <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-3 text-xs text-[var(--text-secondary)]">
-          {t('agents.workflowConditionNodeHint')}
-        </p>
-        <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-          {t('agents.workflowConditionOperator')}
+        <InspectorField label={t('agents.workflowConditionOperator')}>
           <Select
             value={condition.operator}
             disabled={isReadOnly}
@@ -161,9 +194,8 @@ export function AgentWorkflowNodeInspector({
               </option>
             ))}
           </Select>
-        </label>
-        <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-          {t('agents.workflowConditionValue')}
+        </InspectorField>
+        <InspectorField label={t('agents.workflowConditionValue')}>
           <Input
             value={condition.value}
             placeholder={t('agents.workflowConditionValuePlaceholder')}
@@ -172,14 +204,14 @@ export function AgentWorkflowNodeInspector({
               onChange({ ...node, condition: { ...condition, value: event.target.value } })
             }
           />
-        </label>
-        <div className="flex flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-4 text-xs">
-          <span className="flex items-center gap-2 text-[var(--text-secondary)]">
-            <span className="h-2.5 w-2.5 rounded-full bg-[var(--fill-success)]" />
+        </InspectorField>
+        <div className="flex flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-xs text-[var(--text-secondary)]">
+          <span className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--fill-success)]" />
             {t('agents.workflowConditionTrueHint')}
           </span>
-          <span className="flex items-center gap-2 text-[var(--text-secondary)]">
-            <span className="h-2.5 w-2.5 rounded-full bg-[var(--fill-danger)]" />
+          <span className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--fill-danger)]" />
             {t('agents.workflowConditionFalseHint')}
           </span>
         </div>
@@ -189,11 +221,7 @@ export function AgentWorkflowNodeInspector({
 
   return (
     <div className="flex flex-col gap-4" data-testid="workflow-delay-inspector">
-      <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-3 text-xs text-[var(--text-secondary)]">
-        {t('agents.workflowDelayNodeHint', { max: MAX_DELAY_MINUTES })}
-      </p>
-      <label className="flex flex-col gap-2 text-sm text-[var(--text-secondary)]">
-        {t('agents.workflowDelayMinutes')}
+      <InspectorField label={t('agents.workflowDelayMinutes')}>
         <Input
           type="number"
           min={1}
@@ -204,7 +232,7 @@ export function AgentWorkflowNodeInspector({
             onChange({ ...node, delay: { minutes: Number(event.target.value) } })
           }
         />
-      </label>
+      </InspectorField>
     </div>
   );
 }

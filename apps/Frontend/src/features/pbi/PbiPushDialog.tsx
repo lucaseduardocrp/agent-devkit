@@ -18,89 +18,8 @@ const providerNames: Record<PbiProviderId, string> = {
   github_projects: 'GitHub Projects',
   jira: 'Jira',
 };
-const copy = {
-  'pt-BR': {
-    publish: 'Publicar',
-    platform: 'Plataforma',
-    linked: 'vinculado',
-    loading: 'Carregando campos da plataforma...',
-    loadError: 'Não foi possível carregar os campos da plataforma.',
-    retry: 'Tentar novamente',
-    select: 'Selecione...',
-    none: 'Não atribuído',
-    required: 'Obrigatório',
-    unresolved: 'Não foi possível mapear “{source}”. Selecione um valor.',
-    missing: 'Selecione um valor.',
-    updateHint: 'O item vinculado será atualizado na plataforma.',
-    createHint: 'O item será criado na plataforma escolhida e vinculado ao registro do ADK.',
-    cancel: 'Cancelar',
-    submit: 'Fazer push',
-    labels: {
-      workItemType: 'Tipo do work item',
-      iterationPath: 'Iteration path',
-      areaPath: 'Area path',
-      assignee: 'Responsável',
-      state: 'Estado',
-      board: 'Board',
-      list: 'Lista',
-      member: 'Membro',
-      issueType: 'Tipo da issue',
-      status: 'Status',
-      repository: 'Repositório (owner/nome)',
-      project: 'Projeto',
-      descriptionFormat: 'Formato da descrição',
-    } as Record<string, string>,
-    /** Option labels by `field.option`, for options whose provider label is not localized. */
-    options: {
-      'descriptionFormat.html': 'Padrão (editor HTML)',
-      'descriptionFormat.markdown': 'Markdown',
-    } as Record<string, string>,
-  },
-  'en-US': {
-    publish: 'Publish',
-    platform: 'Platform',
-    linked: 'linked',
-    loading: 'Loading platform fields...',
-    loadError: 'Could not load the platform fields.',
-    retry: 'Try again',
-    select: 'Select...',
-    none: 'Unassigned',
-    required: 'Required',
-    unresolved: 'Could not map “{source}”. Select a value.',
-    missing: 'Select a value.',
-    updateHint: 'The linked item will be updated on the platform.',
-    createHint: 'The item will be created on the selected platform and linked to ADK.',
-    cancel: 'Cancel',
-    submit: 'Push',
-    labels: {
-      workItemType: 'Work item type',
-      iterationPath: 'Iteration path',
-      areaPath: 'Area path',
-      assignee: 'Assignee',
-      state: 'State',
-      board: 'Board',
-      list: 'List',
-      member: 'Member',
-      issueType: 'Issue type',
-      status: 'Status',
-      repository: 'Repository (owner/name)',
-      project: 'Project',
-      descriptionFormat: 'Description format',
-    } as Record<string, string>,
-    /** Option labels by `field.option`, for options whose provider label is not localized. */
-    options: {
-      'descriptionFormat.html': 'Default (HTML editor)',
-      'descriptionFormat.markdown': 'Markdown',
-    } as Record<string, string>,
-  },
-} as const;
-
 /** ADK fields offered as mapping sources, with their label when the copy has none. */
-const coreSourceLabels: Record<string, string> = {
-  title: 'Title',
-  description: 'Description',
-  status: 'Status',
-};
+const coreSourceKeys = ['title', 'description', 'status'] as const;
 
 /** A required field without an acceptable value; shown in red and blocks the push. */
 function isFieldInvalid(field: PbiPushField, value: string): boolean {
@@ -131,8 +50,11 @@ interface Props {
  * the dialog is still untouched.
  */
 export function PbiPushDialog({ apiClient, item, providers, busy, onClose, onSubmit }: Props) {
-  const { locale } = useI18n();
-  const c = copy[locale];
+  const { messages } = useI18n();
+  const c = messages.pbiPush;
+  // Provider fields arrive by key at runtime, so look their labels up by string.
+  const fieldLabels: Readonly<Partial<Record<string, string>>> = c.labels;
+  const optionLabels: Readonly<Partial<Record<string, string>>> = c.options;
   const [providerId, setProviderId] = useState<PbiProviderId | null>(null);
   const [fields, setFields] = useState<PbiPushField[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -270,9 +192,13 @@ export function PbiPushDialog({ apiClient, item, providers, busy, onClose, onSub
   }, [apiClient, item, providerId, templateId, scope, itemType, templateVersion, fieldValues]);
   const sources: MappingSourceOption[] = item
     ? [
-        ...Object.entries(coreSourceLabels).map(([key, fallback]) => ({
+        ...coreSourceKeys.map((key) => ({
           value: `core::${key}`,
-          label: c.labels[key] ?? fallback,
+          label: {
+            title: c.sourceTitle,
+            description: c.sourceDescription,
+            status: c.labels.status,
+          }[key],
           source: { kind: 'core' as const, key },
         })),
         ...Object.entries(
@@ -375,7 +301,7 @@ export function PbiPushDialog({ apiClient, item, providers, busy, onClose, onSub
                 (touched[field.key] || attempted) && isFieldInvalid(field, value);
               const id = `pbi-push-${field.key}`;
               const hintId = `${id}-hint`;
-              const label = c.labels[field.key] ?? field.label;
+              const label = fieldLabels[field.key] ?? field.label;
               const hint = fieldInvalid
                 ? field.status === 'unresolved' && field.source && !value
                   ? c.unresolved.replace('{source}', field.source)
@@ -433,7 +359,7 @@ export function PbiPushDialog({ apiClient, item, providers, busy, onClose, onSub
                       <option value="">{field.required ? c.select : c.none}</option>
                       {field.options.map((option) => (
                         <option key={option.value} value={option.value}>
-                          {c.options[`${field.key}.${option.value}`] ??
+                          {optionLabels[`${field.key}.${option.value}`] ??
                             (option.detail ? `${option.label} · ${option.detail}` : option.label)}
                         </option>
                       ))}
@@ -481,7 +407,7 @@ export function PbiPushDialog({ apiClient, item, providers, busy, onClose, onSub
             )}
           {previewLoading && (
             <p role="status" className="text-xs">
-              {locale === 'pt-BR' ? 'Validando mapeamento...' : 'Validating mapping...'}
+              {c.validatingMapping}
             </p>
           )}
           {previewError && (
@@ -491,7 +417,7 @@ export function PbiPushDialog({ apiClient, item, providers, busy, onClose, onSub
           )}
           {templateId && !previewError && !previewLoading && Object.keys(preview).length > 0 && (
             <div className="rounded border border-[var(--border)] p-2 text-xs">
-              <strong>{locale === 'pt-BR' ? 'Prévia dos campos' : 'Field preview'}</strong>
+              <strong>{c.fieldPreview}</strong>
               {Object.entries(preview).map(([key, value]) => (
                 <p key={key}>
                   {key}: {Array.isArray(value) ? value.join(', ') : String(value)}

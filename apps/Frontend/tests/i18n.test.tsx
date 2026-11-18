@@ -9,6 +9,8 @@ import {
   SUPPORTED_LOCALES,
   ptBR,
   enUS,
+  formatMessage,
+  getMessages,
   type TranslationKey,
 } from '../src/lib/i18n/index.js';
 
@@ -142,5 +144,38 @@ describe('Frontend i18n subsystem', () => {
 
     const { result: standalone } = renderHook(() => useI18n());
     expect(standalone.current.t('common.details', { name: 'Ana' })).toBe('Detalhes');
+  });
+
+  it('fills placeholders once and verbatim, keeping the ones without a value', () => {
+    expect(formatMessage('Olá {name}')).toBe('Olá {name}');
+    expect(formatMessage('{{a}} e {b}, {missing}', { a: 1, b: '$& {a}' })).toBe(
+      '1 e $& {a}, {missing}',
+    );
+  });
+
+  it('exposes the typed dictionary of the active locale', () => {
+    const { result } = renderHook(() => useI18n(), {
+      wrapper: ({ children }) => <I18nProvider initialLocale="en-US">{children}</I18nProvider>,
+    });
+    expect(result.current.messages).toBe(enUS);
+    expect(renderHook(() => useI18n()).result.current.messages).toBe(ptBR);
+  });
+
+  it('gives code outside components the locale of the mounted provider', () => {
+    expect(getMessages()).toBe(ptBR);
+    expect(getMessages('en-US')).toBe(enUS);
+    const seen: string[] = [];
+    const Probe = () => {
+      seen.push(getMessages().common.save);
+      return null;
+    };
+    const view = render(
+      <I18nProvider initialLocale="en-US">
+        <Probe />
+      </I18nProvider>,
+    );
+    expect(seen[0]).toBe('Save');
+    view.unmount();
+    expect(getMessages()).toBe(ptBR);
   });
 });

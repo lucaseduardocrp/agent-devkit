@@ -96,7 +96,7 @@ function setup() {
       locale: 'pt-BR',
     }),
   });
-  return { app, provider, testManagement };
+  return { app, provider, testManagement, author };
 }
 
 async function waitFor(
@@ -245,6 +245,232 @@ describe('E2E test management routes', () => {
         externalCase: expect.objectContaining({ caseId: '50605' }),
       }),
     ]);
+  });
+
+  it('waits for the user to generate the tests, from the PRD or from saved Test Plan cases', async () => {
+    const { app, author } = setup();
+    const agent = await request(app)
+      .post('/agents')
+      .send({ name: 'QA', instructions: 'Test things.' })
+      .expect(201);
+    const base = {
+      name: 'Run',
+      agentId: agent.body.agent.id as string,
+      mode: 'frontend',
+      baseUrl: 'http://localhost:8014',
+      repository,
+      prd: 'The product.',
+      start: false,
+    };
+    // Creating a run only saves it: nothing is explored, planned or executed.
+    const created = await request(app).post('/e2e/creations').send(base).expect(202);
+    const id = created.body.creation.id as string;
+    expect(created.body.creation.status).toBe('draft');
+    await request(app).get(`/e2e/creations/${id}`).expect(200);
+    expect(author.plan).not.toHaveBeenCalled();
+
+    // Only generate: the agent plans the tests from the PRD, as it always did.
+    vi.mocked(author.plan).mockResolvedValueOnce({
+      summary: 'PRD',
+      tests: [{ title: 'Sign in', description: 'd', priority: 'high', steps: [] }],
+    });
+    await request(app).post(`/e2e/creations/${id}/generate`).send({}).expect(202);
+    const planned = await waitFor(app, id, (creation) => creation.status === 'completed');
+    expect(planned.tests).toEqual([expect.objectContaining({ title: 'Sign in' })]);
+    // Planning again would replace those tests.
+    await request(app).post(`/e2e/creations/${id}/generate`).send({}).expect(409);
+
+    // Saved Test Plan cases are added to the run and automated.
+    const imported = await request(app)
+      .post('/TestPlan/import')
+      .send({ providerId: 'azure_devops', planId: '50398' })
+      .expect(201);
+    const suiteId = imported.body.result.rootSuiteId as string;
+    await request(app).post(`/e2e/creations/${id}/generate`).send({ savedCases: {} }).expect(400);
+    await request(app)
+      .post(`/e2e/creations/${id}/generate`)
+      .send({ savedCases: { suiteId } })
+      .expect(202);
+    const withCases = await waitFor(
+      app,
+      id,
+      (creation) => creation.status === 'completed' && (creation.tests as unknown[]).length === 2,
+    );
+    expect(withCases.reporting).toMatchObject({ provider: 'azure_devops', planId: '50398' });
+    expect(withCases.tests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: '50605 - Grupo de Usuários exibe a sessão Empresas',
+        }),
+      ]),
+    );
+    await request(app).post('/e2e/creations/missing/generate').send({}).expect(404);
+  });
+
+  it('saves a run without a product document and asks for one only when the tests are planned', async () => {
+    const { app, author } = setup();
+    const agent = await request(app)
+      .post('/agents')
+      .send({ name: 'QA', instructions: 'Test things.' })
+      .expect(201);
+    const base = {
+      name: 'Run',
+      agentId: agent.body.agent.id as string,
+      mode: 'frontend',
+      baseUrl: 'http://localhost:8014',
+      repository,
+    };
+    // A run that starts planning right away still needs a source; one that is only saved does not.
+    await request(app).post('/e2e/creations').send(base).expect(400);
+    const created = await request(app)
+      .post('/e2e/creations')
+      .send({ ...base, start: false })
+      .expect(202);
+    const id = created.body.creation.id as string;
+    expect(created.body.creation.status).toBe('draft');
+
+    // Nothing to plan from: the AI would invent the tests, so it is refused before it starts.
+    const refused = await request(app).post(`/e2e/creations/${id}/generate`).send({}).expect(400);
+    expect(refused.body.code).toBe('E2E_PRD_REQUIRED');
+    await request(app).post(`/e2e/creations/${id}/run`).expect(400);
+    expect(author.plan).not.toHaveBeenCalled();
+
+    // Editing needs no document either; the one attached when generating becomes the run's.
+    await request(app)
+      .put(`/e2e/creations/${id}`)
+      .send({ ...base, prd: '' })
+      .expect(200);
+    vi.mocked(author.plan).mockResolvedValueOnce({
+      summary: 'PRD',
+      tests: [{ title: 'Sign in', description: 'd', priority: 'high', steps: [] }],
+    });
+    await request(app)
+      .post(`/e2e/creations/${id}/generate`)
+      .send({ prd: 'The product.' })
+      .expect(202);
+    await waitFor(app, id, (creation) => creation.status === 'completed');
+
+    // The Brain is a source too: a run that uses it can plan without a document.
+    const brain = await request(app)
+      .post('/e2e/creations')
+      .send({ ...base, start: false, useBrain: true })
+      .expect(202);
+    vi.mocked(author.plan).mockResolvedValueOnce({
+      summary: 'Brain',
+      tests: [{ title: 'Search', description: 'd', priority: 'low', steps: [] }],
+    });
+    await request(app)
+      .post(`/e2e/creations/${brain.body.creation.id as string}/generate`)
+      .send({})
+      .expect(202);
+  });
+
+  it('plans from the PRD written when the tests are generated, instead of the one of the run', async () => {
+    const { app, author } = setup();
+    const agent = await request(app)
+      .post('/agents')
+      .send({ name: 'QA', instructions: 'Test things.' })
+      .expect(201);
+    const created = await request(app)
+      .post('/e2e/creations')
+      .send({
+        name: 'Run',
+        agentId: agent.body.agent.id as string,
+        mode: 'frontend',
+        baseUrl: 'http://localhost:8014',
+        repository,
+        useBrain: true,
+        start: false,
+      })
+      .expect(202);
+    const id = created.body.creation.id as string;
+    // A PRD or saved cases, never both; and a PRD cannot be empty.
+    await request(app)
+      .post(`/e2e/creations/${id}/generate`)
+      .send({ prd: 'Doc', savedCases: { suiteId: 's1' } })
+      .expect(400);
+    await request(app).post(`/e2e/creations/${id}/generate`).send({ prd: '   ' }).expect(400);
+
+    vi.mocked(author.plan).mockResolvedValueOnce({
+      summary: 'PRD',
+      tests: [{ title: 'Sign in', description: 'd', priority: 'high', steps: [] }],
+    });
+    await request(app)
+      .post(`/e2e/creations/${id}/generate`)
+      .send({
+        prd: '# spec.pdf\n\nLogin.\n\n![print](/attachments/files/6f1c2a90-1f0e-4a3b-8f4e-5a2c9d7e1b11)',
+        prdFileNames: ['spec.pdf'],
+      })
+      .expect(202);
+    const planned = await waitFor(app, id, (creation) => creation.status === 'completed');
+    expect(planned.tests).toEqual([expect.objectContaining({ title: 'Sign in' })]);
+    // The run now plans from that document and no longer from the Brain.
+    expect(vi.mocked(author.plan).mock.calls.at(-1)?.[0].creation).toMatchObject({
+      prd: expect.stringContaining('![print](/attachments/files/6f1c2a90'),
+      prdFileNames: ['spec.pdf'],
+      useBrain: false,
+      prdSummary: null,
+    });
+
+    // Files are optional: only the text is kept.
+    const second = await request(app)
+      .post('/e2e/creations')
+      .send({
+        name: 'Run 2',
+        agentId: agent.body.agent.id as string,
+        mode: 'frontend',
+        baseUrl: 'http://localhost:8014',
+        repository,
+        prd: 'Old',
+        start: false,
+      })
+      .expect(202);
+    const secondId = second.body.creation.id as string;
+    vi.mocked(author.plan).mockResolvedValueOnce({
+      summary: 'PRD',
+      tests: [{ title: 'Sign out', description: 'd', priority: 'high', steps: [] }],
+    });
+    await request(app)
+      .post(`/e2e/creations/${secondId}/generate`)
+      .send({ prd: 'Only text' })
+      .expect(202);
+    await waitFor(app, secondId, (creation) => creation.status === 'completed');
+    expect(vi.mocked(author.plan).mock.calls.at(-1)?.[0].creation).toMatchObject({
+      prd: 'Only text',
+      prdFileNames: [],
+    });
+  });
+
+  it('keeps the destination of a run that already has one when cases are added', async () => {
+    const { app } = setup();
+    const agent = await request(app)
+      .post('/agents')
+      .send({ name: 'QA', instructions: 'Test things.' })
+      .expect(201);
+    const imported = await request(app)
+      .post('/TestPlan/import')
+      .send({ providerId: 'azure_devops', planId: '50398' })
+      .expect(201);
+    const created = await request(app)
+      .post('/e2e/creations')
+      .send({
+        name: 'Run',
+        agentId: agent.body.agent.id as string,
+        mode: 'frontend',
+        baseUrl: 'http://localhost:8014',
+        repository,
+        prd: 'The product.',
+        start: false,
+        reporting: { provider: 'azure_devops', planId: '1', suiteId: '2', autoPublish: false },
+      })
+      .expect(202);
+    const id = created.body.creation.id as string;
+    await request(app)
+      .post(`/e2e/creations/${id}/generate`)
+      .send({ savedCases: { suiteId: imported.body.result.rootSuiteId as string } })
+      .expect(202);
+    const done = await waitFor(app, id, (creation) => creation.status === 'completed');
+    expect(done.reporting).toMatchObject({ planId: '1', suiteId: '2' });
   });
 
   it('reports failures of the platform routes', async () => {

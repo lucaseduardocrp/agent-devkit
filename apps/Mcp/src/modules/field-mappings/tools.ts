@@ -230,7 +230,7 @@ export const testPlanFieldsModule: McpModule = {
       toolset: 'testplans',
       access: 'read',
       routes: ['POST /TestPlan/suites/:id/field-preview'],
-      input: { suiteId, providerId: testProvider, templateId },
+      input: { suiteId, providerId: testProvider, templateId, fieldValues: templateFieldValues },
       run: async ({ suiteId: value, ...body }, { api }) =>
         json(
           await api.request({

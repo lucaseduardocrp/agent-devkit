@@ -87,9 +87,22 @@ export function keepCaseMetadata(
       return typeof id === 'string' && id ? [[id, testCase.metadata]] : [];
     }),
   );
-  return incoming.map((testCase) => {
+  const claimed = new Set(
+    incoming.flatMap((testCase) => {
+      const id = testCase.metadata?.['caseId'];
+      return typeof id === 'string' && id ? [id] : [];
+    }),
+  );
+  return incoming.map((testCase, index) => {
     const id = testCase.metadata?.['caseId'];
-    const stored = typeof id === 'string' ? byId.get(id) : undefined;
+    let stored = typeof id === 'string' ? byId.get(id) : undefined;
+    if (!id) {
+      // A client that sends no ids (an MCP host rewriting the plan) keeps the case that was in
+      // the same position, so links to it (E2E tests) survive the edit.
+      const atPosition = previous[index]?.metadata;
+      const previousId = atPosition?.['caseId'];
+      if (typeof previousId === 'string' && !claimed.has(previousId)) stored = atPosition;
+    }
     return stored ? { ...testCase, metadata: { ...stored, ...testCase.metadata } } : testCase;
   });
 }
